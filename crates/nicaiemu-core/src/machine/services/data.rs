@@ -299,13 +299,17 @@ impl NicaiMachine {
             if self.memory.r16(ids + index * 2) as u32 == id {
                 // Extended file packages use the exact marker 1. Compact
                 // memory packages can have an adjacent pointer at this offset.
-                if !self.wide_images && self.memory.r8(package + 84) == 1 {
-                    return self.read_file_backed_package_resource(package, data, count, index);
-                }
-                return self
+                let pointer = self
                     .memory
                     .r32(data + index * 4)
                     .wrapping_add(self.memory.r32(package + 24));
+                if !self.wide_images
+                    && self.memory.r8(package + 84) == 1
+                    && self.memory.region(pointer, 1).is_none()
+                {
+                    return self.read_file_backed_package_resource(package, data, count, index);
+                }
+                return pointer;
             }
         }
         let child_count = self.memory.r16(package + 10) as u32;
@@ -592,6 +596,9 @@ mod tests {
                 .write_bytes(payload, &[0xb5, 0x70, 0x47, 0x70]);
             machine.memory.w32(package + 84, 0x0500_0000);
             machine.memory.w32(package + 92, u32::MAX);
+            assert_eq!(machine.package_resource_by_id(package, 7), payload);
+
+            machine.memory.w8(package + 84, 1);
             assert_eq!(machine.package_resource_by_id(package, 7), payload);
 
             let handle = machine.virtual_fs.open("resource.bin", "w+", 0) as u32;

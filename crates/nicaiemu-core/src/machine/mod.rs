@@ -1443,6 +1443,8 @@ impl NicaiMachine {
             );
         }
         // Requested resources must exist before the new screen initializes.
+        let resources_requested = self.resource_load_pending
+            && (self.resource_load_screen == 0 || self.resource_load_screen == screen);
         if self.load_pending_screen_resources(screen, screen_this, instruction_limit)? {
             return Ok(());
         }
@@ -1453,6 +1455,15 @@ impl NicaiMachine {
                 return Ok(());
             }
             self.screen_initialized = true;
+            // A registered screen also owns an initial resource-load callback.
+            // Explicit requests keep their earlier load-before-init ordering.
+            if !resources_requested && !self.resource_load_pending {
+                let load = self.memory.r32(screen + 24);
+                self.invoke_callback(load, screen_this, 0, 0, instruction_limit)?;
+                if self.finish_screen_callback_frame() {
+                    return Ok(());
+                }
+            }
         }
         // Initialization may itself request another resource callback.
         if self.load_pending_screen_resources(screen, screen_this, instruction_limit)? {
@@ -1475,14 +1486,12 @@ impl NicaiMachine {
             );
         }
 
-        let logic = self.memory.r32(screen + 8);
         // Registered native screens poll input once in the idle callback.
         // Sending an extra edge callback makes event-agnostic logic act twice.
         if let Some(event) = key_event.filter(|_| self.native_app_parser == 0) {
             self.memory.w32(KEY_EVENT_ARG, 1u32 << event.key);
-            self.invoke_callback(
-                logic,
-                screen_this,
+            self.dispatch_screen_logic(
+                screen,
                 u32::from(!event.pressed),
                 KEY_EVENT_ARG,
                 instruction_limit,
@@ -1513,13 +1522,7 @@ impl NicaiMachine {
             if let Some(touch_type) = touch_type {
                 let packed = (self.pointer.x as u32) | ((self.pointer.y as u32) << 16);
                 self.memory.w32(TOUCH_EVENT_ARG, packed);
-                self.invoke_callback(
-                    logic,
-                    screen_this,
-                    touch_type,
-                    TOUCH_EVENT_ARG,
-                    instruction_limit,
-                )?;
+                self.dispatch_screen_logic(screen, touch_type, TOUCH_EVENT_ARG, instruction_limit)?;
                 if self.finish_screen_callback_frame() {
                     return Ok(());
                 }
@@ -1529,21 +1532,65 @@ impl NicaiMachine {
                 }
             }
         }
-        self.invoke_callback(logic, screen_this, 6, 0, instruction_limit)?;
+        self.dispatch_screen_logic(screen, 6, 0, instruction_limit)?;
         if self.finish_screen_callback_frame() {
             return Ok(());
         }
         if self.pending_screen == 0 || self.pending_screen == screen {
-            let render = self.memory.r32(screen + 12);
-            // Modal firmware dialogs temporarily clear screen callbacks.
-            // A missing render callback preserves the frame until guest restoration.
-            self.invoke_callback(render, screen_this, 0, 0, instruction_limit)?;
-            if self.finish_screen_callback_frame() {
-                return Ok(());
+            // Draw stacked screens from bottom to top so modal overlays retain
+            // their application's background and controls.
+            let layers = if self.screen_stack.is_empty() {
+                vec![screen]
+            } else {
+                self.screen_stack.clone()
+            };
+            for layer in layers {
+                if !self.screen_stack.is_empty() && !self.screen_stack.contains(&layer) {
+                    continue;
+                }
+                let render = self.memory.r32(layer + 12);
+                let parameter = self.screen_call_parameter(layer);
+                self.invoke_callback(render, parameter, 0, 0, instruction_limit)?;
+                if self.finish_screen_callback_frame() {
+                    return Ok(());
+                }
             }
         }
         self.key_down = 0;
         self.pointer.end_frame();
+        Ok(())
+    }
+
+    fn dispatch_screen_logic(
+        &mut self,
+        screen: u32,
+        event: u32,
+        data: u32,
+        instruction_limit: u64,
+    ) -> Result<()> {
+        let layers = if self.screen_stack.is_empty() {
+            vec![screen]
+        } else {
+            self.screen_stack.clone()
+        };
+        // An overlay returning zero lets the underlying screen handle the event.
+        for layer in layers.into_iter().rev() {
+            if !self.screen_stack.is_empty() && !self.screen_stack.contains(&layer) {
+                continue;
+            }
+            let logic = self.memory.r32(layer + 8);
+            if logic == 0 {
+                continue;
+            }
+            let parameter = self.screen_call_parameter(layer);
+            self.invoke_callback(logic, parameter, event, data, instruction_limit)?;
+            if self.register(0) != 0
+                || self.state != MachineState::Ready
+                || (self.pending_screen != 0 && self.pending_screen != screen)
+            {
+                break;
+            }
+        }
         Ok(())
     }
 

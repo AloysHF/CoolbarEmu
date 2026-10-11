@@ -66,16 +66,25 @@ NicaiEmu executes native CBE applications instead of replacing their game logic 
 3. `NicaiMachine` maps code, initialized data, stack, heap, manager tables, and service trampolines into the guest address space.
 4. The ARM/Thumb interpreter runs the application initializer and entry point, including interworking branches and compiler-generated PC-relative jump tables.
 5. Applications that contain an installer can extract their named resource packages into the sandboxed guest filesystem before launching the installed entry point.
-6. Each 100ms guest tick invokes the active screen's logic and render callbacks.
+6. Each 100ms guest tick dispatches logic from the top screen downward until an
+   event is consumed, then renders stacked screens from bottom to top.
 
 
 Pending resource callbacks bound to a new screen run before its initialization,
 so initialization can use the objects created by resource loading. Requests
-issued during initialization still run before logic and rendering.
+issued during initialization still run before logic and rendering. When there
+is no explicit request, a screen's resource callback runs once after its
+initialization. Screens registered beneath an overlay also initialize and load
+their resources. Closing an overlay resumes the underlying screen without
+repeating its initialization or resource loading.
 
 ## Guest memory
 
 The machine uses checked sparse regions rather than reserving the entire 32-bit address space. Guest reads and writes honor the executable's byte order. Initialized data, stack, heap, service-manager state, and framebuffer storage are writable. Unmapped accesses are recorded for diagnostics, and an unmapped instruction fetch stops execution with an error.
+
+Memory-block allocations clear their aligned storage, including storage reused
+after a block reset. Resource lookup preserves mapped resident payload pointers
+even when bytes beyond a compact package descriptor resemble a file marker.
 
 ## Guest termination
 
@@ -179,12 +188,17 @@ save states, so no serialized field layout change is required.
 
 Some custom GIF headers resemble ICO files, so a failed standard-image decode
 falls back to the CBE decoder. The desktop frontend converts the completed
-screen to 32-bit RGB for `minifb`. Text is decoded as GBK and rasterized from an
+screen to 32-bit RGB for `minifb`. Text is decoded as GBK or guest-endian UCS-2 and rasterized from an
 embedded Unicode font, so the core does not depend on host fonts. Text
 coordinates live in the presented display space: for rotated games the glyphs
 are mapped from the presented display back into the active LCD surface pixel
 by pixel, and games that submit `DrawText` with zero coordinates inherit the
 pen origin latched from the preceding `GetScreenImage` call.
+String APIs support explicit offscreen images and the raw LCD buffer alias.
+Clipped strings honor their pixel width; rectangle strings wrap and return their
+occupied line count and width. Scalar and packed LCD line APIs include both
+endpoints and clip pixels to the active surface. Missing firmware text returns
+a valid empty string; built-in phone UI strings are not supplied.
 
 ## Headless execution
 

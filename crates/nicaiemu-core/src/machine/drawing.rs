@@ -6,12 +6,13 @@ use log::warn;
 
 use super::{
     clip_axis, image_payload, service_trace_enabled, signed_coord, NicaiMachine,
-    DREAM_FACTORY_PACKAGE_SLOT, HEAP_SIZE, METHOD_KIND_AUTO, METHOD_KIND_GAMEOLD, SCREEN_IMAGE,
-    SCREEN_IMAGE_STRUCT,
+    DREAM_FACTORY_PACKAGE_SLOT, HEAP_SIZE, MANAGER_BASE, METHOD_KIND_AUTO, METHOD_KIND_GAMEOLD,
+    SCREEN_IMAGE, SCREEN_IMAGE_STRUCT,
 };
 use crate::image_decoder;
 
 const IMAGE_ALPHA_TAG: u32 = 0x414c5048;
+const LCD_EMPTY_TEXT: u32 = MANAGER_BASE + 0x7f00;
 
 impl NicaiMachine {
     // ---- old-lib drawing API (F_0 0x00..0x3c) ----
@@ -919,9 +920,9 @@ impl NicaiMachine {
                 self.set_result(SCREEN_IMAGE);
             }
             5 => self.set_result(if self.register(0) == 0 { 8 } else { 16 }),
-            6 => self.set_result(16),
-            7 => {
-                let bytes = self.read_c_bytes(self.register(0), 4096);
+            6 | 8 | 72 | 81 | 83 => self.set_result(16),
+            7 | 71 | 84 => {
+                let bytes = self.lcd_text_bytes(self.register(0), index == 71);
                 let (text, _, _) = GBK.decode(&bytes);
                 let width = text
                     .chars()
@@ -933,12 +934,12 @@ impl NicaiMachine {
                     .sum();
                 self.set_result(width);
             }
-            9 => {
-                let string = self.register(0);
+            9 | 54 | 63 | 64 | 86 => {
+                let bytes = self.lcd_text_bytes(self.register(0), matches!(index, 63 | 64));
                 let x = signed_coord(self.register(1));
                 let y = signed_coord(self.register(2));
                 let color = self.register(3) as u16;
-                self.draw_text(string, x, y, color);
+                self.draw_text_bytes(&bytes, x, y, color);
                 self.set_result(1);
             }
             10 => {
@@ -949,7 +950,9 @@ impl NicaiMachine {
                 // submit DrawText with zero coordinates; only fall back to the
                 // latched origin in that case so explicit coordinates keep
                 // their previous meaning.
-                let (x, y) = if raw_x == 0 && raw_y == 0 {
+                let uses_latched_origin =
+                    raw_x == 0 && raw_y == 0 && self.latched_text_origin != (0, 0);
+                let (x, y) = if uses_latched_origin {
                     self.latched_text_origin
                 } else {
                     (raw_x, raw_y)
@@ -960,31 +963,64 @@ impl NicaiMachine {
                     let (text, _, _) = GBK.decode(&bytes);
                     eprintln!("draw text x={x} y={y} color={color:04X} text={text:?}");
                 }
-                self.draw_text(string, x, y, color);
+                let bytes = self.read_c_bytes(string, 4096);
+                let image = if uses_latched_origin {
+                    SCREEN_IMAGE_STRUCT
+                } else {
+                    self.register(0)
+                };
+                self.draw_text_bytes_on_image(image, &bytes, x, y, color);
                 self.set_result(1);
             }
-            11..=13 => {
-                let r0 = self.register(0);
-                let r0_is_string = self
-                    .memory
-                    .region(r0, 1)
-                    .is_some_and(|region| region.data[(r0 - region.base) as usize] != 0);
-                let (string, x, y, color) = if r0_is_string {
+            11 | 12 | 55 | 56 | 66..=69 | 87 | 88 => {
+                let bytes = self.lcd_text_bytes(self.register(0), (66..=69).contains(&index));
+                let x = signed_coord(self.register(1));
+                let y = signed_coord(self.register(2));
+                let width = signed_coord(self.register(3)).max(0);
+                let aligned = matches!(index, 11 | 55 | 66 | 67 | 87);
+                let color = self.argument(if aligned { 5 } else { 4 }) as u16;
+                self.draw_text_bytes_clipped(
+                    SCREEN_IMAGE_STRUCT,
+                    &bytes,
+                    x,
+                    y,
+                    color,
+                    16,
+                    Some((x, y, width, 16)),
+                );
+                self.set_result(1);
+            }
+            13 | 70 | 79 | 89 => self.draw_lcd_text_rectangle(matches!(index, 70 | 79)),
+            65 | 85 => {
+                let image = self.register(0);
+                let bytes = self.lcd_text_bytes(self.register(1), index == 65);
+                let x = signed_coord(self.register(2));
+                let y = signed_coord(self.register(3));
+                let color = self.argument(4) as u16;
+                self.draw_text_bytes_on_image(image, &bytes, x, y, color);
+                self.set_result(1);
+            }
+            14 | 15 => {
+                let (x0, y0, x1, y1, color) = if index == 14 {
                     (
-                        r0,
+                        signed_coord(self.register(0)),
                         signed_coord(self.register(1)),
                         signed_coord(self.register(2)),
-                        self.memory.r32(self.register(reg::SP) + 4) as u16,
+                        signed_coord(self.register(3)),
+                        self.argument(4) as u16,
                     )
                 } else {
+                    let start = self.register(0);
+                    let end = self.register(1);
                     (
-                        self.register(1),
-                        signed_coord(self.register(2)),
-                        signed_coord(self.register(3)),
-                        self.memory.r16(self.register(reg::SP) + 16),
+                        signed_coord(start),
+                        signed_coord(start >> 16),
+                        signed_coord(end),
+                        signed_coord(end >> 16),
+                        self.register(2) as u16,
                     )
                 };
-                self.draw_text(string, x, y, color);
+                self.draw_screen_line(x0, y0, x1, y1, color);
                 self.set_result(1);
             }
             16 => {
@@ -1106,6 +1142,11 @@ impl NicaiMachine {
                 let result = self.initialize_image_data_page(false);
                 self.set_result(result);
             }
+            41..=43 => {
+                // Missing firmware strings are valid empty strings, never NULL.
+                self.memory.w32(LCD_EMPTY_TEXT, 0);
+                self.set_result(LCD_EMPTY_TEXT);
+            }
             45 => {
                 let result = self.initialize_image_data_page(true);
                 self.set_result(result);
@@ -1144,7 +1185,6 @@ impl NicaiMachine {
                 let result = self.create_image_from_stream(self.register(0), self.register(1));
                 self.set_result(result);
             }
-            54..=56 => self.set_result(1),
             57 => self.set_result(0),
             62 => self.set_result(16),
             // Touch-menu hit test: r0 packs the point and r1/r2 pack the
@@ -1595,9 +1635,90 @@ impl NicaiMachine {
         }
     }
 
-    fn draw_text(&mut self, address: u32, x: i32, y: i32, color: u16) {
-        let bytes = self.read_c_bytes(address, 4096);
-        self.draw_text_bytes(&bytes, x, y, color);
+    fn draw_screen_line(&mut self, mut x: i32, mut y: i32, x1: i32, y1: i32, color: u16) {
+        let dx = (x1 - x).abs();
+        let dy = -(y1 - y).abs();
+        let step_x = if x < x1 { 1 } else { -1 };
+        let step_y = if y < y1 { 1 } else { -1 };
+        let mut error = dx + dy;
+        loop {
+            self.fill_screen_rect(x, y, 1, 1, color);
+            if x == x1 && y == y1 {
+                break;
+            }
+            let twice = error * 2;
+            if twice >= dy {
+                error += dy;
+                x += step_x;
+            }
+            if twice <= dx {
+                error += dx;
+                y += step_y;
+            }
+        }
+    }
+
+    fn lcd_text_bytes(&mut self, address: u32, wide: bool) -> Vec<u8> {
+        if !wide {
+            return self.read_c_bytes(address, 4096);
+        }
+        let mut units = Vec::new();
+        if address != 0 {
+            for offset in 0..2048 {
+                let unit = self.memory.r16(address + offset * 2);
+                if unit == 0 {
+                    break;
+                }
+                units.push(unit);
+            }
+        }
+        GBK.encode(&String::from_utf16_lossy(&units)).0.into_owned()
+    }
+
+    fn draw_lcd_text_rectangle(&mut self, wide: bool) {
+        let bytes = self.lcd_text_bytes(self.register(0), wide);
+        let (text, _, _) = GBK.decode(&bytes);
+        let x = signed_coord(self.register(1));
+        let y = signed_coord(self.register(2));
+        let width = signed_coord(self.register(3)).max(0);
+        let height = signed_coord(self.argument(4)).max(0);
+        let color = self.argument(5) as u16;
+        let mut lines = Vec::new();
+        let mut line = String::new();
+        let mut line_width = 0;
+        let mut full_width = 0;
+        for character in text.chars() {
+            if character == '\r' {
+                continue;
+            }
+            let glyph_width = unifont::get_glyph(character).map_or(16, |g| g.get_width() as i32);
+            if character == '\n'
+                || (width != 0 && line_width + glyph_width > width && !line.is_empty())
+            {
+                lines.push(std::mem::take(&mut line));
+                line_width = 0;
+            }
+            if character != '\n' {
+                full_width += glyph_width;
+                line_width += glyph_width;
+                line.push(character);
+            }
+        }
+        if !line.is_empty() {
+            lines.push(line);
+        }
+        let mut drawn = 0;
+        for line in lines {
+            if height != 0 && (drawn + 1) * 18 > height {
+                break;
+            }
+            let encoded = GBK.encode(&line).0;
+            self.draw_text_bytes(&encoded, x, y + drawn * 18, color);
+            drawn += 1;
+        }
+        self.set_result(
+            (drawn as u32) << 16 | full_width.min(if width == 0 { 0xffff } else { width }) as u32,
+        );
     }
 
     fn draw_text_bytes(&mut self, bytes: &[u8], x: i32, y: i32, color: u16) {
@@ -1617,12 +1738,26 @@ impl NicaiMachine {
         color: u16,
         glyph_height: i32,
     ) {
+        self.draw_text_bytes_clipped(image, bytes, x, y, color, glyph_height, None);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_text_bytes_clipped(
+        &mut self,
+        image: u32,
+        bytes: &[u8],
+        x: i32,
+        y: i32,
+        color: u16,
+        glyph_height: i32,
+        clip: Option<(i32, i32, i32, i32)>,
+    ) {
         let (text, _, _) = GBK.decode(bytes);
         // Text coordinates live in the presented display space: the firmware
         // renders the glyphs itself, so a landscape-packaged game issues them
         // in presentation coordinates, mapped back into the active LCD
         // surface pixel by pixel (identity without presentation rotation).
-        let screen = image == 0 || image == SCREEN_IMAGE_STRUCT;
+        let screen = image == 0 || image == SCREEN_IMAGE_STRUCT || image == SCREEN_IMAGE;
         let swaps = screen && self.effective_orientation().swaps_dimensions();
         let (pixels, width, height) = if screen {
             (
@@ -1656,6 +1791,14 @@ impl NicaiMachine {
                 }
                 for glyph_x in 0..glyph.get_width() as i32 {
                     let display_x = pen_x + glyph_x;
+                    if clip.is_some_and(|(cx, cy, cw, ch)| {
+                        display_x < cx
+                            || display_x >= cx + cw
+                            || display_y < cy
+                            || display_y >= cy + ch
+                    }) {
+                        continue;
+                    }
                     if (0..display_width).contains(&display_x)
                         && glyph.get_pixel(glyph_x as usize, (glyph_y * 16 / glyph_height) as usize)
                     {
@@ -1976,5 +2119,218 @@ mod tests {
                 assert_eq!(&restored.frame_pixels()[..2], &[0x000000, 0xff0000]);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod rendering_tests {
+    use super::*;
+    use armv4t_emu::Mode;
+
+    #[test]
+    fn closing_an_overlay_resumes_without_repeating_initialization() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        machine.state = super::super::MachineState::Ready;
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        let object = machine.allocate(64);
+        let screen = object + 24;
+        let init = machine.allocate(10);
+        for (i, word) in [0x6901, 0x3101, 0x6101, 0x2000, 0x4770]
+            .into_iter()
+            .enumerate()
+        {
+            machine.memory.w16(init + i as u32 * 2, word);
+        }
+        machine.memory.w32(screen, init | 1);
+        machine.pending_screen = screen;
+        machine.screen_stack.push(screen);
+        machine.run_frame(100).unwrap();
+        let overlay = machine.allocate(64) + 24;
+        machine.cpu.reg_set(Mode::User, 0, overlay);
+        machine.handle_screen_service(4);
+        machine.run_frame(100).unwrap();
+        machine.cpu.reg_set(Mode::User, 0, overlay);
+        machine.handle_screen_service(6);
+        machine.run_frame(100).unwrap();
+        assert_eq!(machine.memory.r32(object + 16), 1);
+    }
+
+    #[test]
+    fn lcd_scalar_and_packed_lines_draw_inclusive_clipped_endpoints() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        let stack = super::super::STACK_BASE + 0x100;
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        machine.memory.w32(stack, 0xf800);
+        for (i, value) in [85, 110, 91, 110].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, i as u8, value);
+        }
+        machine.handle_lcd_service(14);
+        for x in 85..=91 {
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (110 * 240 + x) * 2),
+                0xf800
+            );
+        }
+        for (i, value) in [0x0001_fffe, 0x0001_0002, 0x07e0].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, i as u8, value);
+        }
+        machine.handle_lcd_service(15);
+        for x in 0..=2 {
+            assert_eq!(machine.memory.r16(SCREEN_IMAGE + (240 + x) * 2), 0x07e0);
+        }
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE + (240 + 3) * 2), 0);
+    }
+
+    #[test]
+    fn lcd_draw_string_accepts_the_raw_screen_buffer_alias() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        let text = machine.allocate(4);
+        machine.memory.write_bytes(text, b"A\0");
+        let stack = super::super::STACK_BASE + 0x100;
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        machine.memory.w16(stack, 0xf800);
+        for (i, value) in [SCREEN_IMAGE, text, 10, 20].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, i as u8, value);
+        }
+        machine.handle_lcd_service(10);
+        assert!(machine
+            .frame_pixels()
+            .iter()
+            .any(|pixel| *pixel == 0xff0000));
+        machine.fill_screen_rect(0, 0, 240, 400, 0);
+        machine.latched_text_origin = (10, 20);
+        let context = machine.allocate(24);
+        for (i, value) in [context, text, 0, 0].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, i as u8, value);
+        }
+        machine.handle_lcd_service(10);
+        assert!(machine
+            .frame_pixels()
+            .iter()
+            .any(|pixel| *pixel == 0xff0000));
+    }
+
+    #[test]
+    fn screen_logic_propagates_until_an_overlay_consumes_the_event() {
+        for consumed in [0, 1] {
+            let mut machine = NicaiMachine::new_blank_for_tests();
+            machine.initialize_screen();
+            machine.state = super::super::MachineState::Ready;
+            machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+            let object = machine.allocate(64);
+            let screen = object + 24;
+            let callback = machine.allocate(8);
+            for (i, word) in [0x212a, 0x6101, 0x2001, 0x4770].into_iter().enumerate() {
+                machine.memory.w16(callback + i as u32 * 2, word);
+            }
+            machine.memory.w32(screen + 8, callback | 1);
+            let overlay = machine.allocate(64) + 24;
+            let overlay_callback = machine.allocate(4);
+            machine.memory.w16(overlay_callback, 0x2000 | consumed);
+            machine.memory.w16(overlay_callback + 2, 0x4770);
+            machine.memory.w32(overlay + 8, overlay_callback | 1);
+            machine.pending_screen = overlay;
+            machine.screen_stack = vec![screen, overlay];
+            machine.run_frame(100).unwrap();
+            assert_eq!(
+                machine.memory.r32(object + 16),
+                if consumed == 0 { 42 } else { 0 }
+            );
+        }
+    }
+
+    #[test]
+    fn screen_initialization_loads_resources_without_an_explicit_request() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        machine.state = super::super::MachineState::Ready;
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        let object = machine.allocate(64);
+        let screen = object + 24;
+        let callback = machine.allocate(6);
+        for (i, word) in [0x212a, 0x6101, 0x4770].into_iter().enumerate() {
+            machine.memory.w16(callback + i as u32 * 2, word);
+        }
+        machine.memory.w32(screen + 24, callback | 1);
+        machine.pending_screen = screen;
+        machine.screen_stack.push(screen);
+        machine.run_frame(100).unwrap();
+        assert_eq!(machine.memory.r32(object + 16), 42);
+        machine.memory.w32(object + 16, 7);
+        machine.run_frame(100).unwrap();
+        assert_eq!(machine.memory.r32(object + 16), 7);
+    }
+
+    #[test]
+    fn modal_screen_renders_above_the_underlying_screen() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        machine.state = super::super::MachineState::Ready;
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        let mut screens = Vec::new();
+        for (pixel, color) in [(0, 0xf800), (1, 0x07e0)] {
+            let object = machine.allocate(64);
+            let screen = object + 24;
+            machine.memory.w32(object, SCREEN_IMAGE + pixel * 2);
+            machine.memory.w32(object + 4, color);
+            let callback = machine.allocate(8);
+            for (i, word) in [0x6801, 0x6842, 0x800a, 0x4770].into_iter().enumerate() {
+                machine.memory.w16(callback + i as u32 * 2, word);
+            }
+            machine.memory.w32(screen + 12, callback | 1);
+            screens.push(screen);
+        }
+        machine.pending_screen = screens[1];
+        machine.screen_stack = screens;
+        machine.run_frame(100).unwrap();
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE), 0xf800);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE + 2), 0x07e0);
+    }
+
+    #[test]
+    fn lcd_ucs2_measurement_and_drawing_use_guest_units() {
+        for big_endian in [false, true] {
+            let mut machine = NicaiMachine::new_blank_for_tests();
+            let mut memory = super::super::memory::MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_screen();
+            let text = machine.allocate(8);
+            for (i, unit) in [0x41, 0x4e2d, 0x42, 0].into_iter().enumerate() {
+                machine.memory.w16(text + i as u32 * 2, unit);
+            }
+            machine.cpu.reg_set(Mode::User, 0, text);
+            machine.handle_lcd_service(71);
+            assert_eq!(machine.register(0), 32);
+            for (i, value) in [text, 10, 20, 0xf800].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, i as u8, value);
+            }
+            machine.handle_lcd_service(63);
+            let pixels = machine.frame_pixels();
+            assert!(pixels.iter().any(|pixel| *pixel == 0xff0000));
+        }
+    }
+
+    #[test]
+    fn lcd_text_rectangle_wraps_and_returns_occupied_size() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        let text = machine.allocate(8);
+        machine.memory.write_bytes(text, b"ABCD\0");
+        let stack = super::super::STACK_BASE + 0x100;
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        machine.memory.w32(stack, 36);
+        machine.memory.w32(stack + 4, 0xffff);
+        for (i, value) in [text, 10, 20, 16].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, i as u8, value);
+        }
+        machine.handle_lcd_service(13);
+        assert_eq!(machine.register(0), (2 << 16) | 16);
+        let pixels = machine.frame_pixels();
+        assert!(pixels[38 * 240..54 * 240].iter().any(|p| *p != 0));
+        assert!(pixels[..20 * 240].iter().all(|p| *p == 0));
     }
 }

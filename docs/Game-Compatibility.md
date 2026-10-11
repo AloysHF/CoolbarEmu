@@ -66,7 +66,7 @@ not provide the original server's content or a real carrier payment service.
 | 24 | `A/喜羊羊与灰太狼V10.CBE` | 240×320 | <img src="images/A/喜羊羊与灰太狼V10.png" width="120" alt="喜羊羊与灰太狼V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 25 | `A/噗噜噗噜旋转棒V101.CBE` | 240×320 | <img src="images/A/噗噜噗噜旋转棒V101.png" width="120" alt="噗噜噗噜旋转棒V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 26 | `A/在线书城(新品).CBE` | 240×400 | <img src="images/A/在线书城(新品).png" width="120" alt="在线书城(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
-| 27 | `A/在线书城V10.CBE` | 240×400 | <img src="images/A/在线书城V10.png" width="120" alt="在线书城V10 idle frame"> | Not assessed | Ready | Title/background missing; only partial prompt renders |
+| 27 | `A/在线书城V10.CBE` | 240×400 | <img src="images/A/在线书城V10.png" width="120" alt="在线书城V10 idle frame"> | Not assessed | Ready | Book background/icons and usage prompt render; font/layout differences remain; interaction unverified |
 | 28 | `A/坦克大战(新品).CBE` | 240×400 | <img src="images/A/坦克大战(新品).png" width="120" alt="坦克大战(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
 | 29 | `A/坦克大战V10.CBE` | 240×320 | <img src="images/A/坦克大战V10.png" width="120" alt="坦克大战V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 30 | `A/坦克大战V101.CBE` | 240×320 | <img src="images/A/坦克大战V101.png" width="120" alt="坦克大战V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
@@ -170,7 +170,7 @@ not provide the original server's content or a real carrier payment service.
 | # | Application / file | Display | Screenshot | Network | Execution | Coverage / limitation |
 | ---: | --- | --- | --- | --- | --- | --- |
 | 1 | `B/AppStore.CBE` | 240×400 | <img src="images/B/AppStore.png" width="120" alt="AppStore idle frame"> | Required | Ready | Idle frame captured; interaction/gameplay unverified |
-| 2 | `B/Google地图.CBE` | 240×400 | <img src="images/B/Google地图.png" width="120" alt="Google地图 idle frame"> | Required | Ready | Idle frame captured; interaction/gameplay unverified |
+| 2 | `B/Google地图.CBE` | 240×400 | <img src="images/B/Google地图.png" width="120" alt="Google地图 idle frame"> | Required | Ready | Packaged background renders; firmware-provided terms/title text unavailable; online operation unverified |
 | 3 | `B/万年历.CBE` | 240×400 | <img src="images/B/万年历.png" width="120" alt="万年历 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 4 | `B/三国群殴传.CBE` | 400×240 | <img src="images/B/三国群殴传.png" width="120" alt="三国群殴传 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 5 | `B/世纪佳缘.CBE` | 240×400 | <img src="images/B/世纪佳缘.png" width="120" alt="世纪佳缘 idle frame"> | Required | Ready | Idle frame captured; interaction/gameplay unverified |
@@ -181,7 +181,7 @@ not provide the original server's content or a real carrier payment service.
 | 10 | `B/动感骰子.CBE` | 240×400 | <img src="images/B/动感骰子.png" width="120" alt="动感骰子 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 11 | `B/吸血鬼猎人.CBE` | 400×240 | <img src="images/B/吸血鬼猎人.png" width="120" alt="吸血鬼猎人 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 12 | `B/在线书城.CBE` | 240×400 | <img src="images/B/在线书城.png" width="120" alt="在线书城 idle frame"> | Required | Halted | Idle frame captured; interaction/gameplay unverified |
-| 13 | `B/在线音乐.CBE` | 240×400 | <img src="images/B/在线音乐.png" width="120" alt="在线音乐 idle frame"> | Required | Ready | Idle frame captured; interaction/gameplay unverified |
+| 13 | `B/在线音乐.CBE` | 240×400 | <img src="images/B/在线音乐.png" width="120" alt="在线音乐 idle frame"> | Required | Ready | Search controls, toolbars and add prompt render; prompt scrolls with current font metrics; online operation unverified |
 | 14 | `B/士兵突袭.CBE` | 400×240 | <img src="images/B/士兵突袭.png" width="120" alt="士兵突袭 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 15 | `B/大家来数钱.CBE` | 240×400 | <img src="images/B/大家来数钱.png" width="120" alt="大家来数钱 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 16 | `B/天气精灵.CBE` | 240×400 | <img src="images/B/天气精灵.png" width="120" alt="天气精灵 idle frame"> | Required | Ready | Idle frame captured; interaction/gameplay unverified |
@@ -191,7 +191,7 @@ not provide the original server's content or a real carrier payment service.
 | 20 | `B/幸运扑克机.CBE` | 400×240 | <img src="images/B/幸运扑克机.png" width="120" alt="幸运扑克机 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 21 | `B/开心大富翁.CBE` | 400×240 | <img src="images/B/开心大富翁.png" width="120" alt="开心大富翁 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 22 | `B/忍者跳跃.CBE` | 240×400 | <img src="images/B/忍者跳跃.png" width="120" alt="忍者跳跃 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
-| 23 | `B/性爱宝典.CBE` | 240×400 | <img src="images/B/性爱宝典.png" width="120" alt="性爱宝典 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
+| 23 | `B/性爱宝典.CBE` | 240×400 | <img src="images/B/性爱宝典.png" width="120" alt="性爱宝典 idle frame"> | No known requirement | Ready | Disclaimer title, wrapped body and accept/reject labels render; interaction unverified |
 | 24 | `B/性爱高手.CBE` | 240×400 | <img src="images/B/性爱高手.png" width="120" alt="性爱高手 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 25 | `B/恶魔城.CBE` | 240×400 | <img src="images/B/恶魔城.png" width="120" alt="恶魔城 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 26 | `B/恶魔城登录版.CBE` | 240×320 | <img src="images/B/恶魔城登录版.png" width="120" alt="恶魔城登录版 idle frame"> | Required | Ready | Idle frame captured; interaction/gameplay unverified |
@@ -210,7 +210,7 @@ not provide the original server's content or a real carrier payment service.
 | 39 | `B/枪之荣誉.CBE` | 240×400 | <img src="images/B/枪之荣誉.png" width="120" alt="枪之荣誉 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 40 | `B/武林外传(新品).CBE` | 240×320 | <img src="images/B/武林外传(新品).png" width="120" alt="武林外传(新品) idle frame"> | No known requirement | Ready | Menu, help, characters, map/dialogue and battle input checked; complete playthrough/audio unverified |
 | 41 | `B/武林外传V10.CBE` | 240×320 | <img src="images/B/武林外传V10.png" width="120" alt="武林外传V10 idle frame"> | No known requirement | Ready | Image palette colors checked; interaction/gameplay unverified |
-| 42 | `B/歪歪猫发条城历险记V100.CBE` | 176×220 | <img src="images/B/歪歪猫发条城历险记V100.png" width="120" alt="歪歪猫发条城历险记V100 idle frame"> | Required | Ready | Idle frame captured; interaction/gameplay unverified |
+| 42 | `B/歪歪猫发条城历险记V100.CBE` | 176×220 | <img src="images/B/歪歪猫发条城历险记V100.png" width="120" alt="歪歪猫发条城历险记V100 idle frame"> | Required | Ready | Title artwork and main menu render; resource decompression completes; gameplay unverified |
 | 43 | `B/水果达人.CBE` | 400×240 | <img src="images/B/水果达人.png" width="120" alt="水果达人 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 44 | `B/江湖Online.CBE` | 240×400 | <img src="images/B/江湖Online.png" width="120" alt="江湖Online idle frame"> | Required | Ready | Idle frame captured; interaction/gameplay unverified |
 | 45 | `B/法老祖玛2.CBE` | 400×240 | <img src="images/B/法老祖玛2.png" width="120" alt="法老祖玛2 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
@@ -270,7 +270,7 @@ not provide the original server's content or a real carrier payment service.
 | 20 | `C/Im.CBE` | 240×400 | <img src="images/C/Im.png" width="120" alt="Im idle frame"> | Not assessed | Halted | Idle frame captured; interaction/gameplay unverified |
 | 21 | `C/kriegspiel.CBE` | 240×400 | <img src="images/C/kriegspiel.png" width="120" alt="kriegspiel idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 22 | `C/MaJiang.CBE` | 220×176 | <img src="images/C/MaJiang.png" width="120" alt="MaJiang idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 23 | `C/Map.CBE` | 176×220 | <img src="images/C/Map.png" width="120" alt="Map idle frame"> | Not assessed | Ready | Map grid, marker and bottom menu missing |
+| 23 | `C/Map.CBE` | 176×220 | <img src="images/C/Map.png" width="120" alt="Map idle frame"> | Not assessed | Ready | Map grid, center marker and bottom menu render; online map data unverified |
 | 24 | `C/mario.CBE` | 240×400 | <img src="images/C/mario.png" width="120" alt="mario idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 25 | `C/MetalSlug.CBE` | 240×400 | <img src="images/C/MetalSlug.png" width="120" alt="MetalSlug idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 26 | `C/MoTa.CBE` | 240×400 | <img src="images/C/MoTa.png" width="120" alt="MoTa idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
@@ -285,7 +285,7 @@ not provide the original server's content or a real carrier payment service.
 | 35 | `C/RussBlock.CBE` | 240×400 | <img src="images/C/RussBlock.png" width="120" alt="RussBlock idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 36 | `C/Sanbing.CBE` | 240×400 | <img src="images/C/Sanbing.png" width="120" alt="Sanbing idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 37 | `C/Star.CBE` | 240×400 | <img src="images/C/Star.png" width="120" alt="Star idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 38 | `C/Stock.CBE` | 176×220 | <img src="images/C/Stock.png" width="120" alt="Stock idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 38 | `C/Stock.CBE` | 176×220 | <img src="images/C/Stock.png" width="120" alt="Stock idle frame"> | Not assessed | Ready | Stock menu and icons render; online stock data unverified |
 | 39 | `C/SuperAirship.CBE` | 240×400 | <img src="images/C/SuperAirship.png" width="120" alt="SuperAirship idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 40 | `C/Sxbaby.CBE` | 240×400 | <img src="images/C/Sxbaby.png" width="120" alt="Sxbaby idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 41 | `C/TankWar.CBE` | 240×400 | <img src="images/C/TankWar.png" width="120" alt="TankWar idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |

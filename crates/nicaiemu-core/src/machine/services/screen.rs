@@ -182,6 +182,17 @@ impl NicaiMachine {
             4 | 5 => {
                 let screen = self.register(0);
                 if screen != 0 {
+                    let previous = self.pending_screen;
+                    if previous != 0 && previous != self.active_screen {
+                        let parameter = self.screen_call_parameter(previous);
+                        for (offset, tag) in [(0, "screenInit"), (24, "screenLoadResource")] {
+                            let callback = self.memory.r32(previous + offset);
+                            if callback != 0 {
+                                self.pending_callbacks
+                                    .push_back((callback, vec![parameter], tag));
+                            }
+                        }
+                    }
                     self.screen_stack.push(screen);
                     self.pending_screen = screen;
                     self.memory.w32(SCREEN_IS_IN_QUIT, 0);
@@ -202,7 +213,8 @@ impl NicaiMachine {
                 if removed && (self.active_screen == screen || self.pending_screen == screen) {
                     self.pending_screen = self.screen_stack.last().copied().unwrap_or(0);
                     self.active_screen = self.pending_screen;
-                    self.screen_initialized = false;
+                    // Revealing a suspended screen must not repeat its startup flow.
+                    self.screen_initialized = self.pending_screen != 0;
                 }
                 self.set_result(u32::from(removed));
             }
