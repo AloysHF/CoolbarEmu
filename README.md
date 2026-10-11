@@ -229,49 +229,20 @@ Detailed references by input mode:
 
 ## Game Compatibility
 
-| Status | Count |
-|--------|-------|
-| ✅ Pass | 74 |
-| ❌ Fail | 0 |
-| 🌐 Requires network | 17 |
+The current local corpus contains **250 archive variants**: group A (128),
+group B (74), and group C (48). The 200-frame idle scan completes for 248 files;
+one file faults and one empty archive cannot load. None times out.
 
-For the full game list with screenshots, see [Game Compatibility](docs/Game-Compatibility.md).
+These are execution results, not gameplay ratings. Some applications halt at
+startup assertions with a black frame; others show loading screens or require
+unavailable online services. Input coverage and known rendering limitations are
+listed separately for each variant in [Game Compatibility](docs/Game-Compatibility.md),
+alongside current A/B/C screenshots.
 
-Private I/O manager tables preserve the firmware's NV method discovery layout.
-This lets fixed-address applications initialize their storage callbacks without
-calling null pointers; successful startup does not guarantee complete gameplay.
-
-Resource lookup distinguishes the file-package marker from adjacent fields in
-compact memory packages. This restores dynamic code lookup for some titles;
-reaching an active screen still requires visual and input validation.
-Modal dialogs may pause screen callbacks; the frame remains visible while
-deferred results restore the guest screen.
-Legacy text-box initialization uses its declared object layout and preserves
-adjacent screen state.
-Text boxes wrap GBK text into guest line tables, track pages, draw screen or
-image targets, and release their owned line buffers.
-Legacy GameLCD supports image creation, clipped opaque/transparent blits,
-dimension queries and bounded GBK text with RGB888 colors.
-The fixed legacy game manager uses the same text renderer and returns concrete
-font metrics, allowing guest wrapping loops to make progress.
-Its full-screen, clipped image and clip-query entry points share GameLCD drawing.
-Legacy window repaint dispatches guest painters for dirty rectangles and
-walks child and sibling windows while preserving caller registers.
-Legacy picture libraries support resource loading, cached image indices, image
-sizes, clipped drawing, rectangle fills, target selection, and release.
-Fixed-address picture-library entry points use the same implementation.
-Unknown object methods use separate inert stubs so they cannot invoke global
-manager constructors or overwrite saved return addresses.
-
-Native file requests support open, close, size, read and write through the same
-guest filesystem, including their deferred scalar-result retrieval. This fixes
-required startup file creation; it does not implement missing native object
-methods or establish that a previously blank application is now usable.
-
-
-Pending resource callbacks bound to a new screen run before its initialization,
-so initialization can use the objects created by resource loading. Requests
-issued during initialization still run before logic and rendering.
+Verified interaction includes Wulin's menus and battle actions, one Crazy
+Landlord round, War Chess's menu/help/purchase panels, Westward Journey's title
+menu, and the QCIF Ebook bookshelf. Complete playthroughs and all audio paths
+remain unverified. Billing and network callbacks are local offline simulations.
 
 ## Testing
 
@@ -292,51 +263,3 @@ help. See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for details.
 ## License
 
 This project is licensed under the [BSD 3-Clause License](LICENSE).
-
-### Native DF startup coverage (PR 71)
-
-Native DF constructors are bound in both registered and queried function tables.
-Registered screens take over the frame lifecycle after resource loading, and
-native idle logic can poll a press edge within the same frame. Record files use
-bounded sections with little-endian headers and values. Window callbacks receive
-stack-passed contexts and paint queued dirty rectangles. Animation resources load
-image references and cumulative frame timing; mirrored parts and collision
-methods remain unsupported.
-
-Westward Journey (大话西游, new variant) now completes startup without the null
-rectangle-registration callback fault. Its background and title menu render,
-and confirm/direction keys change menu state. Later animation and content panels
-remain incomplete; this startup repair does not establish playable compatibility.
-
-Native bounded GBK width and UCS2 length/width requests now return scalar
-results without replacing their request fields with method-table pointers.
-This prevents recursive assertion rendering and stack exhaustion in shared
-startup templates. A clean assertion halt with a blank frame remains an
-incomplete startup, not playable compatibility.
-
-These changes restore visible content in the Metal new startup path. Its
-continuation prompt and subsequent menus are still under investigation; rendering
-a title is not evidence of playable compatibility.
-
-War Chess (战火军棋, new variant) now renders its title, menu, purchase prompt
-and help panel, with keypad and pointer navigation. Paid gameplay remains
-unvalidated. See [Game Compatibility](docs/Game-Compatibility.md) for the
-validation scope.
-
-Wulin (武林外传, new variant) now completes startup and renders its menu,
-help, character selection, map, dialogue and battles. Headless input checks cover
-selection, attacks and the return to dialogue after defeat; a 5,000-frame run
-completes without a guest fault. Billing/SMS callbacks remain local offline
-simulations, and complete playthroughs and audio are not validated.
-
-QCIF Ebook now completes startup and continued frame execution instead of hanging
-in an oversized copy after a fabricated HTTP payload. Offline HTTP GET requests
-return a request handle and an error callback, allowing the application to keep
-its local page responsive. Remote book content is not provided.
-
-Crazy Landlord (疯狂斗地主, new variant) now reaches its menu and playable card
-table. Scripted checks cover help, scores, room/character selection, card actions
-and a round result over 5,000 frames. Native allocation requests preserve guest
-return addresses; bounded random values and advancing ticks unblock setup and
-dealing. Billing remains a local simulation; full playthrough and audio are not
-validated.

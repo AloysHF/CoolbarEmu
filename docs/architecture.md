@@ -160,7 +160,7 @@ coordinates; transparent blits preserve destination pixels for zero RGB565.
 
 The desktop screenshot mode preserves the last framebuffer produced before a guest callback error. It only writes a PNG when guest execution has produced a framebuffer with more than one color; blank frames and startup failures are reported without creating a screenshot.
 
-### Native DF startup coverage (PR 71)
+### Native DF interfaces
 
 Native DF constructors are bound in both registered and queried function tables.
 Registered screens take over the frame lifecycle after resource loading, and
@@ -170,18 +170,13 @@ stack-passed contexts and paint queued dirty rectangles. Animation resources loa
 image references and cumulative frame timing; mirrored parts and collision
 methods remain unsupported.
 
-These changes restore visible content in the Metal new startup path. Its
-continuation prompt and subsequent menus are still under investigation; rendering
-a title is not evidence of playable compatibility.
-
 Native registration stores startup and exit callbacks separately; boot invokes
 only startup. Registered screen logic polls key and pointer state once per
 frame. The fixed manager's record constructor initializes only the bounded
 record object, preserving neighboring resource packages. Its UI-skin helper
 reads height and slice size from the AAPCS stack. Native allocation requests
 (sid 0xb9) write a cleared heap pointer through the request's output address and
-return success in a single status byte. These paths restore the War Chess new
-variant's title, menu, purchase and help panels; paid gameplay is unvalidated.
+return success in a single status byte.
 
 Native dirty-rectangle requests (0x6b/0x6d/0x6e) initialize an eight-byte pool,
 append signed rectangle coordinates through a bounded pointer array and bind an
