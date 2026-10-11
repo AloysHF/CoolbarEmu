@@ -116,7 +116,7 @@ not provide the original server's content or a real carrier payment service.
 | 74 | `A/王牌伞兵(新品).CBE` | 240×320 | <img src="images/A/王牌伞兵(新品).png" width="120" alt="王牌伞兵(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 75 | `A/王牌伞兵V10.CBE` | 240×320 | <img src="images/A/王牌伞兵V10.png" width="120" alt="王牌伞兵V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 76 | `A/生化危机(新品).CBE` | 240×400 | <img src="images/A/生化危机(新品).png" width="120" alt="生化危机(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
-| 77 | `A/生化危机V10.CBE` | 240×320 | <img src="images/A/生化危机V10.png" width="120" alt="生化危机V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 77 | `A/生化危机V10.CBE` | 320×240 | <img src="images/A/生化危机V10.png" width="120" alt="生化危机V10 idle frame"> | Not assessed | Ready | Landscape idle frame captured; interaction/gameplay unverified |
 | 78 | `A/生化危机V101.CBE` | 240×320 | <img src="images/A/生化危机V101.png" width="120" alt="生化危机V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 79 | `A/生肖宝贝(新品).CBE` | 240×320 | <img src="images/A/生肖宝贝(新品).png" width="120" alt="生肖宝贝(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 80 | `A/生肖运程V10.CBE` | 240×400 | <img src="images/A/生肖运程V10.png" width="120" alt="生肖运程V10 idle frame"> | Not assessed | Ready | Image palette colors checked; interaction/gameplay unverified |
@@ -294,7 +294,7 @@ not provide the original server's content or a real carrier payment service.
 | 44 | `C/Train.CBE` | 176×220 | <img src="images/C/Train.png" width="120" alt="Train idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 45 | `C/UniversalWar.CBE` | 240×400 | <img src="images/C/UniversalWar.png" width="120" alt="UniversalWar idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 46 | `C/Weather.CBE` | 176×220 | <img src="images/C/Weather.png" width="120" alt="Weather idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 47 | `C/Zombie.CBE` | 240×400 | <img src="images/C/Zombie.png" width="120" alt="Zombie idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 47 | `C/Zombie.CBE` | 400×240 | <img src="images/C/Zombie.png" width="120" alt="Zombie idle frame"> | Not assessed | Ready | Landscape idle frame captured; fallback LCD dimensions retain unused margins; interaction/gameplay unverified |
 | 48 | `C/ZuMa.CBE` | 220×176 | <img src="images/C/ZuMa.png" width="120" alt="ZuMa idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 
 ## Known Limitations
