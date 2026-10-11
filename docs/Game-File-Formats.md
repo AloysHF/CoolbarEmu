@@ -97,7 +97,9 @@ Palette colors and transparency are decoded separately: opaque drawing copies
 the original color, while alpha drawing skips pixels marked transparent.
 
 - **Pixel format**: RGB565 (16-bit, 5-6-5 bit layout)
-- **Resolution**: 240×400 (WQVGA)
+- **Resolution**: Active LCD dimensions; supported portrait modes are 176×220,
+  240×320, 240×352 and 240×400, with matching landscape variants. Unknown
+  modes fall back to 240×400 (WQVGA).
 - **Framebuffer**: Located in guest RAM, converted to RGB888 for display
 
 The renderer reads RGB565 pixels from the framebuffer address in emulated memory and

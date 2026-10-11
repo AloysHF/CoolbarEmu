@@ -38,6 +38,10 @@ frontend can display the core metadata and supported features.
 
 ## Supported Features
 
+Save states use format version 2. States from older builds using version 1 are
+rejected because the machine payload layout changed; create new states after
+updating. Active LCD geometry and image transparency survive save/load.
+
 - Video output using the RGB888 pixel format
 - Automatic landscape rotation: games packaged for the original phone's
   rotated landscape LCD use the rotated active LCD dimensions (the same content-identity

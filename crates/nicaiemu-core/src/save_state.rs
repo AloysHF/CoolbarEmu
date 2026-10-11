@@ -12,7 +12,7 @@ use serde::Serialize;
 use crate::machine::NicaiMachine;
 
 const MAGIC: &[u8; 8] = b"NICAISTM";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const HEADER_SIZE: usize = 32;
 const MAX_DECODED_SIZE: usize = 64 * 1024 * 1024;
 
@@ -156,8 +156,14 @@ mod tests {
         let mut output = encoded_value();
         assert!(decode_value::<TestValue>(&output, 0x8765_4321).is_err());
 
-        output[8..12].copy_from_slice(&2u32.to_le_bytes());
-        assert!(decode_value::<TestValue>(&output, 0x1234_5678).is_err());
+        for version in [1u32, VERSION + 1] {
+            output[8..12].copy_from_slice(&version.to_le_bytes());
+            let error = decode_value::<TestValue>(&output, 0x1234_5678).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!("unsupported save-state version {version}")
+            );
+        }
 
         assert!(decode_value::<TestValue>(&output[..HEADER_SIZE - 1], 0x1234_5678).is_err());
     }

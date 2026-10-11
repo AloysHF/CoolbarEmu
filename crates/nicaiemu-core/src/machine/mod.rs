@@ -756,7 +756,7 @@ pub struct NicaiMachine {
     key_down: u32,
     key_held: u32,
     key_held_physical: u32,
-    // Retained to preserve the version-1 save-state field layout.
+    // Reserved legacy input fields in the machine snapshot.
     _legacy_key_press_frame: [u32; 31],
     _legacy_key_frame_counter: u32,
     #[serde(skip, default)]
@@ -4066,14 +4066,14 @@ mod tests {
             }
             machine.memory.w32(callback + 8, marker);
         }
-        machine.memory.w32(descriptor, entry + 16 | 1);
-        machine.memory.w32(descriptor + 4, entry + 32 | 1);
+        machine.memory.w32(descriptor, (entry + 16) | 1);
+        machine.memory.w32(descriptor + 4, (entry + 32) | 1);
         machine.cpu.reg_set(Mode::User, 0, 0x79e);
         machine.cpu.reg_set(Mode::User, 1, descriptor);
         machine.handle_native_dispatch_service();
         machine.boot(100).unwrap();
         assert_eq!(machine.memory.r32(marker), 1, "only startup ran");
-        assert_eq!(machine.native_app_exit, entry + 32 | 1);
+        assert_eq!(machine.native_app_exit, (entry + 32) | 1);
     }
 
     #[test]
@@ -4419,7 +4419,7 @@ mod tests {
             }
             machine
                 .memory
-                .w32(logic + 20, SERVICE_BASE + TABLE_STRIDE * 3 + 11 * 4 | 1);
+                .w32(logic + 20, (SERVICE_BASE + TABLE_STRIDE * 3 + 11 * 4) | 1);
             machine.memory.w32(screen + 8, logic | 1);
             machine.pending_screen = screen;
             machine.native_app_parser = if native { logic | 1 } else { 0 };
@@ -4992,7 +4992,7 @@ mod tests {
         };
         blit(&mut machine, 0, 0);
         assert_eq!(
-            machine.memory.r16(SCREEN_IMAGE + (0 * 240) * 2),
+            machine.memory.r16(SCREEN_IMAGE),
             0,
             "a blit outside the clip rectangle stays off the framebuffer"
         );

@@ -2,7 +2,7 @@
 
 ## Current Status
 
-The local validation corpus contains 246 distinct CBE files in three groups: A (124), B
+The local validation corpus contains 245 distinct CBE files in three groups: A (123), B
 (74), and C (48). Group identifiers distinguish archive variants, including
 applications with the same name. Game files are supplied separately and are not
 included in this repository. Local files are organized under
@@ -22,9 +22,15 @@ explicitly listed in the Coverage / limitation column.
 
 | Group | Files | Execution completed | Execution failed | Timed out |
 | --- | ---: | ---: | ---: | ---: |
-| A | 124 | 122 | 2 | 0 |
+| A | 123 | 122 | 1 | 0 |
 | B | 74 | 74 | 0 | 0 |
 | C | 48 | 48 | 0 | 0 |
+
+Verified interaction includes Wulin's menus and battle actions, one Crazy
+Landlord round, War Chess's menu/help/purchase panels, Westward Journey's title
+menu, and the QCIF Ebook bookshelf. Variant-specific coverage is listed below.
+Complete playthroughs and all audio paths remain unverified; billing and network
+callbacks are local offline simulations.
 
 ## Application List
 
@@ -111,59 +117,58 @@ not provide the original server's content or a real carrier payment service.
 | 69 | `A/漫画大王(新品).CBE` | 240×400 | <img src="images/A/漫画大王(新品).png" width="120" alt="漫画大王(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
 | 70 | `A/炸弹人(新品).CBE` | 240×400 | <img src="images/A/炸弹人(新品).png" width="120" alt="炸弹人(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
 | 71 | `A/热辣美图(新品).CBE` | 240×400 | <img src="images/A/热辣美图(新品).png" width="120" alt="热辣美图(新品) idle frame"><br>Blank frame | Not assessed | FAIL / Faulted | instruction fetch from unmapped address 0x00016800 |
-| 72 | `A/熊猫夺宝记V101.CBE` | Not available | No frame: load failure | Not assessed | FAIL / Load error | CBE executable header is truncated |
-| 73 | `A/爱之征途V101.CBE` | 240×320 | <img src="images/A/爱之征途V101.png" width="120" alt="爱之征途V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 74 | `A/王牌伞兵(新品).CBE` | 240×320 | <img src="images/A/王牌伞兵(新品).png" width="120" alt="王牌伞兵(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 75 | `A/王牌伞兵V10.CBE` | 240×320 | <img src="images/A/王牌伞兵V10.png" width="120" alt="王牌伞兵V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 76 | `A/生化危机(新品).CBE` | 240×400 | <img src="images/A/生化危机(新品).png" width="120" alt="生化危机(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
-| 77 | `A/生化危机V10.CBE` | 320×240 | <img src="images/A/生化危机V10.png" width="120" alt="生化危机V10 idle frame"> | Not assessed | Ready | Landscape idle frame captured; interaction/gameplay unverified |
-| 78 | `A/生化危机V101.CBE` | 240×320 | <img src="images/A/生化危机V101.png" width="120" alt="生化危机V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 79 | `A/生肖宝贝(新品).CBE` | 240×320 | <img src="images/A/生肖宝贝(新品).png" width="120" alt="生肖宝贝(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 80 | `A/生肖运程V10.CBE` | 240×320 | <img src="images/A/生肖运程V10.png" width="120" alt="生肖运程V10 idle frame"> | Not assessed | Ready | Image palette colors checked; interaction/gameplay unverified |
-| 81 | `A/疯狂斗地主(新品).CBE` | 240×320 | <img src="images/A/疯狂斗地主(新品).png" width="120" alt="疯狂斗地主(新品) idle frame"> | Not assessed | Ready | Menu, help, card actions and one round result checked; all rules/rooms/audio unverified |
-| 82 | `A/疯狂斗地主V10.CBE` | 240×320 | <img src="images/A/疯狂斗地主V10.png" width="120" alt="疯狂斗地主V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 83 | `A/移动书城V10.CBE` | 240×320 | <img src="images/A/移动书城V10.png" width="120" alt="移动书城V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 84 | `A/穿越火线V101.CBE` | 240×320 | <img src="images/A/穿越火线V101.png" width="120" alt="穿越火线V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 85 | `A/绝密宝藏(新品).CBE` | 240×320 | <img src="images/A/绝密宝藏(新品).png" width="120" alt="绝密宝藏(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 86 | `A/绝秘宝藏V10.CBE` | 240×320 | <img src="images/A/绝秘宝藏V10.png" width="120" alt="绝秘宝藏V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 87 | `A/绝秘宝藏V101.CBE` | 240×320 | <img src="images/A/绝秘宝藏V101.png" width="120" alt="绝秘宝藏V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 88 | `A/美女俄罗斯V10.CBE` | 240×320 | <img src="images/A/美女俄罗斯V10.png" width="120" alt="美女俄罗斯V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 89 | `A/美女拖拉机V10.CBE` | 240×400 | <img src="images/A/美女拖拉机V10.png" width="120" alt="美女拖拉机V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 90 | `A/联网五子棋(新版)V101.CBE` | 240×320 | <img src="images/A/联网五子棋(新版)V101.png" width="120" alt="联网五子棋(新版)V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 91 | `A/联网扎金花(新版)V101.CBE` | 240×320 | <img src="images/A/联网扎金花(新版)V101.png" width="120" alt="联网扎金花(新版)V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 92 | `A/联网拖拉机(新版)V101.CBE` | 240×320 | <img src="images/A/联网拖拉机(新版)V101.png" width="120" alt="联网拖拉机(新版)V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 93 | `A/联网斗地主(新版)V101.CBE` | 240×320 | <img src="images/A/联网斗地主(新版)V101.png" width="120" alt="联网斗地主(新版)V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 94 | `A/联网泡泡龙(新版)V101.CBE` | 240×320 | <img src="images/A/联网泡泡龙(新版)V101.png" width="120" alt="联网泡泡龙(新版)V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 95 | `A/联网麻将(强推)V101.CBE` | 240×320 | <img src="images/A/联网麻将(强推)V101.png" width="120" alt="联网麻将(强推)V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 96 | `A/象棋之唐伯虎点秋香V10.CBE` | 240×320 | <img src="images/A/象棋之唐伯虎点秋香V10.png" width="120" alt="象棋之唐伯虎点秋香V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 97 | `A/贪吃鱼(经典).CBE` | 240×400 | <img src="images/A/贪吃鱼(经典).png" width="120" alt="贪吃鱼(经典) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
-| 98 | `A/超级八十分(新品).CBE` | 240×400 | <img src="images/A/超级八十分(新品).png" width="120" alt="超级八十分(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 99 | `A/超级泡泡龙(新品).CBE` | 240×320 | <img src="images/A/超级泡泡龙(新品).png" width="120" alt="超级泡泡龙(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 100 | `A/超级泡泡龙V10.CBE` | 240×320 | <img src="images/A/超级泡泡龙V10.png" width="120" alt="超级泡泡龙V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 101 | `A/超级玛丽(新品).CBE` | 240×320 | <img src="images/A/超级玛丽(新品).png" width="120" alt="超级玛丽(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 102 | `A/超级玛丽V10.CBE` | 240×320 | <img src="images/A/超级玛丽V10.png" width="120" alt="超级玛丽V10 idle frame"> | Not assessed | Ready | Title renders; 300-frame confirm replay completes; gameplay completeness unverified |
-| 103 | `A/超级麻将(新品).CBE` | 240×400 | <img src="images/A/超级麻将(新品).png" width="120" alt="超级麻将(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
-| 104 | `A/超级麻将V10.CBE` | 240×400 | <img src="images/A/超级麻将V10.png" width="120" alt="超级麻将V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 105 | `A/酷宝充值(短信直充)V101.CBE` | 240×320 | <img src="images/A/酷宝充值(短信直充)V101.png" width="120" alt="酷宝充值(短信直充)V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 106 | `A/金刚大战V10.CBE` | 240×320 | <img src="images/A/金刚大战V10.png" width="120" alt="金刚大战V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 107 | `A/金字塔传奇(新品).CBE` | 240×400 | <img src="images/A/金字塔传奇(新品).png" width="120" alt="金字塔传奇(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
-| 108 | `A/金字塔传奇V101.CBE` | 240×320 | <img src="images/A/金字塔传奇V101.png" width="120" alt="金字塔传奇V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 109 | `A/陆小凤传奇V101.CBE` | 240×320 | <img src="images/A/陆小凤传奇V101.png" width="120" alt="陆小凤传奇V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 110 | `A/雷霆战机(新品).CBE` | 240×400 | <img src="images/A/雷霆战机(新品).png" width="120" alt="雷霆战机(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
-| 111 | `A/雷霆战机V10.CBE` | 240×320 | <img src="images/A/雷霆战机V10.png" width="120" alt="雷霆战机V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 112 | `A/马戏团(新品).CBE` | 240×400 | <img src="images/A/马戏团(新品).png" width="120" alt="马戏团(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
-| 113 | `A/马戏团V10.CBE` | 240×320 | <img src="images/A/马戏团V10.png" width="120" alt="马戏团V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 114 | `A/马戏团V101.CBE` | 240×320 | <img src="images/A/马戏团V101.png" width="120" alt="马戏团V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 115 | `A/魔兽塔防(新品).CBE` | 240×320 | <img src="images/A/魔兽塔防(新品).png" width="120" alt="魔兽塔防(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 116 | `A/魔兽塔防V10.CBE` | 240×400 | <img src="images/A/魔兽塔防V10.png" width="120" alt="魔兽塔防V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 117 | `A/魔力弹球(新品).CBE` | 240×400 | <img src="images/A/魔力弹球(新品).png" width="120" alt="魔力弹球(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
-| 118 | `A/魔塔(新品).CBE` | 240×320 | <img src="images/A/魔塔(新品).png" width="120" alt="魔塔(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 119 | `A/魔塔V10.CBE` | 240×320 | <img src="images/A/魔塔V10.png" width="120" alt="魔塔V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 120 | `A/魔幻英雄(新品).CBE` | 240×400 | <img src="images/A/魔幻英雄(新品).png" width="120" alt="魔幻英雄(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
-| 121 | `A/魔幻英雄(新品)V10.CBE` | 240×320 | <img src="images/A/魔幻英雄(新品)V10.png" width="120" alt="魔幻英雄(新品)V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 122 | `A/魔幻英雄V101.CBE` | 240×320 | <img src="images/A/魔幻英雄V101.png" width="120" alt="魔幻英雄V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 123 | `A/鹿鼎记(新品推荐)V10.CBE` | 240×320 | <img src="images/A/鹿鼎记(新品推荐)V10.png" width="120" alt="鹿鼎记(新品推荐)V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 124 | `A/龙王战士V101.CBE` | 240×320 | <img src="images/A/龙王战士V101.png" width="120" alt="龙王战士V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 72 | `A/爱之征途V101.CBE` | 240×320 | <img src="images/A/爱之征途V101.png" width="120" alt="爱之征途V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 73 | `A/王牌伞兵(新品).CBE` | 240×320 | <img src="images/A/王牌伞兵(新品).png" width="120" alt="王牌伞兵(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 74 | `A/王牌伞兵V10.CBE` | 240×320 | <img src="images/A/王牌伞兵V10.png" width="120" alt="王牌伞兵V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 75 | `A/生化危机(新品).CBE` | 240×400 | <img src="images/A/生化危机(新品).png" width="120" alt="生化危机(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
+| 76 | `A/生化危机V10.CBE` | 320×240 | <img src="images/A/生化危机V10.png" width="120" alt="生化危机V10 idle frame"> | Not assessed | Ready | Landscape idle frame captured; interaction/gameplay unverified |
+| 77 | `A/生化危机V101.CBE` | 240×320 | <img src="images/A/生化危机V101.png" width="120" alt="生化危机V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 78 | `A/生肖宝贝(新品).CBE` | 240×320 | <img src="images/A/生肖宝贝(新品).png" width="120" alt="生肖宝贝(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 79 | `A/生肖运程V10.CBE` | 240×320 | <img src="images/A/生肖运程V10.png" width="120" alt="生肖运程V10 idle frame"> | Not assessed | Ready | Image palette colors checked; interaction/gameplay unverified |
+| 80 | `A/疯狂斗地主(新品).CBE` | 240×320 | <img src="images/A/疯狂斗地主(新品).png" width="120" alt="疯狂斗地主(新品) idle frame"> | Not assessed | Ready | Menu, help, card actions and one round result checked; all rules/rooms/audio unverified |
+| 81 | `A/疯狂斗地主V10.CBE` | 240×320 | <img src="images/A/疯狂斗地主V10.png" width="120" alt="疯狂斗地主V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 82 | `A/移动书城V10.CBE` | 240×320 | <img src="images/A/移动书城V10.png" width="120" alt="移动书城V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 83 | `A/穿越火线V101.CBE` | 240×320 | <img src="images/A/穿越火线V101.png" width="120" alt="穿越火线V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 84 | `A/绝密宝藏(新品).CBE` | 240×320 | <img src="images/A/绝密宝藏(新品).png" width="120" alt="绝密宝藏(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 85 | `A/绝秘宝藏V10.CBE` | 240×320 | <img src="images/A/绝秘宝藏V10.png" width="120" alt="绝秘宝藏V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 86 | `A/绝秘宝藏V101.CBE` | 240×320 | <img src="images/A/绝秘宝藏V101.png" width="120" alt="绝秘宝藏V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 87 | `A/美女俄罗斯V10.CBE` | 240×320 | <img src="images/A/美女俄罗斯V10.png" width="120" alt="美女俄罗斯V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 88 | `A/美女拖拉机V10.CBE` | 240×400 | <img src="images/A/美女拖拉机V10.png" width="120" alt="美女拖拉机V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 89 | `A/联网五子棋(新版)V101.CBE` | 240×320 | <img src="images/A/联网五子棋(新版)V101.png" width="120" alt="联网五子棋(新版)V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 90 | `A/联网扎金花(新版)V101.CBE` | 240×320 | <img src="images/A/联网扎金花(新版)V101.png" width="120" alt="联网扎金花(新版)V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 91 | `A/联网拖拉机(新版)V101.CBE` | 240×320 | <img src="images/A/联网拖拉机(新版)V101.png" width="120" alt="联网拖拉机(新版)V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 92 | `A/联网斗地主(新版)V101.CBE` | 240×320 | <img src="images/A/联网斗地主(新版)V101.png" width="120" alt="联网斗地主(新版)V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 93 | `A/联网泡泡龙(新版)V101.CBE` | 240×320 | <img src="images/A/联网泡泡龙(新版)V101.png" width="120" alt="联网泡泡龙(新版)V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 94 | `A/联网麻将(强推)V101.CBE` | 240×320 | <img src="images/A/联网麻将(强推)V101.png" width="120" alt="联网麻将(强推)V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 95 | `A/象棋之唐伯虎点秋香V10.CBE` | 240×320 | <img src="images/A/象棋之唐伯虎点秋香V10.png" width="120" alt="象棋之唐伯虎点秋香V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 96 | `A/贪吃鱼(经典).CBE` | 240×400 | <img src="images/A/贪吃鱼(经典).png" width="120" alt="贪吃鱼(经典) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
+| 97 | `A/超级八十分(新品).CBE` | 240×400 | <img src="images/A/超级八十分(新品).png" width="120" alt="超级八十分(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 98 | `A/超级泡泡龙(新品).CBE` | 240×320 | <img src="images/A/超级泡泡龙(新品).png" width="120" alt="超级泡泡龙(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 99 | `A/超级泡泡龙V10.CBE` | 240×320 | <img src="images/A/超级泡泡龙V10.png" width="120" alt="超级泡泡龙V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 100 | `A/超级玛丽(新品).CBE` | 240×320 | <img src="images/A/超级玛丽(新品).png" width="120" alt="超级玛丽(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 101 | `A/超级玛丽V10.CBE` | 240×320 | <img src="images/A/超级玛丽V10.png" width="120" alt="超级玛丽V10 idle frame"> | Not assessed | Ready | Title renders; 300-frame confirm replay completes; gameplay completeness unverified |
+| 102 | `A/超级麻将(新品).CBE` | 240×400 | <img src="images/A/超级麻将(新品).png" width="120" alt="超级麻将(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
+| 103 | `A/超级麻将V10.CBE` | 240×400 | <img src="images/A/超级麻将V10.png" width="120" alt="超级麻将V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 104 | `A/酷宝充值(短信直充)V101.CBE` | 240×320 | <img src="images/A/酷宝充值(短信直充)V101.png" width="120" alt="酷宝充值(短信直充)V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 105 | `A/金刚大战V10.CBE` | 240×320 | <img src="images/A/金刚大战V10.png" width="120" alt="金刚大战V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 106 | `A/金字塔传奇(新品).CBE` | 240×400 | <img src="images/A/金字塔传奇(新品).png" width="120" alt="金字塔传奇(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
+| 107 | `A/金字塔传奇V101.CBE` | 240×320 | <img src="images/A/金字塔传奇V101.png" width="120" alt="金字塔传奇V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 108 | `A/陆小凤传奇V101.CBE` | 240×320 | <img src="images/A/陆小凤传奇V101.png" width="120" alt="陆小凤传奇V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 109 | `A/雷霆战机(新品).CBE` | 240×400 | <img src="images/A/雷霆战机(新品).png" width="120" alt="雷霆战机(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
+| 110 | `A/雷霆战机V10.CBE` | 240×320 | <img src="images/A/雷霆战机V10.png" width="120" alt="雷霆战机V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 111 | `A/马戏团(新品).CBE` | 240×400 | <img src="images/A/马戏团(新品).png" width="120" alt="马戏团(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
+| 112 | `A/马戏团V10.CBE` | 240×320 | <img src="images/A/马戏团V10.png" width="120" alt="马戏团V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 113 | `A/马戏团V101.CBE` | 240×320 | <img src="images/A/马戏团V101.png" width="120" alt="马戏团V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 114 | `A/魔兽塔防(新品).CBE` | 240×320 | <img src="images/A/魔兽塔防(新品).png" width="120" alt="魔兽塔防(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 115 | `A/魔兽塔防V10.CBE` | 240×400 | <img src="images/A/魔兽塔防V10.png" width="120" alt="魔兽塔防V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 116 | `A/魔力弹球(新品).CBE` | 240×400 | <img src="images/A/魔力弹球(新品).png" width="120" alt="魔力弹球(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
+| 117 | `A/魔塔(新品).CBE` | 240×320 | <img src="images/A/魔塔(新品).png" width="120" alt="魔塔(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 118 | `A/魔塔V10.CBE` | 240×320 | <img src="images/A/魔塔V10.png" width="120" alt="魔塔V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 119 | `A/魔幻英雄(新品).CBE` | 240×400 | <img src="images/A/魔幻英雄(新品).png" width="120" alt="魔幻英雄(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
+| 120 | `A/魔幻英雄(新品)V10.CBE` | 240×320 | <img src="images/A/魔幻英雄(新品)V10.png" width="120" alt="魔幻英雄(新品)V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 121 | `A/魔幻英雄V101.CBE` | 240×320 | <img src="images/A/魔幻英雄V101.png" width="120" alt="魔幻英雄V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 122 | `A/鹿鼎记(新品推荐)V10.CBE` | 240×320 | <img src="images/A/鹿鼎记(新品推荐)V10.png" width="120" alt="鹿鼎记(新品推荐)V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 123 | `A/龙王战士V101.CBE` | 240×320 | <img src="images/A/龙王战士V101.png" width="120" alt="龙王战士V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 
 ### Group B
 
@@ -305,10 +310,14 @@ not provide the original server's content or a real carrier payment service.
 - Network services use offline responses. Remote content, original online sessions
   and carrier billing are unavailable. Guest file writes are not persisted to host
   storage; host sidecar files are loaded read-only.
-- Westward Journey's later animation/content, QCIF viewport sizes and the specific
-  rendering gaps listed in the tables remain incomplete.
+- Westward Journey's later animation/content and the specific rendering gaps
+  listed in the tables remain incomplete. QCIF LCD sizes are resolved, but font
+  images/UI content in netgobang and netGoldFlower remain incorrect.
 - Complete playthroughs, every character/stage, all audio paths and all resolutions
   have not been validated. File-based MP3 control is incomplete.
+- Save states restore guest memory and execution, but host-side virtual files,
+  pending network/billing callbacks and the random generator state are not
+  serialized. Resuming across these operations is not fully supported.
 
 ## Reporting a Compatibility Issue
 

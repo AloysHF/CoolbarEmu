@@ -2307,10 +2307,7 @@ mod rendering_tests {
             machine.cpu.reg_set(Mode::User, i as u8, value);
         }
         machine.handle_lcd_service(10);
-        assert!(machine
-            .frame_pixels()
-            .iter()
-            .any(|pixel| *pixel == 0xff0000));
+        assert!(machine.frame_pixels().contains(&0xff0000));
         machine.fill_screen_rect(0, 0, 240, 400, 0);
         machine.latched_text_origin = (10, 20);
         let context = machine.allocate(24);
@@ -2318,10 +2315,7 @@ mod rendering_tests {
             machine.cpu.reg_set(Mode::User, i as u8, value);
         }
         machine.handle_lcd_service(10);
-        assert!(machine
-            .frame_pixels()
-            .iter()
-            .any(|pixel| *pixel == 0xff0000));
+        assert!(machine.frame_pixels().contains(&0xff0000));
     }
 
     #[test]
@@ -2421,7 +2415,7 @@ mod rendering_tests {
             }
             machine.handle_lcd_service(63);
             let pixels = machine.frame_pixels();
-            assert!(pixels.iter().any(|pixel| *pixel == 0xff0000));
+            assert!(pixels.contains(&0xff0000));
         }
     }
 

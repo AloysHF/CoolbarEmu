@@ -66,6 +66,8 @@ NicaiEmu executes native CBE applications instead of replacing their game logic 
 3. `NicaiMachine` maps code, initialized data, stack, heap, manager tables, and service trampolines into the guest address space.
 4. The ARM/Thumb interpreter runs the application initializer and entry point, including interworking branches and compiler-generated PC-relative jump tables.
 5. Applications that contain an installer can extract their named resource packages into the sandboxed guest filesystem before launching the installed entry point.
+   The network application manager retains entry descriptors and dispatches
+   startup callbacks independently of the manager initialization directory.
 6. Each 100ms guest tick dispatches logic from the top screen downward until an
    event is consumed, then renders stacked screens from bottom to top.
 
@@ -167,7 +169,9 @@ export, and frontend geometry. The backing allocation retains capacity for a
 240×400 surface, and a mode change preserves existing pixels while repacking
 rows. Save states retain the active dimensions in the existing guest screen
 header, with the hint source retained in its reserved bytes; loading restores
-host geometry without changing the version-1 payload layout. Presentation
+host geometry without adding serialized geometry fields. The machine snapshot
+uses format version 2 because this compatibility update adds other serialized
+machine fields; version-1 states are rejected before decoding. Presentation
 rotation is separate from LCD dimensions:
 native landscape surfaces are displayed directly in automatic mode, while
 profiled games with pre-rotated artwork use an additional rotation. Explicit

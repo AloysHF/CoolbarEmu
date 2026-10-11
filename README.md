@@ -65,9 +65,9 @@ by supported games.
 - **Headless mode** — run N frames without a window for testing and batch
   processing (`--headless --frames`)
 - **Screenshot capture** — automated PNG screenshot generation
-- **Save states** — versioned, checksummed snapshots of the full machine state
+- **Save states** — versioned, checksummed machine snapshots
   through the libretro API and the standalone `--save-state` / `--load-state`
-  options
+  options; format version 2 rejects version-1 states from older builds
 - **Reset** — rebuilds the emulator runtime state from the loaded archive
   (standalone `R` key and libretro `retro_reset`)
 - **Guest memory exposure** — libretro exposes the guest heap and screen
@@ -211,10 +211,6 @@ Notes and limits:
 
 - A few titles are not playable for unrelated reasons (for example the
   network-dependent ones). See [Game Compatibility](docs/Game-Compatibility.md).
-- Network-dependent titles count as compatible once they start; services
-  provided by defunct external servers are outside the startup criterion.
-- The network application manager preserves entry descriptors and dispatches
-  their startup callbacks independently of the manager initialization directory.
 - The standalone `--show-gamepad` overlay is a read-only debug view of the
   merged key state, not a playable virtual keyboard.
 
@@ -234,20 +230,8 @@ Detailed references by input mode:
 
 ## Game Compatibility
 
-The current local corpus contains **246 distinct archives**: group A (124),
-group B (74), and group C (48). The 200-frame idle scan completes for 244 files;
-one file faults and one empty archive cannot load. None times out.
-
-These are execution results, not gameplay ratings. Some applications halt at
-startup assertions with a black frame; others show loading screens or require
-unavailable online services. Input coverage and known rendering limitations are
-listed separately for each variant in [Game Compatibility](docs/Game-Compatibility.md),
-alongside current A/B/C screenshots.
-
-Verified interaction includes Wulin's menus and battle actions, one Crazy
-Landlord round, War Chess's menu/help/purchase panels, Westward Journey's title
-menu, and the QCIF Ebook bookshelf. Complete playthroughs and all audio paths
-remain unverified. Billing and network callbacks are local offline simulations.
+See [Game Compatibility](docs/Game-Compatibility.md) for tested applications,
+screenshots, and known limitations.
 
 ## Testing
 

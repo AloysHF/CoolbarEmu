@@ -34,7 +34,7 @@ pub enum WindowBackend {
     Wayland,
 }
 
-#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+#[cfg(all(unix, not(target_os = "macos")))]
 impl WindowBackend {
     /// Human-readable name used in logs and error messages.
     pub fn label(self) -> &'static str {
