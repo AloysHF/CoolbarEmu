@@ -4888,6 +4888,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn fixed_gameold_allocators_return_owned_zeroed_blocks() {
+        let mut machine = machine_from_minimal_archive();
+        machine.executable.big_endian = true;
+        machine.executable.preferred_code_address = 0x0100_0000;
+        machine.executable.code_image_size = machine.executable.code_size as u32 + 4;
+        assert!(machine.uses_fixed_manager_abi());
+        for (allocate, free) in [(37, 38), (39, 40)] {
+            machine.cpu.reg_set(Mode::User, 0, 0x16800);
+            machine.handle_game_service(allocate);
+            let block = machine.register(0);
+            assert!(machine.heap_allocations.contains_key(&block));
+            assert_ne!(block, 0x16800);
+            machine.memory.w32(block + 0x167fc, 0xfeed_beef);
+            machine.cpu.reg_set(Mode::User, 0, block);
+            machine.handle_game_service(free);
+            assert!(!machine.heap_allocations.contains_key(&block));
+            machine.cpu.reg_set(Mode::User, 0, 0x16800);
+            machine.handle_game_service(allocate);
+            assert_eq!(machine.register(0), block);
+            assert_eq!(machine.memory.r32(block + 0x167fc), 0);
+            machine.cpu.reg_set(Mode::User, 0, block);
+            machine.handle_game_service(free);
+        }
+    }
+
+    #[test]
+    fn native_diagnostic_callbacks_preserve_the_callers_return_address() {
+        let mut machine = machine_from_minimal_archive();
+        let frame = machine.allocate(0x100);
+        let format = machine.allocate(64);
+        machine.memory.write_bytes(format, b"codebuffer:%x,%x\0");
+        machine.memory.w32(frame + 68, EXIT_ADDRESS | 1);
+        let cursor = machine.heap_cursor;
+        machine.cpu.reg_set(Mode::User, 0, format);
+        machine.cpu.reg_set(Mode::User, 1, 0xb5);
+        machine.cpu.reg_set(Mode::User, reg::SP, frame);
+        machine.handle_native_dispatch_service();
+        assert_eq!(machine.memory.r32(frame + 68), EXIT_ADDRESS | 1);
+        assert_eq!(machine.heap_cursor, cursor);
+        assert_eq!(machine.register(0), 0);
+    }
+
     /// SysManager slot 0x78 (GetCoolBarKernelCurrentVersion) is a
     /// zero-argument query.  Left to the generic constructor heuristic, the
     /// stale r1 was read as a block size and the allocated block went

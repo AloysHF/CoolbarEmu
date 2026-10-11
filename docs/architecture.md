@@ -268,3 +268,11 @@ Width uses the standard eight-pixel ASCII / sixteen-pixel full-width metrics.
 Unknown object requests retain separate method-table behavior. These scalar
 bindings prevent pointer values from reaching text-layout arithmetic; they do
 not bypass guest assertions or implement the missing startup interfaces.
+
+Embedded-program loaders use the shared virtual-file seek interface and receive
+the resource-section offset with the application path. Resource packages with a
+separate file context resolve offsets through bounded file reads rather than
+interpreting them as guest pointers. The native old-library table exposes LCD
+pixel-buffer access and screen changes through their shared implementations.
+Diagnostic format-string callbacks preserve the caller's stack and do not create
+objects. Fixed-manager allocation slots use the shared owned heap allocator.

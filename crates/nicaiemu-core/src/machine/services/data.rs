@@ -108,6 +108,8 @@ impl NicaiMachine {
         for (i, ch) in DATA_PACKAGE_CBE_PATH.encode_utf16().enumerate() {
             self.memory.w16(buf + i as u32 * 2, ch);
         }
+        self.memory
+            .w32(buf + 0x200, self.executable.resource_package_offset as u32);
         self.data_package_path_buffer = buf;
         buf
     }
@@ -303,6 +305,22 @@ impl NicaiMachine {
                     .memory
                     .r32(data + index * 4)
                     .wrapping_add(self.memory.r32(package + 24));
+                // Guest loaders keep file metadata in a separate context at +72.
+                let file_state = self.memory.r32(package + 72);
+                if self.memory.region(pointer, 1).is_none()
+                    && self.memory.region(file_state, 28).is_some()
+                    && self.memory.r8(file_state + 4) == 1
+                {
+                    let start = self.memory.r32(data + index * 4);
+                    let end = if index + 1 < count {
+                        self.memory.r32(data + (index + 1) * 4)
+                    } else {
+                        self.memory.r32(file_state + 16)
+                    };
+                    let handle = self.memory.r32(file_state + 12);
+                    let base = self.memory.r32(file_state + 8);
+                    return self.read_package_file_range(handle, base, start, end);
+                }
                 if !self.wide_images
                     && self.memory.r8(package + 84) == 1
                     && self.memory.region(pointer, 1).is_none()
@@ -340,16 +358,21 @@ impl NicaiMachine {
         } else {
             self.memory.r32(package + 96)
         };
+        let base = self.memory.r32(package + 88);
+        let handle = self.memory.r32(package + 92);
+        self.read_package_file_range(handle, base, start, end)
+    }
+
+    fn read_package_file_range(&mut self, handle: u32, base: u32, start: u32, end: u32) -> u32 {
         let Some(size) = end.checked_sub(start) else {
             return 0;
         };
-        let Some(offset) = self.memory.r32(package + 88).checked_add(start) else {
+        let Some(offset) = base.checked_add(start) else {
             return 0;
         };
         let Ok(offset) = i32::try_from(offset) else {
             return 0;
         };
-        let handle = self.memory.r32(package + 92);
         if self.virtual_fs.seek(handle, offset, 0).is_none() {
             return 0;
         }
@@ -619,6 +642,57 @@ mod tests {
                     .collect::<Vec<_>>(),
                 [0x12, 0x34, 0x56, 0x78]
             );
+        }
+    }
+    #[test]
+    fn package_lookup_reads_separate_file_context_and_preserves_memory_resources() {
+        for big_endian in [false, true] {
+            let mut machine = NicaiMachine::new_blank_for_tests();
+            let mut memory = super::super::super::memory::MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let package = machine.allocate(104);
+            let context = machine.allocate(28);
+            let ids = machine.allocate(4);
+            let offsets = machine.allocate(8);
+            let handle = machine.virtual_fs.open("assets.bin", "w+", 0) as u32;
+            machine
+                .virtual_fs
+                .write(handle, &[0xaa, 0xbb, 1, 2, 3, 4, 5])
+                .unwrap();
+            machine.memory.w16(package + 8, 2);
+            machine.memory.w32(package + 16, offsets);
+            machine.memory.w32(package + 20, ids);
+            machine.memory.w32(package + 72, context);
+            machine.memory.w16(ids, 7);
+            machine.memory.w16(ids + 2, 8);
+            machine.memory.w32(offsets, 0);
+            machine.memory.w32(offsets + 4, 3);
+            machine.memory.w8(context + 4, 1);
+            machine.memory.w32(context + 8, 2);
+            machine.memory.w32(context + 12, handle);
+            machine.memory.w32(context + 16, 5);
+            let first = machine.package_resource_by_id(package, 7);
+            let last = machine.package_resource_by_id(package, 8);
+            assert_ne!(first, 0);
+            assert_ne!(last, 0);
+            assert_eq!(
+                (0..3)
+                    .map(|i| machine.memory.r8(first + i))
+                    .collect::<Vec<_>>(),
+                [1, 2, 3]
+            );
+            assert_eq!(
+                (0..2)
+                    .map(|i| machine.memory.r8(last + i))
+                    .collect::<Vec<_>>(),
+                [4, 5]
+            );
+            assert_eq!(machine.package_resource_by_id(package, 9), 0);
+            machine.memory.w32(context + 16, 2);
+            assert_eq!(machine.package_resource_by_id(package, 8), 0);
+            machine.memory.w32(offsets, first);
+            assert_eq!(machine.package_resource_by_id(package, 7), first);
         }
     }
 }

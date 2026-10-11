@@ -156,8 +156,8 @@ impl NicaiMachine {
             10 if self.uses_native_dispatch_abi() => self.release_oldlib_image(),
             13 if self.uses_native_dispatch_abi() => self.set_result(0),
             15 if self.uses_native_dispatch_abi() => self.oldlib_image_height(),
-            37 | 39 if self.uses_native_dispatch_abi() => self.malloc_big_service(),
-            38 | 40 if self.uses_native_dispatch_abi() => self.free_big_service(),
+            37 | 39 if gameold_abi || self.uses_native_dispatch_abi() => self.malloc_big_service(),
+            38 | 40 if gameold_abi || self.uses_native_dispatch_abi() => self.free_big_service(),
             44 if gameold_abi || self.uses_native_dispatch_abi() => {
                 // OldLib_0b0: get_tick — the guest's millisecond clock.
                 // The guest also polls it in wait loops, so the value has
@@ -762,21 +762,8 @@ impl NicaiMachine {
             || (data_start..data_end).contains(&id)
             || (HEAP_BASE..HEAP_BASE + HEAP_SIZE as u32).contains(&id)
         {
-            // When called as an object constructor (r1 = block size), allocate
-            // the block and hand the pointer back through the caller's stack
-            // slot the shared template uses for the result. Other calls with
-            // a pointer id simply echo zero.
-            let size = self.register(1);
-            if (16..=0x1000).contains(&size) {
-                let block = self.allocate(size);
-                let sp = self.register(reg::SP);
-                if block != 0 && sp != 0 {
-                    self.memory.w32(sp + 68, block);
-                }
-                self.set_result(block);
-            } else {
-                self.set_result(0);
-            }
+            // Diagnostic callbacks pass a format-string pointer instead of a service id.
+            self.set_result(0);
             return;
         }
         match id {
@@ -941,7 +928,7 @@ impl NicaiMachine {
                 self.native_scalar_results.insert(id, width);
                 self.set_result(id);
             }
-            0x41a | 0x41b | 0x41c | 0x427 | 0x42a => {
+            0x41a | 0x41b | 0x41c | 0x427 | 0x428 | 0x42a => {
                 self.handle_native_file_request(id, argument);
             }
             0x8f => {
@@ -1696,6 +1683,14 @@ impl NicaiMachine {
                     self.virtual_fs.open(&path, &mode, first) as u32
                 }
                 0x41c => self.virtual_fs.close(first) as u32,
+                0x428 => self
+                    .virtual_fs
+                    .seek(
+                        first,
+                        self.memory.r32(argument + 4) as i32,
+                        self.memory.r32(argument + 8),
+                    )
+                    .map_or(u32::MAX, |position| position as u32),
                 0x42a => self
                     .virtual_fs
                     .size(first)
@@ -1775,7 +1770,7 @@ impl NicaiMachine {
                     .copied()
                     .unwrap_or(0),
             ),
-            0xaf | 0x41a | 0x41b | 0x427 | 0x42a => Some(
+            0xaf | 0x41a | 0x41b | 0x427 | 0x428 | 0x42a => Some(
                 self.native_scalar_results
                     .get(&handle)
                     .copied()
@@ -1893,13 +1888,12 @@ impl NicaiMachine {
             .w32(info + 0xb0, SERVICE_BASE + TABLE_STRIDE * 3 + 44 * 4);
         self.memory.w32(info + 0x240, NATIVE_BILLING_PAYNUM);
         self.memory.w32(info + 0x244, NATIVE_BILLING_REMAIN_DAY);
-        // 0xf0 is the native-dispatch entry the guest routes
-        // arbitrary ids through; it must stay the shared dispatch
-        // stub rather than a per-slot method.
-        self.memory.w32(info + 0xf0, NATIVE_DISPATCH_SERVICE | 1);
-        // 0xC0 is read by the shared big-endian template as a
-        // dispatch-style entry point.
-        self.memory.w32(info + 0xC0, NATIVE_DISPATCH_SERVICE | 1);
+        // The old-library table exposes screen changes at this slot.
+        self.memory
+            .w32(info + 0xf0, SERVICE_BASE + TABLE_STRIDE * 3 + 60 * 4);
+        // Return the LCD pixel buffer through the shared drawing service.
+        self.memory
+            .w32(info + 0xC0, SERVICE_BASE + TABLE_STRIDE * 16 + 32 * 4);
         // The shared template indexes a BSS method table through
         // a pointer at 0x043F98DC; fill its null slots too.
         let table = self.memory.r32(0x043F98DC);
@@ -2048,6 +2042,26 @@ mod tests {
         let query = machine.memory.r32(info + 0x108);
         machine.invoke_callback(query | 1, 0, 0, 0, 1000).unwrap();
         assert_eq!(machine.register(0), 45);
+    }
+
+    #[test]
+    fn native_old_library_screen_slots_return_pixels_and_register_screen() {
+        use crate::machine::{NicaiMachine, SCREEN_IMAGE};
+        use armv4t_emu::{reg, Memory};
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        let info = machine.build_native_system_info();
+        let stack = machine.allocate(128);
+        machine.set_user_register(reg::SP, stack);
+        let lcd = machine.memory.r32(info + 0xc0);
+        machine.invoke_callback(lcd | 1, 0, 0, 0, 1000).unwrap();
+        assert_eq!(machine.register(0), SCREEN_IMAGE);
+        let screen = machine.allocate(32);
+        let change = machine.memory.r32(info + 0xf0);
+        machine
+            .invoke_callback(change | 1, screen, 0, 0, 1000)
+            .unwrap();
+        assert_eq!(machine.pending_screen, screen);
+        assert_eq!(machine.state, crate::machine::MachineState::Ready);
     }
 
     #[test]
