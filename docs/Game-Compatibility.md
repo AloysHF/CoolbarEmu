@@ -29,7 +29,8 @@ explicitly listed in the Coverage / limitation column.
 Verified interaction includes Wulin's menus and battle actions, one Crazy
 Landlord round, War Chess's menu/help/purchase panels, Westward Journey's title
 menu, the QCIF Ebook bookshelf, and Love Assistant V10 list menus and article
-selection/back navigation. Variant-specific coverage is listed below.
+selection/back navigation, plus IM login rendering and field-focus navigation.
+Variant-specific coverage is listed below.
 Fifteen embedded-program variants restore normal title/menu rendering and basic
 selection through 2,000-frame input checks. Active but blank/loading variants
 remain incomplete, as specified in their individual rows.
@@ -276,7 +277,7 @@ not provide the original server's content or a real carrier payment service.
 | 17 | `C/happySheep.CBE` | 176×220 | <img src="images/C/happySheep.png" width="120" alt="happySheep idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
 | 18 | `C/HellRaider.CBE` | 176×220 | <img src="images/C/HellRaider.png" width="120" alt="HellRaider idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
 | 19 | `C/HitLand.CBE` | 176×220 | <img src="images/C/HitLand.png" width="120" alt="HitLand idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
-| 20 | `C/Im.CBE` | 240×400 | <img src="images/C/Im.png" width="120" alt="Im idle frame"> | Not assessed | Halted | Idle frame captured; interaction/gameplay unverified |
+| 20 | `C/Im.CBE` | 240×400 | <img src="images/C/Im.png" width="120" alt="Im idle frame"> | Required for online login | Ready | Login screen and field-focus navigation checked for 2,000 frames; online authentication unavailable |
 | 21 | `C/kriegspiel.CBE` | 176×220 | <img src="images/C/kriegspiel.png" width="120" alt="kriegspiel idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
 | 22 | `C/MaJiang.CBE` | 176×220 | <img src="images/C/MaJiang.png" width="120" alt="MaJiang idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 23 | `C/Map.CBE` | 176×220 | <img src="images/C/Map.png" width="120" alt="Map idle frame"> | Not assessed | Ready | Map grid, center marker and bottom menu render; online map data unverified |

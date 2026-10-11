@@ -28,13 +28,14 @@ pub(crate) fn native_package_resources(data: &[u8], start: usize) -> Vec<HostRes
     let Some(header_size) = read_u32(start).map(|value| value as usize) else {
         return Vec::new();
     };
-    if header_size < 8 || read_u32(start + 8) != Some(1) {
+    let prefix_size = if header_size == 4 { 4 } else { 8 };
+    if header_size < prefix_size || read_u32(start + prefix_size) != Some(1) {
         return Vec::new();
     }
-    let Some(metadata_size) = read_u32(start + 12).map(|value| value as usize) else {
+    let Some(metadata_size) = read_u32(start + prefix_size + 4).map(|value| value as usize) else {
         return Vec::new();
     };
-    let metadata_start = start + 16;
+    let metadata_start = start + prefix_size + 8;
     let Some(data_size) = read_u32(metadata_start).map(|value| value as usize) else {
         return Vec::new();
     };
@@ -294,12 +295,21 @@ mod tests {
         data[32..36].copy_from_slice(&[1, b'a', 1, b'b']);
         data[36..39].copy_from_slice(&[0x11, 0x22, 0x33]);
 
-        let resources = native_package_resources(&data, 0);
-        assert_eq!(resources.len(), 2);
-        assert_eq!(resources[0].name, "a");
-        assert_eq!(resources[0].data, [0x11]);
-        assert_eq!(resources[1].name, "b");
-        assert_eq!(resources[1].data, [0x22, 0x33]);
+        for compact in [false, true] {
+            let mut fixture = data.clone();
+            if compact {
+                fixture.drain(4..8);
+                fixture[..4].copy_from_slice(&4u32.to_le_bytes());
+            }
+            let resources = native_package_resources(&fixture, 0);
+            assert_eq!(resources.len(), 2);
+            assert_eq!(resources[0].name, "a");
+            assert_eq!(resources[0].data, [0x11]);
+            assert_eq!(resources[1].name, "b");
+            assert_eq!(resources[1].data, [0x22, 0x33]);
+            fixture.pop();
+            assert!(native_package_resources(&fixture, 0).is_empty());
+        }
     }
 
     #[test]

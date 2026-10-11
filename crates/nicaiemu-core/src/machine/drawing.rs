@@ -1071,7 +1071,15 @@ impl NicaiMachine {
                 } else {
                     image_id
                 };
-                let result = self.create_image_from_resource_index(local_id as usize, output);
+                let result = if self.current_image_package != 0 {
+                    self.create_image_from_data_package(
+                        local_id,
+                        self.current_image_package,
+                        output,
+                    )
+                } else {
+                    self.create_image_from_resource_index(local_id as usize, output)
+                };
                 self.set_result(result);
             }
             23 => self.set_result(0),

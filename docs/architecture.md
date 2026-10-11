@@ -276,3 +276,8 @@ interpreting them as guest pointers. The native old-library table exposes LCD
 pixel-buffer access and screen changes through their shared implementations.
 Diagnostic format-string callbacks preserve the caller's stack and do not create
 objects. Fixed-manager allocation slots use the shared owned heap allocator.
+
+Image-page initialization reads compact or standard resource packages from the
+specified guest-memory stream. Image IDs resolve within that selected package
+rather than the main archive, preserving each page's own background and skin
+assets. Explicit package image creation uses the same resource lookup path.

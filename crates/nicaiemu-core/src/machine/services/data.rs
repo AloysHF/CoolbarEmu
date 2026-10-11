@@ -479,6 +479,20 @@ impl NicaiMachine {
         }
         self.current_image_package = package;
         self.memory.w32(DREAM_FACTORY_PACKAGE_SLOT, package);
+        let source = self.register(0);
+        let resources = self
+            .memory
+            .region(source, 4)
+            .map(|region| {
+                let offset = (source - region.base) as usize;
+                super::super::packages::native_package_resources(&region.data[offset..], 0)
+            })
+            .unwrap_or_default();
+        if !resources.is_empty() {
+            self.initialize_data_package(package, 5);
+            self.populate_guest_resource_package(package, &resources, 0);
+            return self.memory.r16(package + 8) as u32;
+        }
         let count = self.memory.r16(package + 8) as u32;
         if count != 0 {
             return count;
@@ -497,7 +511,8 @@ impl NicaiMachine {
         if package == 0 || image_id >= self.memory.r16(package + 8) as u32 {
             return 0;
         }
-        self.create_image_from_resource_index(image_id as usize, output)
+        let source = self.package_resource_by_id(package, image_id);
+        self.create_image_from_stream(source, output)
     }
 
     pub(crate) fn resource_by_id(&mut self, id: u32) -> u32 {
@@ -564,6 +579,56 @@ fn resource_names_match(left: &str, right: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_page_uses_embedded_resources_instead_of_main_resource_ids() {
+        for big_endian in [false, true] {
+            let mut machine = NicaiMachine::new_blank_for_tests();
+            let mut memory = super::super::super::memory::MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let mut png = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+                3,
+                2,
+                image::Rgba([255, 0, 0, 255]),
+            ))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+            let png = png.into_inner();
+            let name = b"background.png";
+            let metadata_size = 12 + 1 + name.len();
+            let mut embedded = Vec::new();
+            for word in [4, 1, metadata_size as u32, png.len() as u32, 1, 0] {
+                embedded.extend_from_slice(&word.to_le_bytes());
+            }
+            embedded.push(name.len() as u8);
+            embedded.extend_from_slice(name);
+            embedded.extend_from_slice(&png);
+            let source = machine.allocate(embedded.len() as u32);
+            machine.memory.write_bytes(source, &embedded);
+            machine.resources.push(HostResource {
+                name: "wrong.dat".into(),
+                data: vec![0],
+            });
+            machine.cpu.reg_set(armv4t_emu::Mode::User, 0, source);
+            machine.handle_lcd_service(44);
+            assert_eq!(machine.register(0), 1);
+            let package = machine.current_image_package;
+            let resource = machine.package_resource_by_id(package, 0);
+            assert_eq!(machine.memory.r8(resource), 0x89);
+            let output = machine.allocate(32);
+            machine.cpu.reg_set(armv4t_emu::Mode::User, 0, 0);
+            machine.cpu.reg_set(armv4t_emu::Mode::User, 1, output);
+            machine.handle_lcd_service(22);
+            assert_eq!(machine.register(0), output);
+            assert_eq!(machine.image_dims(output), (3, 2));
+            assert_eq!(
+                machine.create_image_from_data_package(1, package, output),
+                0
+            );
+        }
+    }
 
     #[test]
     fn compact_package_constructor_preserves_adjacent_screen_callbacks() {
