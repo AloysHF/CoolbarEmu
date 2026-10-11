@@ -218,6 +218,11 @@ and route directional and soft-key input through deferred guest callbacks.
 Nested controls use the same screen stack as application screens; releasing a
 control removes its screen and frees its owned memory.
 
+Native game-manager tables bind pointer held/down/up/drag queries, pointer
+coordinates and current key state to the shared input state. Sized rectangle
+hit tests use their supplied coordinates and exclude the far edge, so idle
+frames cannot accidentally activate touch-driven menus.
+
 The fixed game manager routes its string and font queries to the GameLCD renderer.
 Font queries return pixel metrics rather than echoing leftover stub addresses.
 Legacy GameLCD uses separate register/stack arguments for tile blits and

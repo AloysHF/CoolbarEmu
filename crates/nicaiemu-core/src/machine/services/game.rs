@@ -211,6 +211,24 @@ impl NicaiMachine {
                 );
                 self.set_result(u32::from(result));
             }
+            52 => {
+                let stack = self.register(reg::SP);
+                let left = signed_coord(self.register(0));
+                let top = signed_coord(self.register(1));
+                let width = signed_coord(self.register(2));
+                let height = signed_coord(self.register(3));
+                let result = width > 0
+                    && height > 0
+                    && rect_contains_point(
+                        left,
+                        top,
+                        left + width - 1,
+                        top + height - 1,
+                        signed_coord(self.memory.r32(stack)),
+                        signed_coord(self.memory.r32(stack + 4)),
+                    );
+                self.set_result(u32::from(result));
+            }
             56 if gameold_abi => {
                 self.handle_method_stub(Self::method_stub_address(METHOD_KIND_GAMEOLD, 0xe0) & !1);
             }
@@ -1844,6 +1862,14 @@ impl NicaiMachine {
             (0x190, 3, 102),
             (0x1ac, 11, 9),
             (0x1b0, 3, 110),
+            (0xd0, 3, 52),
+            (0xf8, 3, 62),
+            (0xfc, 3, 63),
+            (0x100, 3, 64),
+            (0x104, 3, 65),
+            (0x108, 3, 66),
+            (0x10c, 3, 67),
+            (0x110, 3, 68),
         ] {
             self.memory.w32(
                 info + offset,
@@ -1984,6 +2010,69 @@ mod tests {
 
     fn pack(high: i16, low: i16) -> u32 {
         u32::from(low as u16) | (u32::from(high as u16) << 16)
+    }
+
+    #[test]
+    fn native_touch_queries_use_pointer_state_without_allocating_results() {
+        use crate::machine::{NicaiMachine, SERVICE_BASE, TABLE_STRIDE};
+        use armv4t_emu::{reg, Memory};
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        let info = machine.build_native_system_info();
+        for (offset, index) in [
+            (0xf8, 62),
+            (0xfc, 63),
+            (0x100, 64),
+            (0x104, 65),
+            (0x108, 66),
+            (0x10c, 67),
+            (0x110, 68),
+            (0xd0, 52),
+        ] {
+            assert_eq!(
+                machine.memory.r32(info + offset),
+                SERVICE_BASE + TABLE_STRIDE * 3 + index * 4
+            );
+        }
+        let stack = machine.allocate(128);
+        machine.memory.w32(stack + 68, 0x1234_5679);
+        machine.set_user_register(reg::SP, stack);
+        let cursor = machine.heap_cursor;
+        let query = machine.memory.r32(info + 0xfc);
+        machine.invoke_callback(query | 1, 0, 0, 0, 1000).unwrap();
+        assert_eq!(machine.register(0), 0);
+        machine.set_pointer(45, 181, true);
+        machine.invoke_callback(query | 1, 0, 0, 0, 1000).unwrap();
+        assert_eq!(machine.register(0), 1);
+        assert_eq!(machine.heap_cursor, cursor);
+        assert_eq!(machine.memory.r32(stack + 68), 0x1234_5679);
+        let query = machine.memory.r32(info + 0x108);
+        machine.invoke_callback(query | 1, 0, 0, 0, 1000).unwrap();
+        assert_eq!(machine.register(0), 45);
+    }
+
+    #[test]
+    fn sized_rectangle_hit_test_checks_coordinates_and_excludes_far_edge() {
+        use crate::machine::NicaiMachine;
+        use armv4t_emu::{reg, Memory};
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        let stack = machine.allocate(8);
+        machine.set_user_register(reg::SP, stack);
+        for (x, y, expected) in [
+            (45, 181, 1),
+            (131, 197, 1),
+            (132, 197, 0),
+            (45, 198, 0),
+            (0, 0, 0),
+        ] {
+            machine.set_user_register(0, 45);
+            machine.set_user_register(1, 181);
+            machine.set_user_register(2, 87);
+            machine.set_user_register(3, 17);
+            machine.memory.w32(stack, x);
+            machine.memory.w32(stack + 4, y);
+            machine.handle_game_service(52);
+            assert_eq!(machine.register(0), expected);
+        }
     }
 
     #[test]

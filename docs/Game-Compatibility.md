@@ -106,7 +106,7 @@ not provide the original server's content or a real carrier payment service.
 | 57 | `A/星际宝藏V10.CBE` | 240×320 | <img src="images/A/星际宝藏V10.png" width="120" alt="星际宝藏V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 58 | `A/暴力摩托(新品).CBE` | 240×320 | <img src="images/A/暴力摩托(新品).png" width="120" alt="暴力摩托(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 59 | `A/暴力摩托V10.CBE` | 240×320 | <img src="images/A/暴力摩托V10.png" width="120" alt="暴力摩托V10 idle frame"> | Not assessed | Ready | Menu renders at 240x320; gameplay unverified |
-| 60 | `A/极品飞车(火爆).CBE` | 240×320 | <img src="images/A/极品飞车(火爆).png" width="120" alt="极品飞车(火爆) idle frame"> | Not assessed | Halted | Idle frame captured; interaction/gameplay unverified |
+| 60 | `A/极品飞车(火爆).CBE` | 240×320 | <img src="images/A/极品飞车(火爆).png" width="120" alt="极品飞车(火爆) idle frame"> | Not assessed | Ready | Startup, menu navigation, help, back and touch input verified; starting a race still hits a guest picture-library assertion |
 | 61 | `A/极品飞车V10.CBE` | 240×320 | <img src="images/A/极品飞车V10.png" width="120" alt="极品飞车V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 62 | `A/极限挑战V101.CBE` | 240×320 | <img src="images/A/极限挑战V101.png" width="120" alt="极限挑战V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 63 | `A/毒蛇行动V101.CBE` | 240×320 | <img src="images/A/毒蛇行动V101.png" width="120" alt="毒蛇行动V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
