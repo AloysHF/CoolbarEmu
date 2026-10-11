@@ -89,6 +89,13 @@ XSE scripts run on a bytecode VM with:
 
 ## Graphics Format
 
+Custom GIF resources store palette entries as big-endian RGB565. Firmware PNG
+resources use the `89 50 4E 47 47 41 4D 45` signature and little-endian RGB565
+palette entries; their PNG chunk lengths remain big-endian. A firmware `PLTE`
+chunk declares the RGB888 length but stores two bytes per palette entry.
+Palette colors and transparency are decoded separately: opaque drawing copies
+the original color, while alpha drawing skips pixels marked transparent.
+
 - **Pixel format**: RGB565 (16-bit, 5-6-5 bit layout)
 - **Resolution**: 240×400 (WQVGA)
 - **Framebuffer**: Located in guest RAM, converted to RGB888 for display

@@ -32,7 +32,7 @@ by supported games.
   packed-rectangle collision detection
 - **Guest filesystem** — sandboxed in-memory files used by CBE installers and
   file-backed resource packages
-- **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction
+- **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction with format-specific RGB565 palette byte order
 - **Text rendering** — GBK decoding with embedded Unicode bitmap font
 - **Application LCD dimensions** — startup screen clips and fills resolve
   176×220, 240×320, 240×352, or 240×400 surfaces and their landscape variants;
@@ -231,8 +231,8 @@ Detailed references by input mode:
 
 ## Game Compatibility
 
-The current local corpus contains **250 archive variants**: group A (128),
-group B (74), and group C (48). The 200-frame idle scan completes for 248 files;
+The current local corpus contains **246 distinct archives**: group A (124),
+group B (74), and group C (48). The 200-frame idle scan completes for 244 files;
 one file faults and one empty archive cannot load. None times out.
 
 These are execution results, not gameplay ratings. Some applications halt at

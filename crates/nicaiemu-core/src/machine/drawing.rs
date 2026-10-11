@@ -11,6 +11,8 @@ use super::{
 };
 use crate::image_decoder;
 
+const IMAGE_ALPHA_TAG: u32 = 0x414c5048;
+
 impl NicaiMachine {
     // ---- old-lib drawing API (F_0 0x00..0x3c) ----
     //
@@ -1236,10 +1238,16 @@ impl NicaiMachine {
             );
         }
         let pitch = decoded.width.next_multiple_of(4);
-        let pixels = self.allocate(pitch.saturating_mul(decoded.height).saturating_mul(2));
+        let pixel_count = pitch.saturating_mul(decoded.height);
+        // Keep alpha in the allocation tail so opaque blits retain palette colors.
+        // The guest-memory tail also survives save-state restoration.
+        let pixels = self.allocate(pixel_count.saturating_mul(3).saturating_add(8));
         if pixels == 0 {
             return 0;
         }
+        let mask = pixels + pixel_count * 2 + 8;
+        self.memory.w32(mask - 8, IMAGE_ALPHA_TAG);
+        self.memory.w32(mask - 4, !IMAGE_ALPHA_TAG);
         for y in 0..decoded.height {
             for x in 0..decoded.width {
                 let offset = ((y * decoded.width + x) * 4) as usize;
@@ -1247,12 +1255,9 @@ impl NicaiMachine {
                 let green = decoded.data[offset + 1] as u16;
                 let blue = decoded.data[offset + 2] as u16;
                 let alpha = decoded.data[offset + 3];
-                let color = if alpha < 128 {
-                    0
-                } else {
-                    ((red & 0xf8) << 8) | ((green & 0xfc) << 3) | (blue >> 3)
-                };
+                let color = ((red & 0xf8) << 8) | ((green & 0xfc) << 3) | (blue >> 3);
                 self.memory.w16(pixels + (y * pitch + x) * 2, color);
+                self.memory.w8(mask + y * pitch + x, u8::from(alpha < 128));
             }
         }
         let header = self.image_header_len();
@@ -1417,12 +1422,29 @@ impl NicaiMachine {
         }
         let source_pitch = ((source_width + 3) & !3) as u32;
         let destination_pitch = ((destination_width + 3) & !3) as u32;
+        let pixel_count = source_pitch.saturating_mul(source_height as u32);
+        let mask_tag = source_pixels.saturating_add(pixel_count.saturating_mul(2));
+        let has_mask = transparent
+            && self
+                .memory
+                .region(
+                    source_pixels,
+                    pixel_count.saturating_mul(3).saturating_add(8) as usize,
+                )
+                .is_some()
+            && self.memory.r32(mask_tag) == IMAGE_ALPHA_TAG
+            && self.memory.r32(mask_tag + 4) == !IMAGE_ALPHA_TAG;
         for row in 0..height as u32 {
             for column in 0..width as u32 {
                 let source_offset =
                     ((source_y as u32 + row) * source_pitch + source_x as u32 + column) * 2;
                 let color = self.memory.r16(source_pixels + source_offset);
-                if !transparent || color != 0 {
+                let masked = if has_mask {
+                    self.memory.r8(mask_tag + 8 + source_offset / 2) != 0
+                } else {
+                    transparent && color == 0
+                };
+                if !masked {
                     let destination_offset = ((destination_y as u32 + row) * destination_pitch
                         + destination_x as u32
                         + column)
@@ -1903,6 +1925,56 @@ impl NicaiMachine {
             0
         } else {
             output
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::ImageEncoder;
+
+    #[test]
+    fn decoded_alpha_preserves_opaque_colors_and_survives_save_load() {
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(
+                &[255, 255, 255, 0, 0, 0, 0, 255, 255, 0, 0, 255],
+                3,
+                1,
+                image::ExtendedColorType::Rgba8,
+            )
+            .unwrap();
+        for wide in [false, true] {
+            for big_endian in [false, true] {
+                let mut machine = NicaiMachine::new_blank_for_tests();
+                machine.wide_images = wide;
+                let mut memory = super::super::memory::MachineMemory::new(big_endian);
+                memory.regions = std::mem::take(&mut machine.memory.regions);
+                machine.memory = memory;
+                machine.initialize_screen();
+                let image = machine.create_image_from_bytes(&png, "alpha test", 0);
+                assert_ne!(image, 0);
+                let mut state = vec![0; crate::save_state::SERIALIZED_SIZE];
+                crate::save_state::encode_machine(&machine, 123, &mut state).unwrap();
+                let mut restored = crate::save_state::decode_machine(&state, 123).unwrap();
+                for transparent in [false, true] {
+                    restored.fill_screen_rect(0, 0, 3, 1, 0x07e0);
+                    restored.blit_image(SCREEN_IMAGE_STRUCT, image, 0, 0, 3, 1, 0, 0, transparent);
+                    let pixels = restored.frame_pixels();
+                    assert_eq!(
+                        &pixels[..3],
+                        if transparent {
+                            &[0x00ff00, 0x000000, 0xff0000]
+                        } else {
+                            &[0xffffff, 0x000000, 0xff0000]
+                        }
+                    );
+                }
+                restored.fill_screen_rect(0, 0, 2, 1, 0x07e0);
+                restored.blit_image(SCREEN_IMAGE_STRUCT, image, 0, 0, 3, 1, -1, 0, true);
+                assert_eq!(&restored.frame_pixels()[..2], &[0x000000, 0xff0000]);
+            }
         }
     }
 }

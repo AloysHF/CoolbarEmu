@@ -167,7 +167,24 @@ the same frame. The desktop frontend adjusts an automatically sized window
 when startup resolves the LCD dimensions, preserving manually resized windows
 and fullscreen presentation.
 
-Image resources are reconstructed from the CBE GIF variant or firmware PNG representation, decoded, and copied into guest image objects. Some custom GIF headers resemble ICO files, so a failed standard-image decode falls back to the CBE decoder. The desktop frontend converts the completed screen to 32-bit RGB for `minifb`. Text is decoded as GBK and rasterized from an embedded Unicode font, so the core does not depend on host fonts. Text coordinates live in the presented display space: for rotated games the glyphs are mapped from the presented display back into the active LCD surface pixel by pixel, and games that submit `DrawText` with zero coordinates inherit the pen origin latched from the preceding `GetScreenImage` call.
+Image resources are reconstructed from the CBE GIF variant or firmware PNG
+representation, decoded, and copied into guest image objects. Custom GIF
+palettes use big-endian RGB565; firmware PNG palettes use little-endian RGB565
+while PNG chunk lengths remain big-endian. Decoded RGB565 colors are preserved
+even for transparent pixels. A separate transparency mask is stored after the
+pixel data in the same heap allocation, with a host tag; opaque blits copy
+original colors and alpha blits consult the mask. Guest-created images without
+this metadata retain zero-color transparency. The mask is part of guest-memory
+save states, so no serialized field layout change is required.
+
+Some custom GIF headers resemble ICO files, so a failed standard-image decode
+falls back to the CBE decoder. The desktop frontend converts the completed
+screen to 32-bit RGB for `minifb`. Text is decoded as GBK and rasterized from an
+embedded Unicode font, so the core does not depend on host fonts. Text
+coordinates live in the presented display space: for rotated games the glyphs
+are mapped from the presented display back into the active LCD surface pixel
+by pixel, and games that submit `DrawText` with zero coordinates inherit the
+pen origin latched from the preceding `GetScreenImage` call.
 
 ## Headless execution
 
