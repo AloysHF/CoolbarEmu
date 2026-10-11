@@ -1160,6 +1160,12 @@ impl NicaiMachine {
     }
 
     pub fn boot(&mut self, instruction_limit: u64) -> Result<()> {
+        let result = self.boot_inner(instruction_limit);
+        self.observe_display_scanline(None);
+        result
+    }
+
+    fn boot_inner(&mut self, instruction_limit: u64) -> Result<()> {
         self.state = MachineState::Initializing;
         let code_address = self.executable.code_address();
         let data_address = self.executable.data_address();
@@ -1368,6 +1374,13 @@ impl NicaiMachine {
 
     /// Execute one screen update and render pass.
     pub fn run_frame(&mut self, instruction_limit: u64) -> Result<()> {
+        let result = self.run_frame_inner(instruction_limit);
+        self.observe_display_scanline(None);
+        self.finish_display_discovery();
+        result
+    }
+
+    fn run_frame_inner(&mut self, instruction_limit: u64) -> Result<()> {
         if self.state == MachineState::Halted {
             self.key_down = 0;
             self.pointer.end_frame();

@@ -66,7 +66,7 @@ not provide the original server's content or a real carrier payment service.
 | 24 | `A/喜羊羊与灰太狼V10.CBE` | 240×320 | <img src="images/A/喜羊羊与灰太狼V10.png" width="120" alt="喜羊羊与灰太狼V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 25 | `A/噗噜噗噜旋转棒V101.CBE` | 240×320 | <img src="images/A/噗噜噗噜旋转棒V101.png" width="120" alt="噗噜噗噜旋转棒V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 26 | `A/在线书城(新品).CBE` | 240×400 | <img src="images/A/在线书城(新品).png" width="120" alt="在线书城(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
-| 27 | `A/在线书城V10.CBE` | 240×400 | <img src="images/A/在线书城V10.png" width="120" alt="在线书城V10 idle frame"> | Not assessed | Ready | Book background/icons and usage prompt render; font/layout differences remain; interaction unverified |
+| 27 | `A/在线书城V10.CBE` | 240×320 | <img src="images/A/在线书城V10.png" width="120" alt="在线书城V10 idle frame"> | Not assessed | Ready | Book background/icons and usage prompt render; font/layout differences remain; interaction unverified |
 | 28 | `A/坦克大战(新品).CBE` | 240×400 | <img src="images/A/坦克大战(新品).png" width="120" alt="坦克大战(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
 | 29 | `A/坦克大战V10.CBE` | 240×320 | <img src="images/A/坦克大战V10.png" width="120" alt="坦克大战V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 30 | `A/坦克大战V101.CBE` | 240×320 | <img src="images/A/坦克大战V101.png" width="120" alt="坦克大战V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
@@ -74,7 +74,7 @@ not provide the original server's content or a real carrier payment service.
 | 32 | `A/士兵突袭V10.CBE` | 240×320 | <img src="images/A/士兵突袭V10.png" width="120" alt="士兵突袭V10 idle frame"> | Not assessed | Ready | Cover/introduction/purchase checked; paid gameplay unverified |
 | 33 | `A/大唐双龙(新品)V101.CBE` | 240×320 | <img src="images/A/大唐双龙(新品)V101.png" width="120" alt="大唐双龙(新品)V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 34 | `A/大话西游(新品).CBE` | 240×400 | <img src="images/A/大话西游(新品).png" width="120" alt="大话西游(新品) idle frame"> | Not assessed | Ready | Background/menu and input checked; later animation/content incomplete |
-| 35 | `A/大话西游V10.CBE` | 240×400 | <img src="images/A/大话西游V10.png" width="120" alt="大话西游V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 35 | `A/大话西游V10.CBE` | 240×320 | <img src="images/A/大话西游V10.png" width="120" alt="大话西游V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 36 | `A/太空堡垒(新品).CBE` | 240×400 | <img src="images/A/太空堡垒(新品).png" width="120" alt="太空堡垒(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
 | 37 | `A/太空堡垒V10.CBE` | 240×320 | <img src="images/A/太空堡垒V10.png" width="120" alt="太空堡垒V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 38 | `A/封神演义(新品).CBE` | 240×320 | <img src="images/A/封神演义(新品).png" width="120" alt="封神演义(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
@@ -86,7 +86,7 @@ not provide the original server's content or a real carrier payment service.
 | 44 | `A/小酷农场(火爆上线)V10.CBE` | 240×320 | <img src="images/A/小酷农场(火爆上线)V10.png" width="120" alt="小酷农场(火爆上线)V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 45 | `A/小酷音乐(强推)V101.CBE` | 240×320 | <img src="images/A/小酷音乐(强推)V101.png" width="120" alt="小酷音乐(强推)V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 46 | `A/开心花园(新品).CBE` | 240×320 | <img src="images/A/开心花园(新品).png" width="120" alt="开心花园(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 47 | `A/恋爱助手V10.CBE` | 240×400 | <img src="images/A/恋爱助手V10.png" width="120" alt="恋爱助手V10 idle frame"> | Not assessed | Halted | Image palette colors checked; interaction/gameplay unverified |
+| 47 | `A/恋爱助手V10.CBE` | 240×320 | <img src="images/A/恋爱助手V10.png" width="120" alt="恋爱助手V10 idle frame"> | Not assessed | Halted | Image palette colors checked; interaction/gameplay unverified |
 | 48 | `A/恶魔城(新品).CBE` | 240×320 | <img src="images/A/恶魔城(新品).png" width="120" alt="恶魔城(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 49 | `A/恶魔城V10.CBE` | 240×320 | <img src="images/A/恶魔城V10.png" width="120" alt="恶魔城V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 50 | `A/战争机器V101.CBE` | 240×320 | <img src="images/A/战争机器V101.png" width="120" alt="战争机器V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
@@ -96,7 +96,7 @@ not provide the original server's content or a real carrier payment service.
 | 54 | `A/掌上书城V10.CBE` | 240×320 | <img src="images/A/掌上书城V10.png" width="120" alt="掌上书城V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 55 | `A/掌上地图V10.CBE` | 240×320 | <img src="images/A/掌上地图V10.png" width="120" alt="掌上地图V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 56 | `A/星际宝藏(新品).CBE` | 240×400 | <img src="images/A/星际宝藏(新品).png" width="120" alt="星际宝藏(新品) idle frame"><br>Blank frame | Not assessed | Halted | Guest halted with a blank frame; startup incomplete |
-| 57 | `A/星际宝藏V10.CBE` | 240×400 | <img src="images/A/星际宝藏V10.png" width="120" alt="星际宝藏V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 57 | `A/星际宝藏V10.CBE` | 240×320 | <img src="images/A/星际宝藏V10.png" width="120" alt="星际宝藏V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 58 | `A/暴力摩托(新品).CBE` | 240×320 | <img src="images/A/暴力摩托(新品).png" width="120" alt="暴力摩托(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 59 | `A/暴力摩托V10.CBE` | 240×320 | <img src="images/A/暴力摩托V10.png" width="120" alt="暴力摩托V10 idle frame"> | Not assessed | Ready | Menu renders at 240x320; gameplay unverified |
 | 60 | `A/极品飞车(火爆).CBE` | 240×320 | <img src="images/A/极品飞车(火爆).png" width="120" alt="极品飞车(火爆) idle frame"> | Not assessed | Halted | Idle frame captured; interaction/gameplay unverified |
@@ -119,7 +119,7 @@ not provide the original server's content or a real carrier payment service.
 | 77 | `A/生化危机V10.CBE` | 320×240 | <img src="images/A/生化危机V10.png" width="120" alt="生化危机V10 idle frame"> | Not assessed | Ready | Landscape idle frame captured; interaction/gameplay unverified |
 | 78 | `A/生化危机V101.CBE` | 240×320 | <img src="images/A/生化危机V101.png" width="120" alt="生化危机V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 79 | `A/生肖宝贝(新品).CBE` | 240×320 | <img src="images/A/生肖宝贝(新品).png" width="120" alt="生肖宝贝(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 80 | `A/生肖运程V10.CBE` | 240×400 | <img src="images/A/生肖运程V10.png" width="120" alt="生肖运程V10 idle frame"> | Not assessed | Ready | Image palette colors checked; interaction/gameplay unverified |
+| 80 | `A/生肖运程V10.CBE` | 240×320 | <img src="images/A/生肖运程V10.png" width="120" alt="生肖运程V10 idle frame"> | Not assessed | Ready | Image palette colors checked; interaction/gameplay unverified |
 | 81 | `A/疯狂斗地主(新品).CBE` | 240×320 | <img src="images/A/疯狂斗地主(新品).png" width="120" alt="疯狂斗地主(新品) idle frame"> | Not assessed | Ready | Menu, help, card actions and one round result checked; all rules/rooms/audio unverified |
 | 82 | `A/疯狂斗地主V10.CBE` | 240×320 | <img src="images/A/疯狂斗地主V10.png" width="120" alt="疯狂斗地主V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 83 | `A/移动书城V10.CBE` | 240×320 | <img src="images/A/移动书城V10.png" width="120" alt="移动书城V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
@@ -249,53 +249,53 @@ not provide the original server's content or a real carrier payment service.
 | # | Application / file | Display | Screenshot | Network | Execution | Coverage / limitation |
 | ---: | --- | --- | --- | --- | --- | --- |
 | 1 | `C/Almanac.CBE` | 176×220 | <img src="images/C/Almanac.png" width="120" alt="Almanac idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 2 | `C/Apotheosize.CBE` | 240×400 | <img src="images/C/Apotheosize.png" width="120" alt="Apotheosize idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 3 | `C/BombMan.CBE` | 240×400 | <img src="images/C/BombMan.png" width="120" alt="BombMan idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 4 | `C/Bowling.CBE` | 240×400 | <img src="images/C/Bowling.png" width="120" alt="Bowling idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 5 | `C/brick.CBE` | 240×400 | <img src="images/C/brick.png" width="120" alt="brick idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 6 | `C/Car.CBE` | 240×400 | <img src="images/C/Car.png" width="120" alt="Car idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 2 | `C/Apotheosize.CBE` | 176×220 | <img src="images/C/Apotheosize.png" width="120" alt="Apotheosize idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 3 | `C/BombMan.CBE` | 176×220 | <img src="images/C/BombMan.png" width="120" alt="BombMan idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 4 | `C/Bowling.CBE` | 176×220 | <img src="images/C/Bowling.png" width="120" alt="Bowling idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 5 | `C/brick.CBE` | 176×220 | <img src="images/C/brick.png" width="120" alt="brick idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 6 | `C/Car.CBE` | 176×220 | <img src="images/C/Car.png" width="120" alt="Car idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
 | 7 | `C/Cartoon.CBE` | 176×220 | <img src="images/C/Cartoon.png" width="120" alt="Cartoon idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 8 | `C/DaimonCastle.CBE` | 240×400 | <img src="images/C/DaimonCastle.png" width="120" alt="DaimonCastle idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 9 | `C/Deluxe.CBE` | 240×400 | <img src="images/C/Deluxe.png" width="120" alt="Deluxe idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 10 | `C/dragon.CBE` | 240×400 | <img src="images/C/dragon.png" width="120" alt="dragon idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 8 | `C/DaimonCastle.CBE` | 176×220 | <img src="images/C/DaimonCastle.png" width="120" alt="DaimonCastle idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 9 | `C/Deluxe.CBE` | 176×220 | <img src="images/C/Deluxe.png" width="120" alt="Deluxe idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 10 | `C/dragon.CBE` | 176×220 | <img src="images/C/dragon.png" width="120" alt="dragon idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
 | 11 | `C/Ebook.CBE` | 176×220 | <img src="images/C/Ebook.png" width="120" alt="Ebook idle frame"> | Not assessed | Ready | Bookshelf/directional selection checked; native 176x220 viewport missing; remote books unavailable |
 | 12 | `C/Eden.CBE` | 176×220 | <img src="images/C/Eden.png" width="120" alt="Eden idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 13 | `C/Email.CBE` | 220×176 | <img src="images/C/Email.png" width="120" alt="Email idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 14 | `C/Fighter.CBE` | 240×400 | <img src="images/C/Fighter.png" width="120" alt="Fighter idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 15 | `C/Garden.CBE` | 240×400 | <img src="images/C/Garden.png" width="120" alt="Garden idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 16 | `C/GoldMan.CBE` | 220×176 | <img src="images/C/GoldMan.png" width="120" alt="GoldMan idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 17 | `C/happySheep.CBE` | 240×400 | <img src="images/C/happySheep.png" width="120" alt="happySheep idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 18 | `C/HellRaider.CBE` | 240×400 | <img src="images/C/HellRaider.png" width="120" alt="HellRaider idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 19 | `C/HitLand.CBE` | 240×400 | <img src="images/C/HitLand.png" width="120" alt="HitLand idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 13 | `C/Email.CBE` | 176×220 | <img src="images/C/Email.png" width="120" alt="Email idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 14 | `C/Fighter.CBE` | 176×220 | <img src="images/C/Fighter.png" width="120" alt="Fighter idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 15 | `C/Garden.CBE` | 176×220 | <img src="images/C/Garden.png" width="120" alt="Garden idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 16 | `C/GoldMan.CBE` | 176×220 | <img src="images/C/GoldMan.png" width="120" alt="GoldMan idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 17 | `C/happySheep.CBE` | 176×220 | <img src="images/C/happySheep.png" width="120" alt="happySheep idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 18 | `C/HellRaider.CBE` | 176×220 | <img src="images/C/HellRaider.png" width="120" alt="HellRaider idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 19 | `C/HitLand.CBE` | 176×220 | <img src="images/C/HitLand.png" width="120" alt="HitLand idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
 | 20 | `C/Im.CBE` | 240×400 | <img src="images/C/Im.png" width="120" alt="Im idle frame"> | Not assessed | Halted | Idle frame captured; interaction/gameplay unverified |
-| 21 | `C/kriegspiel.CBE` | 240×400 | <img src="images/C/kriegspiel.png" width="120" alt="kriegspiel idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 22 | `C/MaJiang.CBE` | 220×176 | <img src="images/C/MaJiang.png" width="120" alt="MaJiang idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 21 | `C/kriegspiel.CBE` | 176×220 | <img src="images/C/kriegspiel.png" width="120" alt="kriegspiel idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 22 | `C/MaJiang.CBE` | 176×220 | <img src="images/C/MaJiang.png" width="120" alt="MaJiang idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 23 | `C/Map.CBE` | 176×220 | <img src="images/C/Map.png" width="120" alt="Map idle frame"> | Not assessed | Ready | Map grid, center marker and bottom menu render; online map data unverified |
-| 24 | `C/mario.CBE` | 240×400 | <img src="images/C/mario.png" width="120" alt="mario idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 25 | `C/MetalSlug.CBE` | 240×400 | <img src="images/C/MetalSlug.png" width="120" alt="MetalSlug idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 26 | `C/MoTa.CBE` | 240×400 | <img src="images/C/MoTa.png" width="120" alt="MoTa idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 27 | `C/MyGirl.CBE` | 240×400 | <img src="images/C/MyGirl.png" width="120" alt="MyGirl idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 28 | `C/netgobang.CBE` | 240×400 | <img src="images/C/netgobang.png" width="120" alt="netgobang idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 29 | `C/netGoldFlower.CBE` | 240×400 | <img src="images/C/netGoldFlower.png" width="120" alt="netGoldFlower idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 24 | `C/mario.CBE` | 176×220 | <img src="images/C/mario.png" width="120" alt="mario idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 25 | `C/MetalSlug.CBE` | 176×220 | <img src="images/C/MetalSlug.png" width="120" alt="MetalSlug idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 26 | `C/MoTa.CBE` | 176×220 | <img src="images/C/MoTa.png" width="120" alt="MoTa idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 27 | `C/MyGirl.CBE` | 176×220 | <img src="images/C/MyGirl.png" width="120" alt="MyGirl idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 28 | `C/netgobang.CBE` | 176×220 | <img src="images/C/netgobang.png" width="120" alt="netgobang idle frame"> | Not assessed | Ready | Native 176×220 LCD; margins resolved; font images/UI content remain incorrect; gameplay unverified |
+| 29 | `C/netGoldFlower.CBE` | 176×220 | <img src="images/C/netGoldFlower.png" width="120" alt="netGoldFlower idle frame"> | Not assessed | Ready | Native 176×220 LCD; margins resolved; font images/UI content remain incorrect; gameplay unverified |
 | 30 | `C/Picview.CBE` | 176×220 | <img src="images/C/Picview.png" width="120" alt="Picview idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 31 | `C/Pocker.CBE` | 220×176 | <img src="images/C/Pocker.png" width="120" alt="Pocker idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 32 | `C/Precious.CBE` | 240×400 | <img src="images/C/Precious.png" width="120" alt="Precious idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 33 | `C/Rich.CBE` | 240×400 | <img src="images/C/Rich.png" width="120" alt="Rich idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 34 | `C/Ringside.CBE` | 240×400 | <img src="images/C/Ringside.png" width="120" alt="Ringside idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 35 | `C/RussBlock.CBE` | 240×400 | <img src="images/C/RussBlock.png" width="120" alt="RussBlock idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 36 | `C/Sanbing.CBE` | 240×400 | <img src="images/C/Sanbing.png" width="120" alt="Sanbing idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 37 | `C/Star.CBE` | 240×400 | <img src="images/C/Star.png" width="120" alt="Star idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 38 | `C/Stock.CBE` | 176×220 | <img src="images/C/Stock.png" width="120" alt="Stock idle frame"> | Not assessed | Ready | Stock menu and icons render; online stock data unverified |
-| 39 | `C/SuperAirship.CBE` | 240×400 | <img src="images/C/SuperAirship.png" width="120" alt="SuperAirship idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 40 | `C/Sxbaby.CBE` | 240×400 | <img src="images/C/Sxbaby.png" width="120" alt="Sxbaby idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 41 | `C/TankWar.CBE` | 240×400 | <img src="images/C/TankWar.png" width="120" alt="TankWar idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 42 | `C/TD.CBE` | 240×400 | <img src="images/C/TD.png" width="120" alt="TD idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 43 | `C/TF.CBE` | 240×400 | <img src="images/C/TF.png" width="120" alt="TF idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 44 | `C/Train.CBE` | 176×220 | <img src="images/C/Train.png" width="120" alt="Train idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 45 | `C/UniversalWar.CBE` | 240×400 | <img src="images/C/UniversalWar.png" width="120" alt="UniversalWar idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 31 | `C/Pocker.CBE` | 176×220 | <img src="images/C/Pocker.png" width="120" alt="Pocker idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 32 | `C/Precious.CBE` | 176×220 | <img src="images/C/Precious.png" width="120" alt="Precious idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 33 | `C/Rich.CBE` | 176×220 | <img src="images/C/Rich.png" width="120" alt="Rich idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 34 | `C/Ringside.CBE` | 176×220 | <img src="images/C/Ringside.png" width="120" alt="Ringside idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 35 | `C/RussBlock.CBE` | 176×220 | <img src="images/C/RussBlock.png" width="120" alt="RussBlock idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 36 | `C/Sanbing.CBE` | 176×220 | <img src="images/C/Sanbing.png" width="120" alt="Sanbing idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 37 | `C/Star.CBE` | 176×220 | <img src="images/C/Star.png" width="120" alt="Star idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 38 | `C/Stock.CBE` | 176×220 | <img src="images/C/Stock.png" width="120" alt="Stock idle frame"> | Not assessed | Ready | Native 176×220 LCD; packed coordinates corrected; menu no longer clipped; gameplay unverified |
+| 39 | `C/SuperAirship.CBE` | 176×220 | <img src="images/C/SuperAirship.png" width="120" alt="SuperAirship idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 40 | `C/Sxbaby.CBE` | 176×220 | <img src="images/C/Sxbaby.png" width="120" alt="Sxbaby idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 41 | `C/TankWar.CBE` | 176×220 | <img src="images/C/TankWar.png" width="120" alt="TankWar idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 42 | `C/TD.CBE` | 176×220 | <img src="images/C/TD.png" width="120" alt="TD idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 43 | `C/TF.CBE` | 176×220 | <img src="images/C/TF.png" width="120" alt="TF idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 44 | `C/Train.CBE` | 176×220 | <img src="images/C/Train.png" width="120" alt="Train idle frame"> | Not assessed | Ready | Native 176×220 LCD; packed coordinates corrected; menu no longer clipped; gameplay unverified |
+| 45 | `C/UniversalWar.CBE` | 176×220 | <img src="images/C/UniversalWar.png" width="120" alt="UniversalWar idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
 | 46 | `C/Weather.CBE` | 176×220 | <img src="images/C/Weather.png" width="120" alt="Weather idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 47 | `C/Zombie.CBE` | 400×240 | <img src="images/C/Zombie.png" width="120" alt="Zombie idle frame"> | Not assessed | Ready | Landscape idle frame captured; fallback LCD dimensions retain unused margins; interaction/gameplay unverified |
-| 48 | `C/ZuMa.CBE` | 220×176 | <img src="images/C/ZuMa.png" width="120" alt="ZuMa idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 47 | `C/Zombie.CBE` | 220×176 | <img src="images/C/Zombie.png" width="120" alt="Zombie idle frame"> | Not assessed | Ready | Automatic landscape 220×176; LCD margins resolved; gameplay unverified |
+| 48 | `C/ZuMa.CBE` | 176×220 | <img src="images/C/ZuMa.png" width="120" alt="ZuMa idle frame"> | Not assessed | Ready | Native 176×220 LCD; packed coordinates corrected; menu no longer clipped; gameplay unverified |
 
 ## Known Limitations
 

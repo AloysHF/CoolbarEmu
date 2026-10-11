@@ -40,7 +40,7 @@ frontend can display the core metadata and supported features.
 
 - Video output using the RGB888 pixel format
 - Automatic landscape rotation: games packaged for the original phone's
-  rotated landscape LCD are presented at 400×240 (the same content-identity
+  rotated landscape LCD use the rotated active LCD dimensions (the same content-identity
   profile the standalone frontend uses). The core reports the matching
   geometry and aspect ratio to the frontend, so RetroArch opens a landscape
   viewport without large letterbox bars; pointer taps are mapped back to
@@ -87,8 +87,8 @@ apply immediately while a game is running and survive resets.
 ## Screen Orientation
 
 Games packaged for the original phone's rotated landscape LCD are presented
-at 400×240 automatically through a built-in content profile, matching the
-standalone frontend. For a landscape game outside the profile (sideways
+at the rotated active LCD dimensions automatically through a built-in
+content profile, matching the standalone frontend. For a landscape game outside the profile (sideways
 picture), set **Screen Orientation** to `landscape` in the core options.
 
 Prefer the core option over RetroArch's **Settings > Video > Rotation**

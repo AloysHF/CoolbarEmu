@@ -9,6 +9,8 @@ pub(super) struct DisplaySurface {
     pub width: u32,
     pub height: u32,
     clip_hint: bool,
+    scanline_clear: Option<(i32, i32)>,
+    drawing_bounds: Option<(i32, i32)>,
 }
 
 impl Default for DisplaySurface {
@@ -17,6 +19,8 @@ impl Default for DisplaySurface {
             width: FRAME_WIDTH,
             height: FRAME_HEIGHT,
             clip_hint: false,
+            scanline_clear: None,
+            drawing_bounds: None,
         }
     }
 }
@@ -56,6 +60,65 @@ impl NicaiMachine {
         self.observe_display_mode(x, y, width, height, false);
     }
 
+    /// A contiguous full-width scanline clear carries the same mode evidence
+    /// as a rectangle fill. Commit only when the sequence ends, not at an
+    /// intermediate supported height of a taller display.
+    pub(super) fn observe_display_scanline(&mut self, row: Option<(i32, i32)>) {
+        if self.frame_count >= 4
+            || self.display_surface.clip_hint
+            || self.framebuffer_size() != (FRAME_WIDTH, FRAME_HEIGHT)
+        {
+            self.display_surface.scanline_clear = None;
+            return;
+        }
+        let previous = self.display_surface.scanline_clear.take();
+        if let (Some((width, next_y)), Some((row_width, y))) = (previous, row) {
+            if width == row_width && y == next_y {
+                self.display_surface.scanline_clear = Some((width, y + 1));
+                return;
+            }
+        }
+        if let Some((width, height)) = previous {
+            self.observe_display_fill(0, 0, width, height);
+        }
+        if let Some((width, 0)) = row {
+            self.display_surface.scanline_clear = Some((width, 1));
+        }
+    }
+
+    /// Accumulate startup drawing extents; a later larger backdrop cancels a
+    /// small splash image. Ignore glyph cells and vertical sprite strips; leave
+    /// up to one text row for an unused softkey band.
+    pub(super) fn observe_display_drawing(&mut self, x: i32, y: i32, width: i32, height: i32) {
+        if self.frame_count >= 4
+            || self.framebuffer_size() != (FRAME_WIDTH, FRAME_HEIGHT)
+            || x < 0
+            || y < 0
+            || width <= 0
+            || height <= 0
+        {
+            return;
+        }
+        let (right, bottom) = self.display_surface.drawing_bounds.unwrap_or((0, 0));
+        self.display_surface.drawing_bounds = Some((right.max(x + width), bottom.max(y + height)));
+    }
+
+    pub(super) fn finish_display_discovery(&mut self) {
+        if self.frame_count != 3 {
+            return;
+        }
+        let Some((width, bottom)) = self.display_surface.drawing_bounds else {
+            return;
+        };
+        for height in bottom..=bottom.saturating_add(16) {
+            if DisplaySurface::supports(width as u32, height as u32) {
+                self.observe_display_fill(0, 0, width, height);
+                break;
+            }
+        }
+        self.display_surface.drawing_bounds = None;
+    }
+
     fn observe_display_mode(&mut self, x: i32, y: i32, width: i32, height: i32, clip_hint: bool) {
         if self.frame_count >= 4
             || x != 0
@@ -78,6 +141,8 @@ impl NicaiMachine {
             width: width as u32,
             height: height as u32,
             clip_hint,
+            scanline_clear: None,
+            drawing_bounds: None,
         };
         // Preserve existing pixels when changing the row stride.
         let mut pixels = Vec::with_capacity((old.width * old.height) as usize);
@@ -116,6 +181,8 @@ impl NicaiMachine {
                 width: width as u32,
                 height: height as u32,
                 clip_hint: self.memory.r32(super::SCREEN_IMAGE_STRUCT + 20) != 0,
+                scanline_clear: None,
+                drawing_bounds: None,
             }
         } else {
             DisplaySurface::default()
@@ -127,6 +194,72 @@ impl NicaiMachine {
 mod tests {
     use super::super::SCREEN_IMAGE_STRUCT;
     use super::*;
+
+    #[test]
+    fn startup_backdrops_resolve_geometry_without_cropping_a_later_splash() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        machine.observe_display_drawing(0, 0, 176, 205);
+        machine.observe_display_drawing(10, 201, 28, 12);
+        machine.frame_count = 2;
+        machine.finish_display_discovery();
+        assert_eq!(machine.framebuffer_size(), (240, 400));
+        machine.frame_count = 3;
+        machine.finish_display_discovery();
+        assert_eq!(machine.framebuffer_size(), (176, 220));
+
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        machine.observe_display_drawing(0, 0, 176, 220);
+        machine.observe_display_drawing(0, 0, 240, 320);
+        machine.frame_count = 3;
+        machine.finish_display_discovery();
+        assert_eq!(machine.framebuffer_size(), (240, 320));
+
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        machine.observe_display_drawing(0, 0, 176, 180);
+        machine.frame_count = 3;
+        machine.finish_display_discovery();
+        assert_eq!(machine.framebuffer_size(), (240, 400));
+    }
+
+    #[test]
+    fn scanline_clear_commits_only_after_the_complete_sequence() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        for y in 0..400 {
+            machine.observe_display_scanline(Some((240, y)));
+            assert_eq!(machine.framebuffer_size(), (240, 400));
+        }
+        machine.observe_display_scanline(None);
+        assert_eq!(machine.framebuffer_size(), (240, 400));
+        for y in 0..220 {
+            machine.observe_display_scanline(Some((176, y)));
+        }
+        machine.observe_display_scanline(None);
+        assert_eq!(machine.framebuffer_size(), (176, 220));
+    }
+
+    #[test]
+    fn partial_scanlines_and_explicit_clips_do_not_change_geometry() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        for y in 0..100 {
+            machine.observe_display_scanline(Some((176, y)));
+        }
+        for y in 101..220 {
+            machine.observe_display_scanline(Some((176, y)));
+        }
+        machine.observe_display_scanline(None);
+        assert_eq!(machine.framebuffer_size(), (240, 400));
+        machine.observe_display_rect(0, 0, 240, 320);
+        for y in 0..220 {
+            machine.observe_display_scanline(Some((176, y)));
+        }
+        machine.observe_display_scanline(None);
+        assert_eq!(machine.framebuffer_size(), (240, 320));
+    }
 
     #[test]
     fn startup_clip_resolves_geometry_and_preserves_rows() {

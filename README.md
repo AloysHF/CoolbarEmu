@@ -37,7 +37,7 @@ by supported games.
   text, and offscreen drawing with an embedded Unicode bitmap font
 - **Screen composition** — resource initialization, stacked backgrounds and
   modal overlays, event propagation, and resuming screens without reinitialization
-- **Application LCD dimensions** — startup screen clips and fills resolve
+- **Application LCD dimensions** — startup screen clips, clears, and background layout resolve
   176×220, 240×320, 240×352, or 240×400 surfaces and their landscape variants;
   240×400 is the fallback. Screenshots and frontends share the active geometry;
   standalone supports integer `--scale` (1–8)

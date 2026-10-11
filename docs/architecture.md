@@ -150,14 +150,16 @@ the final geometry arguments on the stack. Drawing respects the configured
 line height; releasing a box frees its line tables without freeing guest text.
 
 The guest owns an RGB565 LCD surface managed by the core's `DisplaySurface`.
-Startup full-surface clips and fills select supported 176×220, 240×320,
-240×352, or 240×400 LCD modes, including their landscape variants. Other
-rectangles and drawing after the first four callbacks do not change the LCD
-mode; 240×400 remains the fallback. Explicit startup clips take precedence over
-inferred clearing rectangles, including clears with transposed dimensions.
-Once an explicit nondefault mode is resolved, subsequent drawing cannot change
-it. Ordinary images, including full-screen
-splash images, do not determine the physical LCD dimensions.
+Startup full-surface clips, rectangle fills, and completed scanline clears
+select supported 176×220, 240×320, 240×352, or 240×400 LCD modes, including
+landscape variants. Explicit startup clips take precedence over inferred modes.
+When those requests are absent, the first three callbacks accumulate background
+and tile drawing extents. Glyph cells and narrow vertical strips are excluded;
+a supported mode must match the right edge, with at most one 16-pixel text row
+left below the artwork. A larger startup backdrop supersedes a smaller splash.
+Unresolved geometry falls back to 240×400, and later drawing cannot resize it.
+Packed LCD points and rectangle corners follow the guest's byte order across
+image placement, clipped blits, fills, outlines, lines, and touch hit tests.
 
 The active width, height, and aligned row stride feed the guest screen header,
 image blits, rectangle clipping, panel invalidation, text rendering, screenshot

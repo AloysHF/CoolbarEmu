@@ -37,7 +37,7 @@ nicaiemu [OPTIONS] <GAME_PATH>
 |---|---|---|---|
 | `<GAME_PATH>` | path | *required* | Path to the CBE game file. |
 | `-l, --list` | flag | off | List packaged resources and exit. |
-| `--scale <SCALE>` | integer 1–8 | `1` | Integer window scale factor. Default 1 matches the guest display (240×400 portrait or 400×240 landscape). |
+| `--scale <SCALE>` | integer 1–8 | `1` | Integer window scale factor. Default 1 matches the active guest LCD dimensions and orientation. |
 | `--filter <FILTER>` | `nearest` \| `bilinear` \| `bicubic` \| `xbrz` | `nearest` | Pixel scaling filter for display output. |
 | `--orientation <ORIENTATION>` | `auto` \| `landscape` \| `portrait` | `auto` | Present the game in landscape or portrait. `auto` uses the built-in landscape-game profile; explicit values override it. |
 | `--orientation-profile <FILE>` | path | — | Load extra display-orientation entries from a CSV file before starting (see [Screen orientation](#screen-orientation)). |
@@ -93,7 +93,7 @@ covers the entire phone keypad.
 | Reset | R |
 | Exit | Escape |
 
-The window also accepts mouse clicks as touch input on the 240×400 screen,
+The window also accepts mouse clicks as touch input on the active guest screen,
 which touch-driven games (such as 魔塔, 孤岛, 大家来数钱, and 魔鬼理发师) use
 for menus and in-game controls. 孤岛's main menu uses one click to select an
 item and a second click to activate it.
@@ -183,8 +183,10 @@ nicaiemu path/to/game.CBE --screenshot /dev/null --screenshot-frames 120
 
 ## Display Scaling
 
-The guest framebuffer is 240×400. By default the window opens at the native
-display size (1:1). Use `--scale` for an integer upscale (1–8); the window is
+The core resolves the active guest LCD dimensions during startup, using screen
+clips, clears, and background layout. Supported portrait sizes are 176×220,
+240×320, 240×352, and 240×400, with matching landscape variants. Unresolved
+content uses 240×400. By default the window matches the active display (1:1). Use `--scale` for an integer upscale (1–8); the window is
 then `resolution × scale` with no letterboxing. Inside that window the frame
 is centered with black bars while preserving the aspect ratio, and the
 `--filter` option selects the upscaler:
@@ -197,8 +199,8 @@ is centered with black bars while preserving the aspect ratio, and the
 ## Screen Orientation
 
 Games packaged for the original phone's rotated landscape LCD are presented
-at 400×240 automatically through a built-in content profile keyed by archive
-CRC-32 and size. Use `--orientation landscape|portrait` to override the
+at the rotated active LCD dimensions automatically through a built-in content
+profile keyed by archive CRC-32 and size. Use `--orientation landscape|portrait` to override the
 detection for a single run. When the presentation swaps dimensions, the
 default desktop window is also landscape so the frame fills the window
 instead of sitting in a portrait shell with large black bars. Pass `--scale`

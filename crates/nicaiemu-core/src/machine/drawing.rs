@@ -898,6 +898,15 @@ impl NicaiMachine {
         );
     }
 
+    fn unpack_lcd_point(&self, packed: u32) -> (i32, i32) {
+        let (low, high) = (signed_coord(packed), signed_coord(packed >> 16));
+        if self.memory.is_big_endian() {
+            (high, low)
+        } else {
+            (low, high)
+        }
+    }
+
     // Text-origin ABI, recovered from guest behavior (issue #45): games draw
     // progress/status text through a helper whose position never reaches
     // DrawText (index 10) directly. Instead the helper submits GetScreenImage
@@ -1012,13 +1021,9 @@ impl NicaiMachine {
                 } else {
                     let start = self.register(0);
                     let end = self.register(1);
-                    (
-                        signed_coord(start),
-                        signed_coord(start >> 16),
-                        signed_coord(end),
-                        signed_coord(end >> 16),
-                        self.register(2) as u16,
-                    )
+                    let (x0, y0) = self.unpack_lcd_point(start);
+                    let (x1, y1) = self.unpack_lcd_point(end);
+                    (x0, y0, x1, y1, self.register(2) as u16)
                 };
                 self.draw_screen_line(x0, y0, x1, y1, color);
                 self.set_result(1);
@@ -1079,13 +1084,8 @@ impl NicaiMachine {
                 self.set_result(1);
             }
             26 | 28 => {
-                let packed = self.register(1);
-                self.draw_image_at(
-                    self.register(0),
-                    signed_coord(packed),
-                    signed_coord(packed >> 16),
-                    index == 28,
-                );
+                let (x, y) = self.unpack_lcd_point(self.register(1));
+                self.draw_image_at(self.register(0), x, y, index == 28);
                 self.set_result(1);
             }
             27 => {
@@ -1188,15 +1188,12 @@ impl NicaiMachine {
             57 => self.set_result(0),
             62 => self.set_result(16),
             // Touch-menu hit test: r0 packs the point and r1/r2 pack the
-            // top-left and bottom-right corners as x | (y << 16). Nonzero
+            // top-left and bottom-right corners in guest byte order. Nonzero
             // means the point is inside the inclusive rectangle.
             40 => {
-                let x = self.register(0) & 0xffff;
-                let y = self.register(0) >> 16;
-                let left = self.register(1) & 0xffff;
-                let top = self.register(1) >> 16;
-                let right = self.register(2) & 0xffff;
-                let bottom = self.register(2) >> 16;
+                let (x, y) = self.unpack_lcd_point(self.register(0));
+                let (left, top) = self.unpack_lcd_point(self.register(1));
+                let (right, bottom) = self.unpack_lcd_point(self.register(2));
                 let inside = x >= left && x <= right && y >= top && y <= bottom;
                 self.set_result(u32::from(inside));
             }
@@ -1357,12 +1354,11 @@ impl NicaiMachine {
         let source_start = self.register(1);
         let destination_start = self.register(2);
         let destination_end = self.register(3);
-        let source_x = signed_coord(source_start);
-        let source_y = signed_coord(source_start >> 16);
-        let destination_x = signed_coord(destination_start);
-        let destination_y = signed_coord(destination_start >> 16);
-        let width = signed_coord(destination_end) - destination_x + 1;
-        let height = signed_coord(destination_end >> 16) - destination_y + 1;
+        let (source_x, source_y) = self.unpack_lcd_point(source_start);
+        let (destination_x, destination_y) = self.unpack_lcd_point(destination_start);
+        let (end_x, end_y) = self.unpack_lcd_point(destination_end);
+        let width = end_x - destination_x + 1;
+        let height = end_y - destination_y + 1;
         self.blit_image(
             SCREEN_IMAGE_STRUCT,
             source,
@@ -1422,6 +1418,18 @@ impl NicaiMachine {
                 "draw image dst={destination:08X} src={source:08X} pixels={source_pixels:08X} size={source_width}x{source_height} clip={source_x},{source_y} {width}x{height} at={destination_x},{destination_y}"
             );
         }
+        if destination == SCREEN_IMAGE_STRUCT {
+            let row = (!transparent
+                && source_x == 0
+                && source_y == 0
+                && destination_x == 0
+                && source_height == 1
+                && height == 1
+                && width == source_width
+                && width >= 176)
+                .then_some((width, destination_y));
+            self.observe_display_scanline(row);
+        }
         if destination == SCREEN_IMAGE_STRUCT
             || destination_pixels == 0
             || destination_width <= 0
@@ -1459,6 +1467,13 @@ impl NicaiMachine {
         );
         if width <= 0 || height <= 0 {
             return;
+        }
+        if destination_pixels == SCREEN_IMAGE
+            && source_height > 20
+            && (width.saturating_mul(2) >= height
+                || (source_x == 0 && width.saturating_mul(4) >= source_width))
+        {
+            self.observe_display_drawing(destination_x, destination_y, width, height);
         }
         let source_pitch = ((source_width + 3) & !3) as u32;
         let destination_pitch = ((destination_width + 3) & !3) as u32;
@@ -1543,7 +1558,7 @@ impl NicaiMachine {
     }
 
     /// Draw a screen rectangle from the firmware's packed form: r0 and r1
-    /// hold the inclusive corner coordinates (y<<16|x) and r2 the color.
+    /// hold inclusive corner structures in guest byte order and r2 the color.
     /// Returns false when the registers do not carry packed coordinates so
     /// the caller falls back to the stack-based form.
     fn draw_packed_screen_rect(&mut self, outline: bool) -> bool {
@@ -1552,10 +1567,8 @@ impl NicaiMachine {
         if (first | second) & 0xffff_0000 == 0 {
             return false;
         }
-        let x0 = signed_coord(first);
-        let y0 = signed_coord(first >> 16);
-        let x1 = signed_coord(second);
-        let y1 = signed_coord(second >> 16);
+        let (x0, y0) = self.unpack_lcd_point(first);
+        let (x1, y1) = self.unpack_lcd_point(second);
         // Data pointers share these registers; reject coordinate halves far
         // outside the screen so such calls keep their stack-form meaning.
         let horizontally_plausible = (-240..=480).contains(&x0) && (-240..=480).contains(&x1);
@@ -2154,6 +2167,104 @@ mod rendering_tests {
         machine.handle_screen_service(6);
         machine.run_frame(100).unwrap();
         assert_eq!(machine.memory.r32(object + 16), 1);
+    }
+
+    #[test]
+    fn background_extent_detection_keeps_partial_tiles_and_ignores_glyph_strips() {
+        for (tile_width, tile_height) in [(24, 24), (66, 133)] {
+            let mut machine = NicaiMachine::new_blank_for_tests();
+            machine.initialize_screen();
+            let image = machine.allocate(32);
+            let pixels = machine.allocate(((tile_width + 3) & !3) * tile_height * 2);
+            machine.memory.w32(image, pixels);
+            machine.write_image_dims(image, tile_width, tile_height);
+            for y in (0..220).step_by(tile_height as usize) {
+                for x in (0..176).step_by(tile_width as usize) {
+                    machine.blit_image(
+                        SCREEN_IMAGE_STRUCT,
+                        image,
+                        0,
+                        0,
+                        (tile_width as i32).min(176 - x),
+                        (tile_height as i32).min(220 - y),
+                        x,
+                        y,
+                        false,
+                    );
+                }
+            }
+            machine.blit_image(
+                SCREEN_IMAGE_STRUCT,
+                image,
+                0,
+                0,
+                4,
+                tile_height as i32,
+                15,
+                126,
+                true,
+            );
+            let glyph = machine.allocate(32);
+            machine.memory.w32(glyph, pixels);
+            machine.write_image_dims(glyph, 32, 18);
+            machine.blit_image(SCREEN_IMAGE_STRUCT, glyph, 0, 0, 30, 18, 138, 304, true);
+            machine.frame_count = 3;
+            machine.finish_display_discovery();
+            assert_eq!(machine.framebuffer_size(), (176, 220));
+        }
+    }
+
+    #[test]
+    fn packed_lcd_coordinates_follow_guest_byte_order() {
+        for big_endian in [false, true] {
+            let mut machine = NicaiMachine::new_blank_for_tests();
+            let mut memory = super::super::memory::MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_screen();
+            let pack = |x: u32, y: u32| if big_endian { x << 16 | y } else { y << 16 | x };
+            for (i, value) in [0, pack(175, 219), 0x07e0].into_iter().enumerate() {
+                machine.set_user_register(i as u8, value);
+            }
+            machine.handle_lcd_service(18);
+            assert_eq!(machine.framebuffer_size(), (176, 220));
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (219 * 176 + 175) * 2),
+                0x07e0
+            );
+            for (i, value) in [pack(7, 20), pack(9, 20), 0xf800].into_iter().enumerate() {
+                machine.set_user_register(i as u8, value);
+            }
+            machine.handle_lcd_service(15);
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (20 * 176 + 9) * 2),
+                0xf800
+            );
+            for (i, value) in [pack(8, 20), pack(7, 19), pack(9, 21)]
+                .into_iter()
+                .enumerate()
+            {
+                machine.set_user_register(i as u8, value);
+            }
+            machine.handle_lcd_service(40);
+            assert_eq!(machine.register(0), 1);
+            let image = machine.allocate(32);
+            let pixels = machine.allocate(32);
+            machine.memory.w32(image, pixels);
+            machine.write_image_dims(image, 4, 4);
+            machine.memory.w16(pixels + (2 * 4 + 1) * 2, 0x001f);
+            for (i, value) in [image, pack(1, 2), pack(30, 40), pack(30, 40)]
+                .into_iter()
+                .enumerate()
+            {
+                machine.set_user_register(i as u8, value);
+            }
+            machine.handle_lcd_service(29);
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (40 * 176 + 30) * 2),
+                0x001f
+            );
+        }
     }
 
     #[test]
