@@ -1334,7 +1334,7 @@ impl NicaiMachine {
         );
     }
 
-    fn draw_image_at(&mut self, source: u32, x: i32, y: i32, transparent: bool) {
+    pub(crate) fn draw_image_at(&mut self, source: u32, x: i32, y: i32, transparent: bool) {
         let (width, height) = self.image_dims(source);
         self.blit_image(
             SCREEN_IMAGE_STRUCT,
@@ -1738,7 +1738,14 @@ impl NicaiMachine {
         self.draw_text_bytes_on_image(SCREEN_IMAGE_STRUCT, bytes, x, y, color);
     }
 
-    fn draw_text_bytes_on_image(&mut self, image: u32, bytes: &[u8], x: i32, y: i32, color: u16) {
+    pub(crate) fn draw_text_bytes_on_image(
+        &mut self,
+        image: u32,
+        bytes: &[u8],
+        x: i32,
+        y: i32,
+        color: u16,
+    ) {
         self.draw_text_bytes_with_height(image, bytes, x, y, color, 16);
     }
 

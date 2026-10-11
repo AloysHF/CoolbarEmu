@@ -154,6 +154,7 @@ const NV_BLOCK_SIZE: u32 = 0x100;
 const NV_BLOCK_PATH: &str = "nvram.bin";
 const METHOD_STUB_STRIDE: u32 = 0x800;
 const METHOD_STUB_KINDS: u32 = 8;
+const CONTROL_METHOD_SERVICE: u32 = SERVICE_BASE + 0x10000;
 /// Table kinds — mirrors the reference's `api::lookup(tag, name)` split.
 /// Kind 0 is reserved for the slots of auto-created result objects: their
 /// stubs always return zero rather than spawning another result object.

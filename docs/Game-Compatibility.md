@@ -28,7 +28,8 @@ explicitly listed in the Coverage / limitation column.
 
 Verified interaction includes Wulin's menus and battle actions, one Crazy
 Landlord round, War Chess's menu/help/purchase panels, Westward Journey's title
-menu, and the QCIF Ebook bookshelf. Variant-specific coverage is listed below.
+menu, the QCIF Ebook bookshelf, and Love Assistant V10 list menus and article
+selection/back navigation. Variant-specific coverage is listed below.
 Complete playthroughs and all audio paths remain unverified; billing and network
 callbacks are local offline simulations.
 
@@ -92,7 +93,7 @@ not provide the original server's content or a real carrier payment service.
 | 44 | `A/小酷农场(火爆上线)V10.CBE` | 240×320 | <img src="images/A/小酷农场(火爆上线)V10.png" width="120" alt="小酷农场(火爆上线)V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 45 | `A/小酷音乐(强推)V101.CBE` | 240×320 | <img src="images/A/小酷音乐(强推)V101.png" width="120" alt="小酷音乐(强推)V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 46 | `A/开心花园(新品).CBE` | 240×320 | <img src="images/A/开心花园(新品).png" width="120" alt="开心花园(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 47 | `A/恋爱助手V10.CBE` | 240×320 | <img src="images/A/恋爱助手V10.png" width="120" alt="恋爱助手V10 idle frame"> | Not assessed | Halted | Image palette colors checked; interaction/gameplay unverified |
+| 47 | `A/恋爱助手V10.CBE` | 240×320 | <img src="images/A/恋爱助手V10.png" width="120" alt="恋爱助手V10 idle frame"> | Not assessed | Ready | List menu, submenu, article selection, scrolling and back navigation verified; billing callbacks are simulated offline |
 | 48 | `A/恶魔城(新品).CBE` | 240×320 | <img src="images/A/恶魔城(新品).png" width="120" alt="恶魔城(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 49 | `A/恶魔城V10.CBE` | 240×320 | <img src="images/A/恶魔城V10.png" width="120" alt="恶魔城V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 50 | `A/战争机器V101.CBE` | 240×320 | <img src="images/A/战争机器V101.png" width="120" alt="战争机器V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |

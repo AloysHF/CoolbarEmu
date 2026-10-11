@@ -2,6 +2,7 @@
 
 mod actor;
 mod audio;
+mod control;
 mod data;
 mod download;
 mod game;

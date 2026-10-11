@@ -312,6 +312,12 @@ impl NicaiMachine {
             self.return_from_service();
             return Ok(());
         }
+        if (super::CONTROL_METHOD_SERVICE..super::CONTROL_METHOD_SERVICE + 0x400).contains(&address)
+        {
+            self.handle_control_method(address - super::CONTROL_METHOD_SERVICE)?;
+            self.return_from_service();
+            return Ok(());
+        }
         if (METHOD_STUB_BASE..METHOD_STUB_BASE + METHOD_STUB_KINDS * METHOD_STUB_STRIDE)
             .contains(&address)
         {

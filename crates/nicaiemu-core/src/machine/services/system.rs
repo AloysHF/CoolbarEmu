@@ -4,8 +4,8 @@ use armv4t_emu::Memory;
 
 use super::super::{
     fixed_manager_specs, manager_initializer_count, NicaiMachine, DL_IMAGE_MANAGER,
-    DL_LOAD_MANAGER, DL_PAY_MANAGER, DL_RESOURCE_MANAGER, MANAGER_BASE, METHOD_KIND_AUTO,
-    SERVICE_BASE, TABLE_STRIDE, VIDEO_MANAGER,
+    DL_LOAD_MANAGER, DL_PAY_MANAGER, DL_RESOURCE_MANAGER, MANAGER_BASE, SERVICE_BASE, TABLE_STRIDE,
+    VIDEO_MANAGER,
 };
 
 impl NicaiMachine {
@@ -259,24 +259,7 @@ impl NicaiMachine {
     /// the first `ldr r2, [obj, #0xe4]; bx r2` jumped to NULL.
     pub(crate) fn handle_ctrl_service(&mut self, index: u32) {
         match index {
-            6 => {
-                const CONTROL_SIZE: u32 = 0x200;
-                let slot = self.register(0);
-                let mut object = 0;
-                if slot != 0 {
-                    object = self.allocate(CONTROL_SIZE);
-                    if object != 0 {
-                        for offset in (0..CONTROL_SIZE).step_by(4) {
-                            self.memory.w32(
-                                object + offset,
-                                Self::method_stub_address(METHOD_KIND_AUTO, offset),
-                            );
-                        }
-                        self.memory.w32(slot, object);
-                    }
-                }
-                self.set_result(object);
-            }
+            6 => self.initialize_list_control(),
             _ => self.set_result(0),
         }
     }
@@ -430,7 +413,7 @@ impl NicaiMachine {
 
     /// Queue a guest callback for delivery after the initiating service
     /// returns, matching the firmware's deferred-result contract.
-    fn defer_callback(&mut self, entry: u32, args: Vec<u32>, tag: &'static str) {
+    pub(super) fn defer_callback(&mut self, entry: u32, args: Vec<u32>, tag: &'static str) {
         if std::env::var("CBE_TRACE").is_ok() {
             let sp = self.register(armv4t_emu::reg::SP);
             eprintln!("[defer] tag={tag} entry={entry:08X} args={args:?} sp={sp:08X}");
