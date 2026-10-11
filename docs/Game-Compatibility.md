@@ -139,6 +139,29 @@ incomplete; normal process completion is recorded separately from compatibility.
 | Application | Execution result | Visual/gameplay status |
 | --- | --- | --- |
 | 三国大富翁 (new) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 三国志@火 | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 俄罗斯方块(免费) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 僵尸先生(强推) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 动感保龄球 | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 卧底风云(精品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 双截龙(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 在线书城(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 坦克大战(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 士兵突袭(精品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 太空堡垒(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 星际宝藏(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 法老祖玛(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 漂亮小护士(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 漫画大王(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 炸弹人(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 生化危机(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 贪吃鱼(经典) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 超级麻将(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 金字塔传奇(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 雷霆战机(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 马戏团(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 魔力弹球(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
+| 魔幻英雄(新品) | Guest assertion halt; no execution fault | Blank; incomplete startup |
 
 ## Summary
 
