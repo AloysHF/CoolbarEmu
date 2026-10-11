@@ -140,7 +140,34 @@ with horizontal/vertical alignment and RGB888 colors. Constructors receive
 the final geometry arguments on the stack. Drawing respects the configured
 line height; releasing a box frees its line tables without freeing guest text.
 
-The guest owns a 240×400 RGB565 screen. Image resources are reconstructed from the CBE GIF variant or firmware PNG representation, decoded, and copied into guest image objects. Some custom GIF headers resemble ICO files, so a failed standard-image decode falls back to the CBE decoder. The desktop frontend converts the completed screen to 32-bit RGB for `minifb`. Text is decoded as GBK and rasterized from an embedded Unicode font, so the core does not depend on host fonts. Text coordinates live in the presented display space: for landscape-packaged games the glyphs are mapped from the 400×240 display back into the 240×400 framebuffer pixel by pixel, and games that submit `DrawText` with zero coordinates inherit the pen origin latched from the preceding `GetScreenImage` call.
+The guest owns an RGB565 LCD surface managed by the core's `DisplaySurface`.
+Startup full-surface clips and fills select supported 176×220, 240×320,
+240×352, or 240×400 LCD modes, including their landscape variants. Other
+rectangles and drawing after the first four callbacks do not change the LCD
+mode; 240×400 remains the fallback. Explicit startup clips take precedence over
+inferred clearing rectangles, including clears with transposed dimensions.
+Once an explicit nondefault mode is resolved, subsequent drawing cannot change
+it. Ordinary images, including full-screen
+splash images, do not determine the physical LCD dimensions.
+
+The active width, height, and aligned row stride feed the guest screen header,
+image blits, rectangle clipping, panel invalidation, text rendering, screenshot
+export, and frontend geometry. The backing allocation retains capacity for a
+240×400 surface, and a mode change preserves existing pixels while repacking
+rows. Save states retain the active dimensions in the existing guest screen
+header, with the hint source retained in its reserved bytes; loading restores
+host geometry without changing the version-1 payload layout. Presentation
+rotation is separate from LCD dimensions:
+native landscape surfaces are displayed directly in automatic mode, while
+profiled games with pre-rotated artwork use an additional rotation. Explicit
+orientation overrides remain available. Pointer coordinates and text use the
+same size-aware inverse rotation. The libretro frontend reports geometry after
+guest drawing so video dimensions and the submitted pixel buffer agree within
+the same frame. The desktop frontend adjusts an automatically sized window
+when startup resolves the LCD dimensions, preserving manually resized windows
+and fullscreen presentation.
+
+Image resources are reconstructed from the CBE GIF variant or firmware PNG representation, decoded, and copied into guest image objects. Some custom GIF headers resemble ICO files, so a failed standard-image decode falls back to the CBE decoder. The desktop frontend converts the completed screen to 32-bit RGB for `minifb`. Text is decoded as GBK and rasterized from an embedded Unicode font, so the core does not depend on host fonts. Text coordinates live in the presented display space: for rotated games the glyphs are mapped from the presented display back into the active LCD surface pixel by pixel, and games that submit `DrawText` with zero coordinates inherit the pen origin latched from the preceding `GetScreenImage` call.
 
 ## Headless execution
 

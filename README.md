@@ -34,10 +34,12 @@ by supported games.
   file-backed resource packages
 - **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction
 - **Text rendering** — GBK decoding with embedded Unicode bitmap font
-- **240×400 display** — native WQVGA resolution; standalone window opens at
-  1:1 by default and supports integer `--scale` (1–8)
+- **Application LCD dimensions** — startup screen clips and fills resolve
+  176×220, 240×320, 240×352, or 240×400 surfaces and their landscape variants;
+  240×400 is the fallback. Screenshots and frontends share the active geometry;
+  standalone supports integer `--scale` (1–8)
 - **Automatic landscape rotation** — games packaged for the original phone's
-  rotated landscape LCD are presented at 400×240 automatically, with a
+  rotated landscape LCD are rotated using the active surface dimensions, with a
   landscape default window matching the frame, a `--orientation` override
   for manual control, and a `--orientation-profile` file for titles outside the
   built-in profile
@@ -78,7 +80,7 @@ by supported games.
 - **Libretro integration** — playable libretro core with RGB888 video output,
   RetroPad input, content loading, save states, reset, and memory exposure
   (core options cover volume, touch input, auto BGM, screen orientation, and
-  debug logging); landscape titles are presented rotated at 400×240, matching
+  debug logging); landscape titles use the resolved LCD dimensions, matching
   the standalone frontend
 
 ## Usage

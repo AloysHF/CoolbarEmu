@@ -7,24 +7,25 @@ use super::super::{
     METHOD_KIND_GAMEOLD, SCREEN_IS_IN_QUIT,
 };
 
-fn clip_panel_rect(memory: &mut impl Memory, rect: u32) {
+fn clip_panel_rect(memory: &mut impl Memory, rect: u32, size: (u32, u32)) {
+    let (screen_width, screen_height) = (size.0 as i32, size.1 as i32);
     let mut x = memory.r16(rect) as i16 as i32;
     let mut y = memory.r16(rect.wrapping_add(2)) as i16 as i32;
     let mut width = memory.r16(rect.wrapping_add(4)) as i16 as i32;
     let mut height = memory.r16(rect.wrapping_add(6)) as i16 as i32;
 
-    if x + width < 0 || x > 240 || y + height < 0 || y > 400 {
+    if x + width < 0 || x > screen_width || y + height < 0 || y > screen_height {
         (x, y, width, height) = (0, 0, 0, 0);
     }
     if x < 0 {
         width += x;
         x = 0;
     }
-    if x + width > 240 {
-        width = 240 - x;
+    if x + width > screen_width {
+        width = screen_width - x;
     }
-    if y + height > 400 {
-        height = 400 - y;
+    if y + height > screen_height {
+        height = screen_height - y;
     }
 
     for (offset, value) in [x, y, width, height].into_iter().enumerate() {
@@ -53,11 +54,17 @@ fn add_panel_dirty_rect(memory: &mut impl Memory, panel: u32, rect: u32) {
     memory.w32(panel.wrapping_add(4), count.wrapping_add(1));
 }
 
-pub(super) fn invalidate_panel(memory: &mut impl Memory, panel: u32, kind: i16, rect: u32) {
+pub(super) fn invalidate_panel(
+    memory: &mut impl Memory,
+    panel: u32,
+    kind: i16,
+    rect: u32,
+    size: (u32, u32),
+) {
     if panel == 0 || rect == 0 {
         return;
     }
-    clip_panel_rect(memory, rect);
+    clip_panel_rect(memory, rect, size);
     if kind == 2 {
         let mut pending = vec![panel];
         let mut visited = std::collections::BTreeSet::new();
@@ -140,7 +147,8 @@ impl NicaiMachine {
         } else if offset == 0x3c {
             let kind = self.register(1) as i16;
             let rectangle = self.register(2);
-            invalidate_panel(&mut self.memory, root, kind, rectangle);
+            let size = self.framebuffer_size();
+            invalidate_panel(&mut self.memory, root, kind, rectangle, size);
         }
         self.set_result(0);
         Ok(())
@@ -246,7 +254,8 @@ impl NicaiMachine {
                 let panel = self.register(0);
                 let kind = self.register(1) as i16;
                 let rect = self.register(2);
-                invalidate_panel(&mut self.memory, panel, kind, rect);
+                let size = self.framebuffer_size();
+                invalidate_panel(&mut self.memory, panel, kind, rect, size);
                 self.set_result(0);
             }
             // F_4 exposes the same initDF* builders as the gameold method
@@ -315,7 +324,7 @@ mod tests {
         memory.w16(0x1304, 20);
         memory.w16(0x1306, 30);
 
-        invalidate_panel(&mut memory, 0x1000, 4, 0x1300);
+        invalidate_panel(&mut memory, 0x1000, 4, 0x1300, (240, 400));
 
         assert_eq!(memory.r32(0x1004), 1);
         assert_eq!(memory.r16(0x1300), 0);

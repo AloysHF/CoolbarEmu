@@ -19,12 +19,14 @@ use crate::cbe::CbeArchive;
 use crate::orientation_profile::orientation_for_archive;
 
 mod cpu_bridge;
+mod display;
 mod drawing;
 mod memory;
 mod packages;
 mod services;
 mod virtual_fs;
 
+use display::DisplaySurface;
 use memory::MachineMemory;
 pub use memory::MemoryRegionInfo;
 use packages::{
@@ -33,26 +35,23 @@ use packages::{
 };
 use virtual_fs::VirtualFileSystem;
 
-/// Native guest framebuffer width in pixels.
+/// Default guest framebuffer width in pixels.
 pub const FRAME_WIDTH: u32 = 240;
-/// Native guest framebuffer height in pixels.
+/// Default guest framebuffer height in pixels.
 pub const FRAME_HEIGHT: u32 = 400;
 
 /// Display orientation of the presented frame.
 ///
-/// The guest framebuffer is always the phone's native portrait 240x400
-/// surface. Games packaged for the original phone's rotated landscape LCD
-/// draw 400x240 art pre-rotated into that surface and rely on the hardware
-/// rotating the output, so the emulator must present those frames rotated
-/// 90 degrees counterclockwise.
+/// The active LCD surface may be portrait or landscape. Games with
+/// pre-rotated artwork require an additional presentation rotation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DisplayOrientation {
     /// Resolve automatically from the content-identity profile (default).
     #[default]
     Auto,
-    /// Present the native 240x400 framebuffer as-is.
+    /// Present the active LCD surface as-is.
     Portrait,
-    /// Present the framebuffer rotated 90 degrees counterclockwise (400x240).
+    /// Present the active LCD surface rotated 90 degrees counterclockwise.
     Landscape,
 }
 
@@ -63,11 +62,11 @@ impl DisplayOrientation {
     }
 
     /// Map a presented display coordinate back to a guest framebuffer
-    /// coordinate, used to translate pointer input on rotated output.
-    pub fn unrotate(self, display_x: i32, display_y: i32) -> (i32, i32) {
+    /// coordinate using the active surface width.
+    pub fn unrotate(self, display_x: i32, display_y: i32, framebuffer_width: u32) -> (i32, i32) {
         match self {
             DisplayOrientation::Auto | DisplayOrientation::Portrait => (display_x, display_y),
-            DisplayOrientation::Landscape => ((FRAME_WIDTH - 1) as i32 - display_y, display_x),
+            DisplayOrientation::Landscape => (framebuffer_width as i32 - 1 - display_y, display_x),
         }
     }
 }
@@ -782,6 +781,9 @@ pub struct NicaiMachine {
     /// Resolved orientation after automatic landscape detection.
     #[serde(skip, default)]
     effective_orientation: DisplayOrientation,
+    // Geometry is restored from the serialized guest screen header.
+    #[serde(skip, default)]
+    display_surface: DisplaySurface,
     pointer: PointerState,
     timers: Vec<GuestTimer>,
     resources: Vec<HostResource>,
@@ -930,6 +932,7 @@ impl NicaiMachine {
             playing_resource_id: None,
             orientation: DisplayOrientation::Auto,
             effective_orientation: DisplayOrientation::Portrait,
+            display_surface: DisplaySurface::default(),
             pointer: PointerState::new(),
             timers: vec![
                 GuestTimer {
@@ -1083,19 +1086,23 @@ impl NicaiMachine {
     /// pair at +4/+6 with the stride at +8; the wide (v3 gamelib) layout
     /// stores u32 width at +4 and u32 height at +8.
     fn write_screen_header(&mut self) {
+        let (width, height) = self.framebuffer_size();
         if self.wide_images {
-            self.memory.w32(SCREEN_IMAGE_STRUCT + 4, 240);
-            self.memory.w32(SCREEN_IMAGE_STRUCT + 8, 400);
+            self.memory.w32(SCREEN_IMAGE_STRUCT + 4, width);
+            self.memory.w32(SCREEN_IMAGE_STRUCT + 8, height);
             self.memory.w32(SCREEN_IMAGE_STRUCT + 12, 0);
         } else {
-            self.memory.w16(SCREEN_IMAGE_STRUCT + 4, 240);
-            self.memory.w16(SCREEN_IMAGE_STRUCT + 6, 400);
-            self.memory.w16(SCREEN_IMAGE_STRUCT + 8, 240);
+            self.memory.w16(SCREEN_IMAGE_STRUCT + 4, width as u16);
+            self.memory.w16(SCREEN_IMAGE_STRUCT + 6, height as u16);
+            self.memory.w16(
+                SCREEN_IMAGE_STRUCT + 8,
+                self.display_surface.stride() as u16,
+            );
             self.memory.w16(SCREEN_IMAGE_STRUCT + 12, 0);
             self.memory.w16(SCREEN_IMAGE_STRUCT + 14, 0);
         }
-        self.memory.w16(SCREEN_IMAGE_STRUCT + 16, 240);
-        self.memory.w16(SCREEN_IMAGE_STRUCT + 18, 400);
+        self.memory.w16(SCREEN_IMAGE_STRUCT + 16, width as u16);
+        self.memory.w16(SCREEN_IMAGE_STRUCT + 18, height as u16);
     }
 
     /// Image width/height pair, laid out per the active header mode.
@@ -1661,6 +1668,7 @@ impl NicaiMachine {
     }
 
     pub(crate) fn normalize_input_after_load(&mut self) {
+        self.restore_display_surface();
         self.key_down = 0;
         self.key_held = self.key_held_physical;
         self.pending_key_events.clear();
@@ -1704,40 +1712,49 @@ impl NicaiMachine {
 
     /// The resolved orientation currently applied to output.
     pub fn effective_orientation(&self) -> DisplayOrientation {
-        self.effective_orientation
+        if self.orientation == DisplayOrientation::Auto
+            && self.display_surface.width > self.display_surface.height
+        {
+            DisplayOrientation::Portrait
+        } else {
+            self.effective_orientation
+        }
     }
 
     /// Presented output size in pixels after orientation.
     pub fn display_size(&self) -> (u32, u32) {
-        if self.effective_orientation.swaps_dimensions() {
-            (FRAME_HEIGHT, FRAME_WIDTH)
+        let (width, height) = self.framebuffer_size();
+        if self.effective_orientation().swaps_dimensions() {
+            (height, width)
         } else {
-            (FRAME_WIDTH, FRAME_HEIGHT)
+            (width, height)
         }
     }
 
     /// Map a presented display coordinate back to guest framebuffer space.
     pub fn display_to_framebuffer(&self, display_x: i32, display_y: i32) -> (i32, i32) {
-        self.effective_orientation.unrotate(display_x, display_y)
+        self.display_surface
+            .unrotate(self.effective_orientation(), display_x, display_y)
     }
 
     /// Copy the current RGB565 framebuffer into 0x00RRGGBB pixels, applying
     /// the configured display orientation.
     pub fn frame_pixels(&mut self) -> Vec<u32> {
-        let mut pixels = Vec::with_capacity(240 * 400);
-        for index in 0..(240 * 400) as u32 {
-            let color = self.memory.r16(SCREEN_IMAGE + index * 2);
-            let red = ((color >> 11) & 0x1f) as u32;
-            let green = ((color >> 5) & 0x3f) as u32;
-            let blue = (color & 0x1f) as u32;
-            pixels.push(((red * 255 / 31) << 16) | ((green * 255 / 63) << 8) | (blue * 255 / 31));
+        let (width, height) = self.framebuffer_size();
+        let mut pixels = Vec::with_capacity((width * height) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let color = self
+                    .memory
+                    .r16(SCREEN_IMAGE + (y * self.display_surface.stride() + x) * 2);
+                let red = ((color >> 11) & 0x1f) as u32;
+                let green = ((color >> 5) & 0x3f) as u32;
+                let blue = (color & 0x1f) as u32;
+                pixels
+                    .push(((red * 255 / 31) << 16) | ((green * 255 / 63) << 8) | (blue * 255 / 31));
+            }
         }
-        rotate_frame(
-            &pixels,
-            FRAME_WIDTH,
-            FRAME_HEIGHT,
-            self.effective_orientation,
-        )
+        rotate_frame(&pixels, width, height, self.effective_orientation())
     }
 
     /// Pull up to `max_frames` stereo frames of guest audio.
@@ -1874,6 +1891,7 @@ impl NicaiMachine {
             playing_resource_id: None,
             orientation: DisplayOrientation::Portrait,
             effective_orientation: DisplayOrientation::Portrait,
+            display_surface: DisplaySurface::default(),
             pointer: PointerState::new(),
             timers: vec![
                 GuestTimer {
@@ -2096,10 +2114,16 @@ mod tests {
 
     #[test]
     fn orientation_unrotate_maps_display_back_to_framebuffer() {
-        assert_eq!(DisplayOrientation::Portrait.unrotate(10, 20), (10, 20));
+        assert_eq!(DisplayOrientation::Portrait.unrotate(10, 20, 240), (10, 20));
         // Landscape output pixel (x, y) came from framebuffer (239 - y, x).
-        assert_eq!(DisplayOrientation::Landscape.unrotate(10, 20), (219, 10));
-        assert_eq!(DisplayOrientation::Landscape.unrotate(399, 239), (0, 399));
+        assert_eq!(
+            DisplayOrientation::Landscape.unrotate(10, 20, 240),
+            (219, 10)
+        );
+        assert_eq!(
+            DisplayOrientation::Landscape.unrotate(399, 239, 240),
+            (0, 399)
+        );
     }
 
     #[test]

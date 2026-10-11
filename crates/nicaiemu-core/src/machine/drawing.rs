@@ -136,16 +136,21 @@ impl NicaiMachine {
             return;
         }
         let (width, height) = self.image_dims(image);
-        let width = width.clamp(0, 240);
-        let height = height.clamp(0, 400);
+        let source_pitch = width as u32;
+        let width = width.clamp(0, self.display_surface.width as i32);
+        let height = height.clamp(0, self.display_surface.height as i32);
         self.oldlib_clip = [0, 0, width, height];
         let pixels = self.memory.r32(image);
         if pixels != 0 {
             for y in 0..height {
                 for x in 0..width {
-                    let value = self.memory.r16(pixels + ((y * width + x) * 2) as u32);
-                    self.memory
-                        .w16(SCREEN_IMAGE + ((y * 240 + x) * 2) as u32, value);
+                    let value = self
+                        .memory
+                        .r16(pixels + (y as u32 * source_pitch + x as u32) * 2);
+                    self.memory.w16(
+                        SCREEN_IMAGE + (y as u32 * self.display_surface.stride() + x as u32) * 2,
+                        value,
+                    );
                 }
             }
         }
@@ -441,6 +446,7 @@ impl NicaiMachine {
         let y = signed_coord(self.register(1));
         let width = signed_coord(self.register(2));
         let height = signed_coord(self.register(3));
+        self.observe_display_rect(x, y, width, height);
         self.oldlib_clip = [x, y, x + width, y + height];
         self.set_result(((y + height) as u32) & 0xffff);
     }
@@ -842,7 +848,7 @@ impl NicaiMachine {
             0x4c => {
                 self.memory.w32(library + 4, argument);
                 let width = if argument == 0 {
-                    240
+                    self.display_surface.width
                 } else {
                     self.image_dims(argument).0 as u32
                 };
@@ -876,18 +882,17 @@ impl NicaiMachine {
     }
 
     pub(crate) fn fill_screen_rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: u16) {
-        let left = x.clamp(0, 240);
-        let top = y.clamp(0, 400);
-        let right = x.saturating_add(width).clamp(0, 240);
-        let bottom = y.saturating_add(height).clamp(0, 400);
-        for screen_y in top..bottom {
-            for screen_x in left..right {
-                self.memory.w16(
-                    SCREEN_IMAGE + (screen_y as u32 * 240 + screen_x as u32) * 2,
-                    color,
-                );
-            }
-        }
+        self.paint_rect(
+            x,
+            y,
+            width,
+            height,
+            color,
+            false,
+            self.display_surface.width as i32,
+            self.display_surface.height as i32,
+            SCREEN_IMAGE,
+        );
     }
 
     // Text-origin ABI, recovered from guest behavior (issue #45): games draw
@@ -1001,11 +1006,12 @@ impl NicaiMachine {
                 let y = signed_coord(self.register(1));
                 let width = signed_coord(self.register(2));
                 let height = signed_coord(self.register(3));
+                let extent = super::FRAME_WIDTH.max(super::FRAME_HEIGHT) as i32;
                 if self.register(0) <= u16::MAX as u32
-                    && (-239..240).contains(&x)
-                    && (-399..400).contains(&y)
-                    && (-239..=240).contains(&width)
-                    && (-399..=400).contains(&height)
+                    && (1 - extent..extent).contains(&x)
+                    && (1 - extent..extent).contains(&y)
+                    && (1 - extent..=extent).contains(&width)
+                    && (1 - extent..=extent).contains(&height)
                 {
                     let color = self.memory.r32(self.register(reg::SP)) as u16;
                     self.fill_screen_rect(x, y, width, height, color);
@@ -1375,13 +1381,13 @@ impl NicaiMachine {
             || destination_pixels == 0
             || destination_width <= 0
             || destination_height <= 0
-            || destination_width > 240
-            || destination_height > 400
+            || destination_width > super::FRAME_HEIGHT as i32
+            || destination_height > super::FRAME_HEIGHT as i32
         {
             destination = SCREEN_IMAGE_STRUCT;
             destination_pixels = SCREEN_IMAGE;
-            destination_width = 240;
-            destination_height = 400;
+            destination_width = self.display_surface.width as i32;
+            destination_height = self.display_surface.height as i32;
         }
         if source_pixels == 0
             || source_width <= 0
@@ -1454,12 +1460,12 @@ impl NicaiMachine {
             || pixels == 0
             || destination_width <= 0
             || destination_height <= 0
-            || destination_width > 240
-            || destination_height > 400
+            || destination_width > super::FRAME_HEIGHT as i32
+            || destination_height > super::FRAME_HEIGHT as i32
         {
             pixels = SCREEN_IMAGE;
-            destination_width = 240;
-            destination_height = 400;
+            destination_width = self.display_surface.width as i32;
+            destination_height = self.display_surface.height as i32;
         }
         self.paint_rect(
             x,
@@ -1505,8 +1511,8 @@ impl NicaiMachine {
             y1 - y0 + 1,
             color,
             outline,
-            240,
-            400,
+            self.display_surface.width as i32,
+            self.display_surface.height as i32,
             SCREEN_IMAGE,
         );
         true
@@ -1525,6 +1531,17 @@ impl NicaiMachine {
         destination_height: i32,
         pixels: u32,
     ) {
+        let (destination_width, destination_height) = if pixels == SCREEN_IMAGE {
+            if !outline {
+                self.observe_display_fill(x, y, width, height);
+            }
+            (
+                self.display_surface.width as i32,
+                self.display_surface.height as i32,
+            )
+        } else {
+            (destination_width, destination_height)
+        };
         let mut source_x = 0;
         let mut source_y = 0;
         clip_axis(
@@ -1581,12 +1598,16 @@ impl NicaiMachine {
         let (text, _, _) = GBK.decode(bytes);
         // Text coordinates live in the presented display space: the firmware
         // renders the glyphs itself, so a landscape-packaged game issues them
-        // with 400x240 coordinates that have to be mapped back into the
-        // 240x400 framebuffer pixel by pixel (identity for portrait games).
+        // in presentation coordinates, mapped back into the active LCD
+        // surface pixel by pixel (identity without presentation rotation).
         let screen = image == 0 || image == SCREEN_IMAGE_STRUCT;
-        let swaps = screen && self.effective_orientation.swaps_dimensions();
+        let swaps = screen && self.effective_orientation().swaps_dimensions();
         let (pixels, width, height) = if screen {
-            (SCREEN_IMAGE, 240, 400)
+            (
+                SCREEN_IMAGE,
+                self.display_surface.width as i32,
+                self.display_surface.height as i32,
+            )
         } else {
             let (width, height) = self.image_dims(image);
             (self.memory.r32(image), width, height)
@@ -1599,7 +1620,7 @@ impl NicaiMachine {
         if pixels == 0 {
             return;
         }
-        let orientation = self.effective_orientation;
+        let orientation = self.effective_orientation();
         let mut pen_x = x;
         for character in text.chars() {
             let Some(glyph) = unifont::get_glyph(character) else {
@@ -1617,11 +1638,13 @@ impl NicaiMachine {
                         && glyph.get_pixel(glyph_x as usize, (glyph_y * 16 / glyph_height) as usize)
                     {
                         let (screen_x, screen_y) = if swaps {
-                            orientation.unrotate(display_x, display_y)
+                            self.display_surface
+                                .unrotate(orientation, display_x, display_y)
                         } else {
                             (display_x, display_y)
                         };
-                        let offset = (screen_y as u32 * width as u32 + screen_x as u32) * 2;
+                        let offset =
+                            (screen_y as u32 * ((width as u32 + 3) & !3) + screen_x as u32) * 2;
                         self.memory.w16(pixels + offset, color);
                     }
                 }
@@ -1681,6 +1704,12 @@ impl NicaiMachine {
                 self.set_result(size);
             }
             12 => {
+                self.observe_display_rect(
+                    signed_coord(self.register(0)),
+                    signed_coord(self.register(1)),
+                    signed_coord(self.register(2)),
+                    signed_coord(self.register(3)),
+                );
                 for offset in 0..4 {
                     self.memory.w16(
                         SCREEN_IMAGE_STRUCT + 12 + offset * 2,

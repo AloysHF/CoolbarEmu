@@ -277,7 +277,7 @@ impl NicaiMachine {
             75 if self.uses_fixed_manager_abi() => {
                 let object = self.register(0);
                 let capacity = self.register(1) & 0xffff;
-                let scanline = self.allocate(240 * 2);
+                let scanline = self.allocate(self.display_surface.stride() * 2);
                 let resource_ids = self.allocate(capacity.saturating_mul(2).max(2));
                 let pictures = self.allocate(capacity.saturating_mul(4).max(4));
                 self.memory.w32(object, scanline);
@@ -662,15 +662,16 @@ impl NicaiMachine {
             let context = self.memory.r32(object + 20);
             for i in 0..count {
                 let rectangle = self.memory.r32(entries + i * 4);
+                let x = self.memory.r16(rectangle) as i16 as i32;
+                let y = self.memory.r16(rectangle + 2) as i16 as i32;
+                let width = self.memory.r16(rectangle + 4) as i16 as i32;
+                let height = self.memory.r16(rectangle + 6) as i16 as i32;
+                self.observe_display_rect(x, y, width, height);
                 for j in 0..4 {
                     let value = self.memory.r16(rectangle + j * 2);
                     self.memory
                         .w16(super::super::SCREEN_IMAGE_STRUCT + 12 + j * 2, value);
                 }
-                let x = self.memory.r16(rectangle) as i16 as i32;
-                let y = self.memory.r16(rectangle + 2) as i16 as i32;
-                let width = self.memory.r16(rectangle + 4) as i16 as i32;
-                let height = self.memory.r16(rectangle + 6) as i16 as i32;
                 self.oldlib_clip = [x, y, x + width, y + height];
                 // Guest painters run synchronously and must preserve the calling CPU context.
                 let cpu = self.cpu;
@@ -721,6 +722,12 @@ impl NicaiMachine {
             let first = self.memory.r32(entries);
             self.memory.w32(first, first_bounds);
             self.memory.w32(first + 4, second_bounds);
+            // Packed bounds follow guest endianness, like the stored rectangle.
+            let x = self.memory.r16(first) as i16 as i32;
+            let y = self.memory.r16(first + 2) as i16 as i32;
+            let width = self.memory.r16(first + 4) as i16 as i32;
+            let height = self.memory.r16(first + 6) as i16 as i32;
+            self.observe_display_rect(x, y, width, height);
             self.memory.w32(object + 4, 1);
         }
         self.set_result(u32::from(entries != 0));
@@ -824,11 +831,13 @@ impl NicaiMachine {
                     let panel = self.memory.r32(argument);
                     let kind = self.memory.r16(argument + 4) as u32;
                     let rectangle = self.memory.r32(argument + 8);
+                    let size = self.framebuffer_size();
                     super::screen::invalidate_panel(
                         &mut self.memory,
                         panel,
                         kind as i16,
                         rectangle,
+                        size,
                     );
                 }
                 self.set_result(0);
