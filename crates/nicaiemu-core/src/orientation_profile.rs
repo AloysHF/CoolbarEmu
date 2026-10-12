@@ -48,6 +48,7 @@ const BUILTIN_PROFILE: &[(u32, u64)] = &[
     (0x5E8B5904, 319424),  // 幸运扑克机
     (0x7AF01616, 310229),  // Resident Evil V10
     (0x817C11BE, 249023),  // Zombie
+    (0xECCDF7C3, 493544),  // Zombie Master variant
 ];
 
 /// User-supplied entries registered by a frontend; they win over the built-in

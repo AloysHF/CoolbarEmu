@@ -910,23 +910,23 @@ impl NicaiMachine {
                 self.set_result(id);
             }
             0x3f8 => {
-                // The request contains font, GBK text and a u16 byte count.
-                let width = if argument == 0 {
-                    0
-                } else {
-                    let text = self.memory.r32(argument + 4);
+                // Native GBK conversion returns the UCS2 byte count.
+                let mut written = 0;
+                if argument != 0 {
+                    let destination = self.memory.r32(argument);
+                    let source = self.memory.r32(argument + 4);
                     let count = u32::from(self.memory.r16(argument + 8));
-                    let mut offset = 0;
-                    let mut width = 0u32;
-                    while offset < count && self.memory.r8(text + offset) != 0 {
-                        let double_byte =
-                            self.memory.r8(text + offset) >= 0x80 && offset + 1 < count;
-                        width += if double_byte { 16 } else { 8 };
-                        offset += if double_byte { 2 } else { 1 };
+                    if source != 0 && destination != 0 {
+                        let bytes = self.read_c_bytes(source, count);
+                        let (text, _, _) = encoding_rs::GBK.decode(&bytes);
+                        for (index, unit) in text.encode_utf16().enumerate() {
+                            self.memory.w16(destination + index as u32 * 2, unit);
+                            written += 2;
+                        }
+                        self.memory.w16(destination + written, 0);
                     }
-                    width.min(u32::from(u16::MAX))
-                };
-                self.native_scalar_results.insert(id, width);
+                }
+                self.native_scalar_results.insert(id, written);
                 self.set_result(id);
             }
             0x41a | 0x41b | 0x41c | 0x427 | 0x428 | 0x42a => {
@@ -1264,6 +1264,7 @@ impl NicaiMachine {
             (METHOD_KIND_PICTURE, _) => self.handle_picture_library_method(offset),
             (METHOD_KIND_ACTOR, _) => self.handle_actor_method(offset),
             (METHOD_KIND_TEXTBOX, _) => self.handle_textbox_method(offset),
+            (METHOD_KIND_MEMORY, 0x90) => self.draw_string_on_image_oldlib(),
             // memset(ptr, val, len) — mirrors h_old_memset, including its
             // 4 MiB length clamp.  Only the memory-manager table owns this
             // slot; a generic table with the same offset is left alone.
@@ -1887,6 +1888,10 @@ impl NicaiMachine {
         }
         self.memory
             .w32(info + 0xb0, SERVICE_BASE + TABLE_STRIDE * 3 + 44 * 4);
+        self.memory
+            .w32(info + 0x160, SERVICE_BASE + TABLE_STRIDE * 3 + 90 * 4);
+        self.memory
+            .w32(info + 0x17c, SERVICE_BASE + TABLE_STRIDE * 3 + 97 * 4);
         self.memory.w32(info + 0x240, NATIVE_BILLING_PAYNUM);
         self.memory.w32(info + 0x244, NATIVE_BILLING_REMAIN_DAY);
         // The old-library table exposes screen changes at this slot.

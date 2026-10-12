@@ -482,6 +482,22 @@ impl NicaiMachine {
         self.set_result(0);
     }
 
+    /// Native DrawStringEx: (image, text, len16, x, y, color888).
+    pub(crate) fn draw_string_on_image_oldlib(&mut self) {
+        let image = self.register(0);
+        let length = signed_coord(self.register(2));
+        let mut bytes = self.read_c_bytes(self.register(1), 4096);
+        if length >= 0 {
+            bytes.truncate(length as usize);
+        }
+        let rgb = self.argument(5);
+        let color =
+            ((((rgb >> 19) & 31) << 11) | (((rgb >> 10) & 63) << 5) | ((rgb >> 3) & 31)) as u16;
+        let y = signed_coord(self.argument(4));
+        self.draw_text_bytes_on_image(image, &bytes, signed_coord(self.register(3)), y, color);
+        self.set_result(0);
+    }
+
     /// OldLib_064: (owner, text, x, y, width, height, RGB565).
     pub(crate) fn draw_oldlib_text_rectangle(&mut self) {
         let text = self.read_c_bytes(self.register(1), 4096);

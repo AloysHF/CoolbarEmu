@@ -3764,7 +3764,39 @@ mod tests {
     }
 
     #[test]
-    fn native_text_measurements_return_scalars_without_corrupting_requests() {
+    fn native_resource_directory_slots_compare_names_and_advance_string_cursors() {
+        let mut machine = machine_from_minimal_archive();
+        machine.cpu.reg_set(Mode::User, 0, 0x8f);
+        machine.cpu.reg_set(Mode::User, 1, 0);
+        machine.handle_native_dispatch_service();
+        let info = machine.register(0);
+        let left = machine.allocate(6);
+        let right = machine.allocate(6);
+        machine.memory.write_bytes(left, b"a.gif\0");
+        machine.memory.write_bytes(right, b"b.gif\0");
+        let compare = machine.memory.r32(info + 0x160);
+        machine
+            .invoke_callback(compare, left, right, 0, 100)
+            .unwrap();
+        assert_eq!(machine.register(0), 0);
+        machine
+            .invoke_callback(compare, left, left, 0, 100)
+            .unwrap();
+        assert_eq!(machine.register(0), 1);
+        let stream = machine.allocate(8);
+        let cursor = machine.allocate(4);
+        machine.memory.write_bytes(stream, b"\x05a.gifZ");
+        let reader = machine.memory.r32(info + 0x17c);
+        machine
+            .invoke_callback(reader, stream, cursor, 0, 100)
+            .unwrap();
+        assert_eq!(machine.memory.r32(cursor), 6);
+        let value = machine.register(0);
+        assert_eq!(machine.read_c_bytes(value, 16), b"a.gif");
+    }
+
+    #[test]
+    fn native_text_conversion_and_measurements_preserve_requests() {
         fn dispatch(machine: &mut NicaiMachine, id: u32, argument: u32) {
             machine.cpu.reg_set(Mode::User, 0, id);
             machine.cpu.reg_set(Mode::User, 1, argument);
@@ -3793,19 +3825,26 @@ mod tests {
             let text = machine.allocate(16);
             machine.memory.write_bytes(text, b"A\xd6\xd0B\0ignored");
             let record = machine.allocate(16);
-            machine.memory.w32(record, 10);
+            let destination = machine.allocate(32);
+            machine.memory.w32(record, destination);
             machine.memory.w32(record + 4, text);
             machine.memory.w16(record + 8, 3);
             machine.memory.w16(record + 10, 0xa55a);
             machine.memory.w32(record + 12, 0x1234_5678);
             dispatch(&mut machine, 0x3f8, record);
-            assert_eq!(fetch(&mut machine, 0x3f8), 24);
+            assert_eq!(fetch(&mut machine, 0x3f8), 4);
+            assert_eq!(machine.memory.r16(destination), 0x41);
+            assert_eq!(machine.memory.r16(destination + 2), 0x4e2d);
+            assert_eq!(machine.memory.r16(destination + 4), 0);
+            assert_eq!(machine.read_c_bytes(text, 16), b"A\xd6\xd0B");
             assert_eq!(machine.memory.r16(record + 8), 3);
             assert_eq!(machine.memory.r16(record + 10), 0xa55a);
             assert_eq!(machine.memory.r32(record + 12), 0x1234_5678);
             machine.memory.w16(record + 8, 16);
             dispatch(&mut machine, 0x3f8, record);
-            assert_eq!(fetch(&mut machine, 0x3f8), 32);
+            assert_eq!(fetch(&mut machine, 0x3f8), 6);
+            assert_eq!(machine.memory.r16(destination + 4), 0x42);
+            assert_eq!(machine.memory.r16(destination + 6), 0);
 
             for (index, unit) in [0x41, 0x4e2d, 0x42, 0, 0x43].into_iter().enumerate() {
                 machine.memory.w16(text + index as u32 * 2, unit);
@@ -4275,6 +4314,51 @@ mod tests {
             assert_eq!(machine.memory.r32(pool), 0);
             assert_eq!(machine.memory.r32(pool + 4), 0);
             assert_eq!(machine.memory.r32(pool + 8), 0x1234_5678);
+        }
+    }
+
+    #[test]
+    fn native_bounded_text_draws_into_the_supplied_image() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let regions = machine.memory.regions.clone();
+            machine.memory = MachineMemory::new(big_endian);
+            machine.memory.regions = regions;
+            machine.wide_images = true;
+            let pixels = machine.allocate(32 * 24 * 2);
+            let image = machine.allocate(12);
+            machine.memory.w32(image, pixels);
+            machine.memory.w32(image + 4, 32);
+            machine.memory.w32(image + 8, 24);
+            let text = machine.allocate(3);
+            machine.memory.write_bytes(text, b"AB\0");
+            let stack = machine.allocate(8);
+            machine.set_user_register(reg::SP, stack);
+            machine.memory.w32(stack, 3);
+            machine.memory.w32(stack + 4, 0xff0000);
+            for (register, value) in [image, text, 1, 2].into_iter().enumerate() {
+                machine.set_user_register(register as u8, value);
+            }
+            machine.handle_method_stub(
+                NicaiMachine::method_stub_address(METHOD_KIND_MEMORY, 0x90) & !1,
+            );
+            let glyph = unifont::get_glyph('A').unwrap();
+            for y in 0..24 {
+                for x in 0..32 {
+                    let expected = if (2..10).contains(&x)
+                        && (3..19).contains(&y)
+                        && glyph.get_pixel((x - 2) as usize, (y - 3) as usize)
+                    {
+                        0xf800
+                    } else {
+                        0
+                    };
+                    assert_eq!(machine.memory.r16(pixels + (y * 32 + x) * 2), expected);
+                }
+            }
+            assert_eq!(machine.memory.r32(image), pixels);
+            assert_eq!(machine.memory.r32(image + 4), 32);
+            assert_eq!(machine.register(0), 0);
         }
     }
 

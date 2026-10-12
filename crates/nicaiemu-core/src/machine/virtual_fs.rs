@@ -94,7 +94,11 @@ impl VirtualFileSystem {
     /// Load a sidecar file that exists next to the CBE into the in-memory
     /// table.  Read-only: host bytes are never modified by guest writes.
     fn materialize_host_file(&self, path: &str) -> Option<Vec<u8>> {
-        let host = self.host_files.get(path)?;
+        // Firmware prefixes its working root; corpus sidecars start below it.
+        let host = self.host_files.get(path).or_else(|| {
+            let (_, relative) = path.split_once('/')?;
+            self.host_files.get(relative)
+        })?;
         std::fs::read(host).ok()
     }
 
@@ -227,7 +231,11 @@ impl VirtualFileSystem {
 
     pub(crate) fn file_exists(&self, path: &str) -> bool {
         normalize_path(path).is_some_and(|path| {
-            self.files.contains_key(&path) || self.host_files.contains_key(&path)
+            self.files.contains_key(&path)
+                || self.host_files.contains_key(&path)
+                || path
+                    .split_once('/')
+                    .is_some_and(|(_, relative)| self.host_files.contains_key(relative))
         })
     }
 
@@ -345,6 +353,31 @@ fn normalize_path(path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn firmware_root_sidecars_preserve_exact_paths_and_host_bytes() {
+        let dir = std::env::temp_dir().join(format!("nicaiemu-vfs-mount-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        std::fs::create_dir_all(dir.join("exact/assets")).unwrap();
+        std::fs::write(dir.join("assets/data.bin"), b"relative").unwrap();
+        std::fs::write(dir.join("exact/assets/data.bin"), b"exact").unwrap();
+        let mut fs = VirtualFileSystem::default();
+        fs.set_host_dir(Some(&dir));
+        assert!(fs.file_exists("firmware/assets/data.bin"));
+        let exact = fs.open("exact/assets/data.bin", "r", 0);
+        assert_eq!(fs.read(exact as u32, 64), Some(b"exact".to_vec()));
+        let mounted = fs.open("firmware/assets/data.bin", "r+", 0);
+        assert_eq!(fs.read(mounted as u32, 64), Some(b"relative".to_vec()));
+        assert_eq!(fs.seek(mounted as u32, 0, 0), Some(0));
+        assert_eq!(fs.write(mounted as u32, b"changed"), Some(7));
+        assert_eq!(
+            std::fs::read(dir.join("assets/data.bin")).unwrap(),
+            b"relative"
+        );
+        assert_eq!(fs.open("data.bin", "r", 0), -1);
+        assert_eq!(fs.open("../firmware/assets/data.bin", "r", 0), -1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn reads_writes_and_seeks_with_normalized_paths() {

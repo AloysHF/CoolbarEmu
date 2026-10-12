@@ -287,3 +287,12 @@ name. Map dimensions, image slots, column-major cells and signed placement are
 preserved in guest memory for the application's own rendering callbacks. Tile
 sizes come from map metadata; malformed or truncated maps are rejected. Additional
 scene layers, script callbacks and complete gameplay remain unverified.
+
+Native file-name conversion writes bounded GBK text as guest-endian UCS2 and
+returns its byte count. Resource-directory slots compare actual names and advance
+length-prefixed stream cursors. Native bounded RGB888 text drawing targets the
+supplied image, honoring byte length and register/stack coordinates.
+
+Read-only companion-resource lookup prefers an exact relative path, then permits
+one leading firmware-root directory to be omitted. It preserves the remaining
+path and rejects parent traversal; guest writes remain in virtual memory.

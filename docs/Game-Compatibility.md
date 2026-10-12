@@ -22,7 +22,7 @@ explicitly listed in the Coverage / limitation column.
 
 | Group | Files | Execution completed | Execution failed | Timed out |
 | --- | ---: | ---: | ---: | ---: |
-| A | 123 | 122 | 1 | 0 |
+| A | 123 | 123 | 0 | 0 |
 | B | 74 | 74 | 0 | 0 |
 | C | 48 | 48 | 0 | 0 |
 
@@ -31,6 +31,8 @@ Landlord round, War Chess's menu/help/purchase panels, Westward Journey's title
 menu, the QCIF Ebook bookshelf, and Love Assistant V10 list menus and article
 selection/back navigation, plus IM login rendering and field-focus navigation.
 Fish Classic title/menu and help navigation are also checked.
+Zombie Master (recommended variant) title/menu, touch selection, help text and
+return navigation are checked with its supplied companion resources.
 Variant-specific coverage is listed below.
 Fifteen embedded-program variants restore normal title/menu rendering and basic
 selection through 2,000-frame input checks. Active but blank/loading variants
@@ -60,7 +62,7 @@ not provide the original server's content or a real carrier payment service.
 | 6 | `A/三国志V101.CBE` | 240×320 | <img src="images/A/三国志V101.png" width="120" alt="三国志V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 7 | `A/俄罗斯方块(免费).CBE` | 240×320 | <img src="images/A/俄罗斯方块(免费).png" width="120" alt="俄罗斯方块(免费) idle frame"> | Not assessed | Ready | Title/menu rendering and basic selection checked for 2,000 frames; complete gameplay unverified |
 | 8 | `A/傲气雄鹰V101.CBE` | 240×320 | <img src="images/A/傲气雄鹰V101.png" width="120" alt="傲气雄鹰V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 9 | `A/僵尸先生(强推).CBE` | 240×400 | <img src="images/A/僵尸先生(强推).png" width="120" alt="僵尸先生(强推) idle frame"> | Not assessed | Faulted | Guest startup exceeds the instruction limit; blank frame |
+| 9 | `A/僵尸先生(强推).CBE` | 320×240 | <img src="images/A/僵尸先生(强推).png" width="120" alt="僵尸先生(强推) idle frame"> | No known requirement | Ready | Title/menu, touch selection, help text and return verified for 2,000 frames with supplied companion resources; CBE-only installation and complete gameplay unverified |
 | 10 | `A/僵尸先生(新品)V10.CBE` | 240×320 | <img src="images/A/僵尸先生(新品)V10.png" width="120" alt="僵尸先生(新品)V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 11 | `A/僵尸先生V101.CBE` | 240×320 | <img src="images/A/僵尸先生V101.png" width="120" alt="僵尸先生V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 12 | `A/动感保龄球.CBE` | 240×320 | <img src="images/A/动感保龄球.png" width="120" alt="动感保龄球 idle frame"> | Not assessed | Ready | Title/menu rendering and basic selection checked for 2,000 frames; complete gameplay unverified |
@@ -87,7 +89,7 @@ not provide the original server's content or a real carrier payment service.
 | 33 | `A/大唐双龙(新品)V101.CBE` | 240×320 | <img src="images/A/大唐双龙(新品)V101.png" width="120" alt="大唐双龙(新品)V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 34 | `A/大话西游(新品).CBE` | 240×400 | <img src="images/A/大话西游(新品).png" width="120" alt="大话西游(新品) idle frame"> | Not assessed | Ready | Background/menu and input checked; later animation/content incomplete |
 | 35 | `A/大话西游V10.CBE` | 240×320 | <img src="images/A/大话西游V10.png" width="120" alt="大话西游V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 36 | `A/太空堡垒(新品).CBE` | 240×320 | <img src="images/A/太空堡垒(新品).png" width="120" alt="太空堡垒(新品) idle frame"> | Not assessed | Ready | Partial menu/help renders; missing title and menu labels, startup not ready |
+| 36 | `A/太空堡垒(新品).CBE` | 240×320 | <img src="images/A/太空堡垒(新品).png" width="120" alt="太空堡垒(新品) idle frame"> | Not assessed | Ready | Title/menu labels render; interaction and gameplay unverified |
 | 37 | `A/太空堡垒V10.CBE` | 240×320 | <img src="images/A/太空堡垒V10.png" width="120" alt="太空堡垒V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 38 | `A/封神演义(新品).CBE` | 240×320 | <img src="images/A/封神演义(新品).png" width="120" alt="封神演义(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 39 | `A/封神演义V10.CBE` | 240×320 | <img src="images/A/封神演义V10.png" width="120" alt="封神演义V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
@@ -120,7 +122,7 @@ not provide the original server's content or a real carrier payment service.
 | 66 | `A/法老祖玛V10.CBE` | 240×400 | <img src="images/A/法老祖玛V10.png" width="120" alt="法老祖玛V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 67 | `A/漂亮小护士(新品).CBE` | 240×320 | <img src="images/A/漂亮小护士(新品).png" width="120" alt="漂亮小护士(新品) idle frame"> | Not assessed | Ready | Title/menu restored; selected continuation still fails during loading |
 | 68 | `A/漂亮小护士V10.CBE` | 240×320 | <img src="images/A/漂亮小护士V10.png" width="120" alt="漂亮小护士V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 69 | `A/漫画大王(新品).CBE` | 240×400 | <img src="images/A/漫画大王(新品).png" width="120" alt="漫画大王(新品) idle frame"><br>Blank frame | Not assessed | Ready | Blank startup; basic functionality unavailable |
+| 69 | `A/漫画大王(新品).CBE` | 240×400 | <img src="images/A/漫画大王(新品).png" width="120" alt="漫画大王(新品) idle frame"> | Not assessed | Ready | Title text renders; comic content and basic functionality unverified |
 | 70 | `A/炸弹人(新品).CBE` | 240×320 | <img src="images/A/炸弹人(新品).png" width="120" alt="炸弹人(新品) idle frame"> | Not assessed | Ready | Title/menu rendering and basic selection checked for 2,000 frames; complete gameplay unverified |
 | 71 | `A/热辣美图(新品).CBE` | 240×400 | <img src="images/A/热辣美图(新品).png" width="120" alt="热辣美图(新品) idle frame"> | Not assessed | Ready | Original startup fault removed; blank frame still prevents usable startup |
 | 72 | `A/爱之征途V101.CBE` | 240×320 | <img src="images/A/爱之征途V101.png" width="120" alt="爱之征途V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
