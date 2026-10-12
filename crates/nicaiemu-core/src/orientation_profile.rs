@@ -47,6 +47,7 @@ const BUILTIN_PROFILE: &[(u32, u64)] = &[
     (0x145C46B4, 1016330), // 小鸟愤怒冬季版
     (0x5E8B5904, 319424),  // 幸运扑克机
     (0x7AF01616, 310229),  // Resident Evil V10
+    (0x20845BF0, 376402),  // Resident Evil new variant
     (0x817C11BE, 249023),  // Zombie
     (0xECCDF7C3, 493544),  // Zombie Master variant
 ];
