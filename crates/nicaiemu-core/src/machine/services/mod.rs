@@ -9,6 +9,7 @@ mod game;
 mod memory;
 pub(crate) mod network;
 mod record;
+mod scene;
 mod screen;
 mod stdio;
 mod system;

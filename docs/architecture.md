@@ -281,3 +281,9 @@ Image-page initialization reads compact or standard resource packages from the
 specified guest-memory stream. Image IDs resolve within that selected package
 rather than the main archive, preserving each page's own background and skin
 assets. Explicit package image creation uses the same resource lookup path.
+
+Native scene initialization loads the first SCE2 background map from its resource
+name. Map dimensions, image slots, column-major cells and signed placement are
+preserved in guest memory for the application's own rendering callbacks. Tile
+sizes come from map metadata; malformed or truncated maps are rejected. Additional
+scene layers, script callbacks and complete gameplay remain unverified.

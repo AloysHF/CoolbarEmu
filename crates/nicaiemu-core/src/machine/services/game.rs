@@ -334,6 +334,7 @@ impl NicaiMachine {
                         }
                     }
                 }
+                self.initialize_scene_resources(scene);
                 self.set_result(scene);
             }
             79 if gameold_abi => {
