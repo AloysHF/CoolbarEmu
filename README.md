@@ -67,7 +67,7 @@ by supported games.
 - **Screenshot capture** — automated PNG screenshot generation
 - **Save states** — versioned, checksummed machine snapshots
   through the libretro API and the standalone `--save-state` / `--load-state`
-  options; format version 2 rejects version-1 states from older builds
+  options; format version 3 rejects version-1 and version-2 states from older builds
 - **Reset** — rebuilds the emulator runtime state from the loaded archive
   (standalone `R` key and libretro `retro_reset`)
 - **Guest memory exposure** — libretro exposes the guest heap and screen

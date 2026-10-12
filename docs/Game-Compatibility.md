@@ -16,7 +16,9 @@ RGB565 frame. Each callback permits 100,000,000 instructions; each file has a
 `Ready` means the machine remains active; `Halted` means guest execution stopped.
 A captured image may be a loading screen or prompt. Blank frames and guest
 assertion halts do not establish usable startup. Interaction is unverified unless
-explicitly listed in the Coverage / limitation column.
+explicitly listed in the Coverage / limitation column. The remaining Halted
+application is Bookstore B: its offline failure prompt and deliberate timed exit
+are verified; online reading remains unverified.
 
 ## Summary
 
@@ -193,7 +195,7 @@ not provide the original server's content or a real carrier payment service.
 | 9 | `B/割绳子冬季版.CBE` | 240×400 | <img src="images/B/割绳子冬季版.png" width="120" alt="割绳子冬季版 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 10 | `B/动感骰子.CBE` | 240×400 | <img src="images/B/动感骰子.png" width="120" alt="动感骰子 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 11 | `B/吸血鬼猎人.CBE` | 400×240 | <img src="images/B/吸血鬼猎人.png" width="120" alt="吸血鬼猎人 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
-| 12 | `B/在线书城.CBE` | 240×400 | <img src="images/B/在线书城.png" width="120" alt="在线书城 idle frame"> | Required | Halted | Idle frame captured; interaction/gameplay unverified |
+| 12 | `B/在线书城.CBE` | 240×400 | <img src="images/B/在线书城.png" width="120" alt="在线书城 offline error prompt"> | Required | Halted | Offline failure prompt and normal timed exit verified; scrolling/font differences remain, online reading unverified |
 | 13 | `B/在线音乐.CBE` | 240×400 | <img src="images/B/在线音乐.png" width="120" alt="在线音乐 idle frame"> | Required | Ready | Search controls, toolbars and add prompt render; prompt scrolls with current font metrics; online operation unverified |
 | 14 | `B/士兵突袭.CBE` | 400×240 | <img src="images/B/士兵突袭.png" width="120" alt="士兵突袭 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 15 | `B/大家来数钱.CBE` | 240×400 | <img src="images/B/大家来数钱.png" width="120" alt="大家来数钱 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
@@ -261,7 +263,7 @@ not provide the original server's content or a real carrier payment service.
 
 | # | Application / file | Display | Screenshot | Network | Execution | Coverage / limitation |
 | ---: | --- | --- | --- | --- | --- | --- |
-| 1 | `C/Almanac.CBE` | 176×220 | <img src="images/C/Almanac.png" width="120" alt="Almanac idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
+| 1 | `C/Almanac.CBE` | 176×220 | <img src="images/C/Almanac.png" width="120" alt="Almanac idle frame"> | Not assessed | Ready | Offline error panel renders; interaction and online content unverified |
 | 2 | `C/Apotheosize.CBE` | 176×220 | <img src="images/C/Apotheosize.png" width="120" alt="Apotheosize idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
 | 3 | `C/BombMan.CBE` | 176×220 | <img src="images/C/BombMan.png" width="120" alt="BombMan idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
 | 4 | `C/Bowling.CBE` | 176×220 | <img src="images/C/Bowling.png" width="120" alt="Bowling idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |

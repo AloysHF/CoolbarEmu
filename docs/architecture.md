@@ -170,8 +170,8 @@ export, and frontend geometry. The backing allocation retains capacity for a
 rows. Save states retain the active dimensions in the existing guest screen
 header, with the hint source retained in its reserved bytes; loading restores
 host geometry without adding serialized geometry fields. The machine snapshot
-uses format version 2 because this compatibility update adds other serialized
-machine fields; version-1 states are rejected before decoding. Presentation
+uses format version 3 because this compatibility update adds other serialized
+machine fields; version-1 and version-2 states are rejected before decoding. Presentation
 rotation is separate from LCD dimensions:
 native landscape surfaces are displayed directly in automatic mode, while
 profiled games with pre-rotated artwork use an additional rotation. Explicit
@@ -296,3 +296,8 @@ supplied image, honoring byte length and register/stack coordinates.
 Read-only companion-resource lookup prefers an exact relative path, then permits
 one leading firmware-root directory to be omitted. It preserves the remaining
 path and rejects parent traversal; guest writes remain in virtual memory.
+
+Screen registration through `vmAddScreenEx` retains its explicit callback context,
+including zero. Initialization, resource loading, logic and rendering share this
+context. Removing or registering the screen through the default API clears the
+override. Contexts are serialized with the screen stack in version-3 snapshots.

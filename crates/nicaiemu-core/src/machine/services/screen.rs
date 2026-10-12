@@ -182,6 +182,11 @@ impl NicaiMachine {
             4 | 5 => {
                 let screen = self.register(0);
                 if screen != 0 {
+                    if index == 5 {
+                        self.screen_contexts.insert(screen, self.register(1));
+                    } else {
+                        self.screen_contexts.remove(&screen);
+                    }
                     let previous = self.pending_screen;
                     if previous != 0 && previous != self.active_screen {
                         let parameter = self.screen_call_parameter(previous);
@@ -210,6 +215,9 @@ impl NicaiMachine {
                         true
                     })
                     .unwrap_or(false);
+                if !self.screen_stack.contains(&screen) {
+                    self.screen_contexts.remove(&screen);
+                }
                 if removed && (self.active_screen == screen || self.pending_screen == screen) {
                     self.pending_screen = self.screen_stack.last().copied().unwrap_or(0);
                     self.active_screen = self.pending_screen;

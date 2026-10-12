@@ -181,7 +181,7 @@ nicaiemu path/to/game.CBE --headless --frames 120
 nicaiemu path/to/game.CBE --screenshot /dev/null --screenshot-frames 120
 ```
 
-Save states use format version 2. Version-1 states from older builds are rejected
+Save states use format version 3. Version-1 and version-2 states from older builds are rejected
 because the machine payload layout changed; create new states after updating.
 
 ## Display Scaling

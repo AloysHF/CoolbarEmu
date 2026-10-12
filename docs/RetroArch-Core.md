@@ -38,7 +38,7 @@ frontend can display the core metadata and supported features.
 
 ## Supported Features
 
-Save states use format version 2. States from older builds using version 1 are
+Save states use format version 3. States from older builds using versions 1 or 2 are
 rejected because the machine payload layout changed; create new states after
 updating. Active LCD geometry and image transparency survive save/load.
 

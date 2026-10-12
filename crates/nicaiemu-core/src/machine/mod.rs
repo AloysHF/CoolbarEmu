@@ -751,6 +751,7 @@ pub struct NicaiMachine {
     pending_screen: u32,
     active_screen: u32,
     screen_stack: Vec<u32>,
+    screen_contexts: BTreeMap<u32, u32>,
     screen_initialized: bool,
     resource_load_pending: bool,
     resource_load_screen: u32,
@@ -918,6 +919,7 @@ impl NicaiMachine {
             pending_screen: 0,
             active_screen: 0,
             screen_stack: Vec::new(),
+            screen_contexts: BTreeMap::new(),
             screen_initialized: false,
             resource_load_pending: false,
             resource_load_screen: 0,
@@ -1647,6 +1649,9 @@ impl NicaiMachine {
     }
 
     fn screen_call_parameter(&self, screen: u32) -> u32 {
+        if let Some(&context) = self.screen_contexts.get(&screen) {
+            return context;
+        }
         if screen >= self.executable.data_address() {
             screen.saturating_sub(0x18)
         } else {
@@ -1937,6 +1942,7 @@ impl NicaiMachine {
             pending_screen: 0,
             active_screen: 0,
             screen_stack: Vec::new(),
+            screen_contexts: BTreeMap::new(),
             screen_initialized: false,
             resource_load_pending: false,
             resource_load_screen: 0,
@@ -4314,6 +4320,32 @@ mod tests {
             assert_eq!(machine.memory.r32(pool), 0);
             assert_eq!(machine.memory.r32(pool + 4), 0);
             assert_eq!(machine.memory.r32(pool + 8), 0x1234_5678);
+        }
+    }
+
+    #[test]
+    fn extended_screen_context_survives_save_load_and_is_removed_with_screen() {
+        for context in [0, 0x1234_5678] {
+            let mut machine = machine_from_minimal_archive();
+            let screen = machine.allocate(32);
+            let default = machine.screen_call_parameter(screen);
+            machine.set_user_register(0, screen);
+            machine.set_user_register(1, context);
+            machine.handle_screen_service(5);
+            assert_eq!(machine.screen_call_parameter(screen), context);
+            let mut snapshot = vec![0; crate::save_state::SERIALIZED_SIZE];
+            crate::save_state::encode_machine(&machine, 42, &mut snapshot).unwrap();
+            let mut restored = crate::save_state::decode_machine(&snapshot, 42).unwrap();
+            assert_eq!(restored.screen_call_parameter(screen), context);
+            restored.set_user_register(0, screen);
+            restored.handle_screen_service(6);
+            assert_eq!(restored.screen_call_parameter(screen), default);
+            restored.set_user_register(0, screen);
+            restored.set_user_register(1, context);
+            restored.handle_screen_service(5);
+            restored.set_user_register(0, screen);
+            restored.handle_screen_service(4);
+            assert_eq!(restored.screen_call_parameter(screen), default);
         }
     }
 
