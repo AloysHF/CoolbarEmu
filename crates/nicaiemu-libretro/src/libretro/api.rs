@@ -311,14 +311,6 @@ pub extern "C" fn retro_run() {
             apply_core_options(emulator);
         }
 
-        // A live orientation override swaps the presented geometry; tell the
-        // frontend so it resizes instead of stretching the old viewport.
-        let (display_width, display_height) = emulator.machine.display_size();
-        if (display_width, display_height) != emulator.presented_size {
-            notify_display_geometry(display_width, display_height);
-            emulator.presented_size = (display_width, display_height);
-        }
-
         callbacks::input_poll();
         update_phone_keys(emulator);
         update_pointer(emulator);
@@ -331,6 +323,13 @@ pub extern "C" fn retro_run() {
                     break;
                 }
             }
+        }
+
+        // Publish geometry after guest drawing can resolve the active LCD mode.
+        let (display_width, display_height) = emulator.machine.display_size();
+        if (display_width, display_height) != emulator.presented_size {
+            notify_display_geometry(display_width, display_height);
+            emulator.presented_size = (display_width, display_height);
         }
 
         // Present the last valid guest framebuffer even after a stop.

@@ -123,15 +123,27 @@ foreach ($game in $games) {
         default { $Frames }
     }
     $frameLabel = if ($captureFrames -eq 1) { "1 frame" } else { "$captureFrames frames" }
-    if ($usedNames.ContainsKey($safeName)) {
-        $usedNames[$safeName]++
-        $safeName = "$safeName-$($usedNames[$safeName])"
+    $imageDirectory = $OutputDirectory
+    $corpusRoot = Join-Path $repoRoot "tmp\nicai_game"
+    $group = ""
+    if ($game.FullName.StartsWith($corpusRoot + "\", [StringComparison]::OrdinalIgnoreCase)) {
+        $relativeGamePath = $game.FullName.Substring($corpusRoot.Length + 1)
+        $group = ($relativeGamePath -split '[/\\]')[0]
+    }
+    if ($group -in @("A", "B", "C")) {
+        $imageDirectory = Join-Path $OutputDirectory $group
+        New-Item -ItemType Directory -Force -Path $imageDirectory | Out-Null
+    }
+    $imageKey = Join-Path $imageDirectory $safeName
+    if ($usedNames.ContainsKey($imageKey)) {
+        $usedNames[$imageKey]++
+        $safeName = "$safeName-$($usedNames[$imageKey])"
     } else {
-        $usedNames[$safeName] = 1
+        $usedNames[$imageKey] = 1
     }
 
     $imageName = "$safeName.png"
-    $outPath = Join-Path $OutputDirectory $imageName
+    $outPath = Join-Path $imageDirectory $imageName
     Write-Host -NoNewline "  $baseName ($frameLabel) ... "
 
     # Prevent a previous capture from being reported as the current result.

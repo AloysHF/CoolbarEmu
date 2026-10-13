@@ -21,7 +21,7 @@ use standalone::scaler::{DisplayScaler, ScaleFilter};
 use standalone::window_backend::{create_window, WindowBackendArg};
 
 /// Resolve the initial window size as an integer multiple of the presented
-/// guest display (240x400 portrait or 400x240 landscape).
+/// active guest display.
 fn resolve_window_size(display_width: u32, display_height: u32, scale: u32) -> (usize, usize) {
     (
         (display_width * scale) as usize,
@@ -254,18 +254,20 @@ fn main() -> Result<()> {
     let (display_width, display_height) = machine.display_size();
     let (window_width, window_height) =
         resolve_window_size(display_width, display_height, cli.scale);
+    let mut presented_size = (display_width, display_height);
+    let window_options = WindowOptions {
+        resize: !cli.fullscreen,
+        borderless: cli.fullscreen,
+        scale_mode: minifb::ScaleMode::Stretch,
+        ..WindowOptions::default()
+    };
     info!("Presenting {display_width}x{display_height} in a {window_width}x{window_height} window ({}x scale)", cli.scale);
     let mut window = create_window(
         cli.window_backend,
         &title,
         window_width,
         window_height,
-        WindowOptions {
-            resize: !cli.fullscreen,
-            borderless: cli.fullscreen,
-            scale_mode: minifb::ScaleMode::Stretch,
-            ..WindowOptions::default()
-        },
+        window_options,
     )?;
     if cli.fullscreen {
         window.topmost(true);
@@ -316,6 +318,21 @@ fn main() -> Result<()> {
             audio.push(machine.take_audio_samples((AUDIO_SAMPLE_RATE / GUEST_FRAME_RATE) as usize));
         }
         let (display_width, display_height) = machine.display_size();
+        if (display_width, display_height) != presented_size {
+            // minifb has no resize API. Recreate only an automatically sized
+            // window, preserving its position and any manual size choice.
+            if !cli.fullscreen
+                && window.get_size()
+                    == resolve_window_size(presented_size.0, presented_size.1, cli.scale)
+            {
+                let position = window.get_position();
+                let (width, height) = resolve_window_size(display_width, display_height, cli.scale);
+                window = create_window(cli.window_backend, &title, width, height, window_options)?;
+                window.set_position(position.0, position.1);
+                window.set_target_fps(GUEST_FRAME_RATE as usize);
+            }
+            presented_size = (display_width, display_height);
+        }
         let mut pixels = machine.frame_pixels();
         if cli.show_gamepad {
             GamepadOverlay::draw(

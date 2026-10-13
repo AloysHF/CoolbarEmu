@@ -95,7 +95,8 @@ fn normalize_firmware_png(data: &[u8]) -> Result<Vec<u8>> {
             }
             let palette = &data[position + 8..position + 8 + source_length];
             for color in palette.as_chunks::<2>().0 {
-                let (red, green, blue) = rgb565_to_rgb888(u16::from_be_bytes([color[0], color[1]]));
+                // Firmware PNG palettes store RGB565 in little-endian byte order.
+                let (red, green, blue) = rgb565_to_rgb888(u16::from_le_bytes([color[0], color[1]]));
                 normalized.extend_from_slice(&[red, green, blue]);
             }
             let crc_start = normalized.len() - declared_length - 4;
@@ -254,8 +255,8 @@ mod tests {
         let mut encoded = b"\x89PNGGAME".to_vec();
         encoded.extend_from_slice(&6u32.to_be_bytes());
         encoded.extend_from_slice(b"PLTE");
-        encoded.extend_from_slice(&0xf800u16.to_be_bytes());
-        encoded.extend_from_slice(&0x07e0u16.to_be_bytes());
+        encoded.extend_from_slice(&0xf800u16.to_le_bytes());
+        encoded.extend_from_slice(&0x07e0u16.to_le_bytes());
         encoded.extend_from_slice(&[0; 4]);
         encoded.extend_from_slice(&0u32.to_be_bytes());
         encoded.extend_from_slice(b"IEND");
@@ -266,6 +267,47 @@ mod tests {
         assert!(normalized.starts_with(b"\x89PNG\r\n\x1a\n"));
         assert_eq!(&normalized[16..22], &[255, 0, 0, 0, 255, 0]);
         assert!(normalized.ends_with(&[0xae, 0x42, 0x60, 0x82]));
+    }
+
+    #[test]
+    fn decodes_firmware_png_colors_and_transparency() {
+        fn chunk(encoded: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+            encoded.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            encoded.extend_from_slice(kind);
+            encoded.extend_from_slice(data);
+            let start = encoded.len() - data.len() - 4;
+            encoded.extend_from_slice(&png_crc32(&encoded[start..]).to_be_bytes());
+        }
+
+        let mut encoded = b"\x89PNGGAME".to_vec();
+        chunk(
+            &mut encoded,
+            b"IHDR",
+            &[0, 0, 0, 6, 0, 0, 0, 1, 8, 3, 0, 0, 0],
+        );
+        encoded.extend_from_slice(&18u32.to_be_bytes());
+        encoded.extend_from_slice(b"PLTE");
+        for color in [0xf800u16, 0x07e0, 0x001f, 0xffff, 0x0000, 0x4b2d] {
+            encoded.extend_from_slice(&color.to_le_bytes());
+        }
+        encoded.extend_from_slice(&[0; 4]);
+        chunk(&mut encoded, b"tRNS", &[255, 255, 255, 255, 0, 255]);
+        chunk(
+            &mut encoded,
+            b"IDAT",
+            &[120, 156, 99, 96, 96, 100, 98, 102, 97, 5, 0, 0, 42, 0, 16],
+        );
+        chunk(&mut encoded, b"IEND", &[]);
+
+        let decoded = decode_image(&encoded).unwrap();
+        assert_eq!((decoded.width, decoded.height), (6, 1));
+        assert_eq!(
+            decoded.data,
+            [
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 74,
+                101, 107, 255,
+            ]
+        );
     }
 
     #[test]

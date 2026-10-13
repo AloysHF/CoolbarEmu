@@ -27,15 +27,22 @@ by supported games.
   resource lookup, image decoding
 - **ARM/Thumb CPU emulation** — little- and big-endian execution, interworking branches
 - **Service bridge** — firmware-style API for memory, resources, display,
-  input, text, fixed-point game math, and packed-rectangle collision detection
+  input, text, little-endian game-data reads, DF panel invalidation,
+  fixed-point game math, and
+  packed-rectangle collision detection
 - **Guest filesystem** — sandboxed in-memory files used by CBE installers and
   file-backed resource packages
-- **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction
-- **Text rendering** — GBK decoding with embedded Unicode bitmap font
-- **240×400 display** — native WQVGA resolution; standalone window opens at
-  1:1 by default and supports integer `--scale` (1–8)
+- **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction with format-specific RGB565 palette byte order
+- **Text rendering** — GBK and guest-endian UCS-2 strings, clipped and wrapped
+  text, and offscreen drawing with an embedded Unicode bitmap font
+- **Screen composition** — resource initialization, stacked backgrounds and
+  modal overlays, event propagation, and resuming screens without reinitialization
+- **Application LCD dimensions** — startup screen clips, clears, and background layout resolve
+  176×220, 240×320, 240×352, or 240×400 surfaces and their landscape variants;
+  240×400 is the fallback. Screenshots and frontends share the active geometry;
+  standalone supports integer `--scale` (1–8)
 - **Automatic landscape rotation** — games packaged for the original phone's
-  rotated landscape LCD are presented at 400×240 automatically, with a
+  rotated landscape LCD are rotated using the active surface dimensions, with a
   landscape default window matching the frame, a `--orientation` override
   for manual control, and a `--orientation-profile` file for titles outside the
   built-in profile
@@ -58,9 +65,9 @@ by supported games.
 - **Headless mode** — run N frames without a window for testing and batch
   processing (`--headless --frames`)
 - **Screenshot capture** — automated PNG screenshot generation
-- **Save states** — versioned, checksummed snapshots of the full machine state
+- **Save states** — versioned, checksummed machine snapshots
   through the libretro API and the standalone `--save-state` / `--load-state`
-  options
+  options; format version 3 rejects version-1 and version-2 states from older builds
 - **Reset** — rebuilds the emulator runtime state from the loaded archive
   (standalone `R` key and libretro `retro_reset`)
 - **Guest memory exposure** — libretro exposes the guest heap and screen
@@ -76,7 +83,7 @@ by supported games.
 - **Libretro integration** — playable libretro core with RGB888 video output,
   RetroPad input, content loading, save states, reset, and memory exposure
   (core options cover volume, touch input, auto BGM, screen orientation, and
-  debug logging); landscape titles are presented rotated at 400×240, matching
+  debug logging); landscape titles use the resolved LCD dimensions, matching
   the standalone frontend
 
 ## Usage
@@ -223,13 +230,8 @@ Detailed references by input mode:
 
 ## Game Compatibility
 
-| Status | Count |
-|--------|-------|
-| ✅ Pass | 74 |
-| ❌ Fail | 0 |
-| 🌐 Requires network | 17 |
-
-For the full game list with screenshots, see [Game Compatibility](docs/Game-Compatibility.md).
+See [Game Compatibility](docs/Game-Compatibility.md) for tested applications,
+screenshots, and known limitations.
 
 ## Testing
 

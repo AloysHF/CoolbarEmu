@@ -46,6 +46,10 @@ const BUILTIN_PROFILE: &[(u32, u64)] = &[
     (0x2CB6103B, 1074317), // 吸血鬼猎人
     (0x145C46B4, 1016330), // 小鸟愤怒冬季版
     (0x5E8B5904, 319424),  // 幸运扑克机
+    (0x7AF01616, 310229),  // Resident Evil V10
+    (0x20845BF0, 376402),  // Resident Evil new variant
+    (0x817C11BE, 249023),  // Zombie
+    (0xECCDF7C3, 493544),  // Zombie Master variant
 ];
 
 /// User-supplied entries registered by a frontend; they win over the built-in
@@ -165,6 +169,16 @@ mod tests {
             builtin_orientation(0xEE5A53AC, 341737),
             Some(DisplayOrientation::Landscape)
         );
+        assert_eq!(
+            builtin_orientation(0x7AF01616, 310229),
+            Some(DisplayOrientation::Landscape)
+        );
+        assert_eq!(
+            builtin_orientation(0x817C11BE, 249023),
+            Some(DisplayOrientation::Landscape)
+        );
+        assert_eq!(builtin_orientation(0x7AF01616, 310228), None);
+        assert_eq!(builtin_orientation(0x817C11BE, 249024), None);
         assert_eq!(builtin_orientation(0x282FE73D, 1), None);
         assert_eq!(builtin_orientation(0x1234_5678, 1143317), None);
     }

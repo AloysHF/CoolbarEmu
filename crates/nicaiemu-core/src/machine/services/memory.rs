@@ -114,16 +114,42 @@ impl NicaiMachine {
         }
     }
 
-    fn allocate_from_memory_block(&mut self, block: u32, requested: u32) -> u32 {
+    pub(crate) fn allocate_from_memory_block(&mut self, block: u32, requested: u32) -> u32 {
         let aligned = requested.saturating_add(3) & !3;
         let base = self.memory.r32(block);
         let offset = self.memory.r32(block + 4);
         let size = self.memory.r32(block + 8);
         if base != 0 && offset.saturating_add(aligned) <= size {
             self.memory.w32(block + 4, offset + aligned);
+            // Reset blocks reuse storage, but each allocation starts cleared.
+            if let Some(region) = self.memory.region_mut(base + offset, aligned as usize) {
+                let start = (base + offset - region.base) as usize;
+                region.data[start..start + aligned as usize].fill(0);
+            }
             base + offset
         } else {
             0
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_memory_block_returns_zeroed_allocations() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_memory_block(MEMORY_BLOCK_PTR, 64);
+        let pointer = machine.allocate_from_memory_block(MEMORY_BLOCK_PTR, 5);
+        machine.memory.write_bytes(pointer, &[0xff; 8]);
+        machine.memory.w32(MEMORY_BLOCK_PTR + 4, 0);
+        assert_eq!(
+            machine.allocate_from_memory_block(MEMORY_BLOCK_PTR, 5),
+            pointer
+        );
+        for offset in 0..8 {
+            assert_eq!(machine.memory.r8(pointer + offset), 0);
         }
     }
 }
