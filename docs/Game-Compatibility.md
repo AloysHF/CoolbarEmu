@@ -81,7 +81,7 @@ not provide the original server's content or a real carrier payment service.
 | 23 | `A/喜羊羊与灰太狼@新.CBE` | 240×320 | <img src="images/A/喜羊羊与灰太狼@新.png" width="120" alt="喜羊羊与灰太狼@新 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 24 | `A/喜羊羊与灰太狼V10.CBE` | 240×320 | <img src="images/A/喜羊羊与灰太狼V10.png" width="120" alt="喜羊羊与灰太狼V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 25 | `A/噗噜噗噜旋转棒V101.CBE` | 240×320 | <img src="images/A/噗噜噗噜旋转棒V101.png" width="120" alt="噗噜噗噜旋转棒V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 26 | `A/在线书城(新品).CBE` | 240×400 | <img src="images/A/在线书城(新品).png" width="120" alt="在线书城(新品) idle frame"><br>Blank frame | Not assessed | Ready | Blank startup; input still reaches an execution failure |
+| 26 | `A/在线书城(新品).CBE` | 240×320 | <img src="images/A/在线书城(新品).png" width="120" alt="在线书城(新品) idle frame"> | Required for online content | Ready | Title, toolbar and directional selection verified for 2,000 frames; online content and request completion unverified |
 | 27 | `A/在线书城V10.CBE` | 240×320 | <img src="images/A/在线书城V10.png" width="120" alt="在线书城V10 idle frame"> | Not assessed | Ready | Book background/icons and usage prompt render; font/layout differences remain; interaction unverified |
 | 28 | `A/坦克大战(新品).CBE` | 240×320 | <img src="images/A/坦克大战(新品).png" width="120" alt="坦克大战(新品) idle frame"> | Not assessed | Ready | Title/menu rendering and basic selection checked for 2,000 frames; complete gameplay unverified |
 | 29 | `A/坦克大战V10.CBE` | 240×320 | <img src="images/A/坦克大战V10.png" width="120" alt="坦克大战V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
@@ -126,7 +126,7 @@ not provide the original server's content or a real carrier payment service.
 | 68 | `A/漂亮小护士V10.CBE` | 240×320 | <img src="images/A/漂亮小护士V10.png" width="120" alt="漂亮小护士V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 69 | `A/漫画大王(新品).CBE` | 240×400 | <img src="images/A/漫画大王(新品).png" width="120" alt="漫画大王(新品) idle frame"> | Not assessed | Ready | Title text renders; comic content and basic functionality unverified |
 | 70 | `A/炸弹人(新品).CBE` | 240×320 | <img src="images/A/炸弹人(新品).png" width="120" alt="炸弹人(新品) idle frame"> | Not assessed | Ready | Title/menu rendering and basic selection checked for 2,000 frames; complete gameplay unverified |
-| 71 | `A/热辣美图(新品).CBE` | 240×400 | <img src="images/A/热辣美图(新品).png" width="120" alt="热辣美图(新品) idle frame"> | Not assessed | Ready | Original startup fault removed; blank frame still prevents usable startup |
+| 71 | `A/热辣美图(新品).CBE` | 240×400 | <img src="images/A/热辣美图(新品).png" width="120" alt="热辣美图(新品) idle frame"> | Not assessed | Ready | Title background renders; malformed usage prompt and content navigation remain incomplete |
 | 72 | `A/爱之征途V101.CBE` | 240×320 | <img src="images/A/爱之征途V101.png" width="120" alt="爱之征途V101 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 73 | `A/王牌伞兵(新品).CBE` | 240×320 | <img src="images/A/王牌伞兵(新品).png" width="120" alt="王牌伞兵(新品) idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 74 | `A/王牌伞兵V10.CBE` | 240×320 | <img src="images/A/王牌伞兵V10.png" width="120" alt="王牌伞兵V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |

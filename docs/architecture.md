@@ -301,3 +301,7 @@ Screen registration through `vmAddScreenEx` retains its explicit callback contex
 including zero. Initialization, resource loading, logic and rendering share this
 context. Removing or registering the screen through the default API clears the
 override. Contexts are serialized with the screen stack in version-3 snapshots.
+
+Native opaque and transparent image-blit slots use the shared LCD implementation.
+They preserve explicit offscreen targets, register-passed source coordinates,
+stack-passed size and destination coordinates, and transparency semantics.

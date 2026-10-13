@@ -1850,6 +1850,8 @@ impl NicaiMachine {
             );
         }
         for (offset, group, index) in [
+            (0x80, 4, 24),
+            (0x84, 4, 25),
             (0x114, 3, 71),
             (0x124, 3, 75),
             (0x128, 11, 4),

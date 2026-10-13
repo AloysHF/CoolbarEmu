@@ -4395,6 +4395,67 @@ mod tests {
     }
 
     #[test]
+    fn native_image_blits_preserve_destination_and_transparent_pixels() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let regions = machine.memory.regions.clone();
+            machine.memory = MachineMemory::new(big_endian);
+            machine.memory.regions = regions;
+            machine.set_user_register(0, 0x8f);
+            machine.set_user_register(1, 0);
+            machine.handle_native_dispatch_service();
+            let table = machine.register(0);
+            let source_pixels = machine.allocate(8);
+            let destination_pixels = machine.allocate(32);
+            let source = machine.allocate(12);
+            let destination = machine.allocate(12);
+            for (image, pixels, width) in [
+                (source, source_pixels, 4),
+                (destination, destination_pixels, 4),
+            ] {
+                machine.memory.w32(image, pixels);
+                machine.memory.w32(image + 4, width);
+                machine
+                    .memory
+                    .w32(image + 8, if image == source { 1 } else { 4 });
+            }
+            machine.memory.w16(source_pixels, 0xf800);
+            machine.memory.w16(source_pixels + 2, 0);
+            let stack = machine.allocate(16);
+            machine.set_user_register(reg::SP, stack);
+            for (index, value) in [2, 1, 1, 2].into_iter().enumerate() {
+                machine.memory.w32(stack + index as u32 * 4, value);
+            }
+            for (slot, transparent) in [(0x80, false), (0x84, true)] {
+                for pixel in 0..16 {
+                    machine.memory.w16(destination_pixels + pixel * 2, 0x07e0);
+                }
+                for (index, value) in [destination, source, 0, 0].into_iter().enumerate() {
+                    machine.set_user_register(index as u8, value);
+                }
+                let service = machine.memory.r32(table + slot);
+                machine
+                    .invoke_callback(service, destination, source, 0, 100)
+                    .unwrap();
+                for y in 0..4 {
+                    for x in 0..4 {
+                        let expected = match (x, y) {
+                            (1, 2) => 0xf800,
+                            (2, 2) if !transparent => 0,
+                            _ => 0x07e0,
+                        };
+                        assert_eq!(
+                            machine.memory.r16(destination_pixels + (y * 4 + x) * 2),
+                            expected
+                        );
+                    }
+                }
+                assert_eq!(machine.memory.r32(destination), destination_pixels);
+            }
+        }
+    }
+
+    #[test]
     fn fetched_gameold_table_binds_drawing_exports() {
         let mut machine = machine_from_minimal_archive();
         machine.initialize_screen();
