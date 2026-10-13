@@ -316,3 +316,7 @@ native load callback's state argument. Fixed window regions occupy 0x40 bytes;
 constructors initialize only their six method slots and preserve adjacent owner
 fields such as image IDs and picture-library references. Their contexts continue
 to use the existing version-3 snapshot layout.
+
+Startup backdrop extents may leave up to 32 pixels for a softkey strip and its
+padding when resolving a supported LCD mode. Larger startup drawing still cancels
+a smaller candidate; presentation orientation remains independent.

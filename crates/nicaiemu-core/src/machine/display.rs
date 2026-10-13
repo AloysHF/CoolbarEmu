@@ -88,7 +88,7 @@ impl NicaiMachine {
 
     /// Accumulate startup drawing extents; a later larger backdrop cancels a
     /// small splash image. Ignore glyph cells and vertical sprite strips; leave
-    /// up to one text row for an unused softkey band.
+    /// up to one softkey strip, including its padding.
     pub(super) fn observe_display_drawing(&mut self, x: i32, y: i32, width: i32, height: i32) {
         if self.frame_count >= 4
             || self.framebuffer_size() != (FRAME_WIDTH, FRAME_HEIGHT)
@@ -110,7 +110,7 @@ impl NicaiMachine {
         let Some((width, bottom)) = self.display_surface.drawing_bounds else {
             return;
         };
-        for height in bottom..=bottom.saturating_add(16) {
+        for height in bottom..=bottom.saturating_add(32) {
             if DisplaySurface::supports(width as u32, height as u32) {
                 self.observe_display_fill(0, 0, width, height);
                 break;
@@ -194,6 +194,24 @@ impl NicaiMachine {
 mod tests {
     use super::super::SCREEN_IMAGE_STRUCT;
     use super::*;
+
+    #[test]
+    fn startup_backdrop_leaves_room_for_a_softkey_strip() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        machine.observe_display_drawing(0, 0, 240, 294);
+        machine.frame_count = 3;
+        machine.finish_display_discovery();
+        assert_eq!(machine.framebuffer_size(), (240, 320));
+
+        let mut larger = NicaiMachine::new_blank_for_tests();
+        larger.initialize_screen();
+        larger.observe_display_drawing(0, 0, 240, 294);
+        larger.observe_display_drawing(0, 0, 240, 400);
+        larger.frame_count = 3;
+        larger.finish_display_discovery();
+        assert_eq!(larger.framebuffer_size(), (240, 400));
+    }
 
     #[test]
     fn startup_backdrops_resolve_geometry_without_cropping_a_later_splash() {
