@@ -276,7 +276,11 @@ impl NicaiMachine {
                 );
             }
             60 => {
-                self.pending_screen = self.register(0);
+                let screen = self.register(0);
+                if screen != 0 && self.uses_fixed_manager_abi() {
+                    self.screen_contexts.insert(screen, 0);
+                }
+                self.pending_screen = screen;
                 self.memory.w32(SCREEN_IS_IN_QUIT, 0);
                 self.set_result(SCREEN_IS_IN_QUIT);
             }
@@ -734,7 +738,8 @@ impl NicaiMachine {
         self.memory.w32(object + 28, second_bounds);
         self.memory.w32(object + 32, 0);
         self.memory.w32(object + 36, 0);
-        for method in 0..8 {
+        // Fixed regions end at +0x40; neighboring fields belong to the owner.
+        for method in 0..6 {
             self.memory.w32(
                 object + 0x28 + method * 4,
                 super::super::FIXED_GAMEOLD_REGION_SERVICE + method * 4,

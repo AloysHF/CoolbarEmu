@@ -310,3 +310,9 @@ Legacy rectangle interfaces use register coordinates and stack-passed height and
 RGB565 color. Native and legacy manager paths share the same LCD painter, including
 startup canvas discovery. Packed native Unicode requests render guest-endian UCS2
 with their explicit byte length, signed position and RGB565 color.
+
+Fixed-manager screen changes register a zero callback context, preserving the
+native load callback's state argument. Fixed window regions occupy 0x40 bytes;
+constructors initialize only their six method slots and preserve adjacent owner
+fields such as image IDs and picture-library references. Their contexts continue
+to use the existing version-3 snapshot layout.

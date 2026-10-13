@@ -4513,6 +4513,56 @@ mod tests {
     }
 
     #[test]
+    fn fixed_regions_preserve_neighboring_control_fields() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let regions = machine.memory.regions.clone();
+            machine.memory = MachineMemory::new(big_endian);
+            machine.memory.regions = regions;
+            let object = machine.allocate(0x48);
+            machine.memory.w32(object + 0x40, 0x001d_0021);
+            machine.memory.w32(object + 0x44, 0x0031_001e);
+            let stack = machine.allocate(8);
+            machine.memory.w32(stack, 0x5678);
+            machine.memory.w32(stack + 4, 2);
+            machine.set_user_register(reg::SP, stack);
+            for (index, value) in [object, 0, 0x00f0_0140, 0x1234].into_iter().enumerate() {
+                machine.set_user_register(index as u8, value);
+            }
+            machine.initialize_fixed_gameold_region();
+            assert_eq!(machine.memory.r32(object + 0x40), 0x001d_0021);
+            assert_eq!(machine.memory.r32(object + 0x44), 0x0031_001e);
+            assert_eq!(machine.memory.r32(object + 4), 1);
+            assert_eq!(machine.memory.r32(object + 16), 0x1234);
+            assert_eq!(machine.memory.r32(object + 20), 0x5678);
+        }
+    }
+
+    #[test]
+    fn fixed_screen_change_passes_zero_to_the_load_callback() {
+        let mut machine = machine_from_minimal_archive();
+        machine.executable.big_endian = true;
+        machine.executable.preferred_code_address = 1;
+        machine.executable.code_image_size = machine.executable.code_size as u32 + 1;
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        let screen = machine.allocate(32);
+        let output = machine.allocate(4);
+        machine.memory.w32(output, 0xdead_beef);
+        let callback = machine.allocate(12);
+        for (index, instruction) in [0x4901, 0x6008, 0x4770, 0x46c0].into_iter().enumerate() {
+            machine.memory.w16(callback + index as u32 * 2, instruction);
+        }
+        machine.memory.w32(callback + 8, output);
+        machine.set_user_register(0, screen);
+        machine.handle_game_service(60);
+        let parameter = machine.screen_call_parameter(screen);
+        machine
+            .invoke_callback(callback | 1, parameter, 0, 0, 100)
+            .unwrap();
+        assert_eq!(machine.memory.r32(output), 0);
+    }
+
+    #[test]
     fn legacy_rectangles_use_stack_dimensions_and_colors() {
         for kind in [METHOD_KIND_MEMORY, METHOD_KIND_GAMEOLD] {
             for outline in [false, true] {
