@@ -305,3 +305,8 @@ override. Contexts are serialized with the screen stack in version-3 snapshots.
 Native opaque and transparent image-blit slots use the shared LCD implementation.
 They preserve explicit offscreen targets, register-passed source coordinates,
 stack-passed size and destination coordinates, and transparency semantics.
+
+Legacy rectangle interfaces use register coordinates and stack-passed height and
+RGB565 color. Native and legacy manager paths share the same LCD painter, including
+startup canvas discovery. Packed native Unicode requests render guest-endian UCS2
+with their explicit byte length, signed position and RGB565 color.

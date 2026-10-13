@@ -181,6 +181,9 @@ impl NicaiMachine {
                 // RefresScreen: the framebuffer is committed at frame end.
                 self.set_result(0);
             }
+            21 | 22 if gameold_abi || self.uses_native_dispatch_abi() => {
+                self.draw_oldlib_rectangle(index == 21);
+            }
             25 if gameold_abi => self.draw_oldlib_text_rectangle(),
             24 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(21),
             32 | 33 if self.uses_fixed_manager_abi() => self.handle_game_lcd_service(index - 5),
@@ -892,6 +895,10 @@ impl NicaiMachine {
                 self.native_scalar_results.insert(id, length);
                 self.set_result(id);
             }
+            0x454 => {
+                self.draw_native_ucs2_text(argument);
+                self.set_result(0);
+            }
             0x453 => {
                 let mut width = 0u32;
                 if argument != 0 {
@@ -1252,8 +1259,6 @@ impl NicaiMachine {
         let r1 = self.register(1);
         let r2 = self.register(2);
         let r3 = self.register(3);
-        let r4 = self.register(4);
-        let r5 = self.register(5);
         if std::env::var_os("CBE_TRACE").is_some() {
             eprintln!(
                 "[mstub] kind={kind} off=0x{offset:X} r0=0x{r0:08X} r1=0x{r1:08X} r2=0x{r2:08X}"
@@ -1417,30 +1422,12 @@ impl NicaiMachine {
             (METHOD_KIND_GAMEOLD, 0x0104) => self.set_result(u32::from(self.pointer.dragging())),
             (METHOD_KIND_GAMEOLD, 0x0108) => self.set_result(self.pointer.x as u32),
             (METHOD_KIND_GAMEOLD, 0x010c) => self.set_result(self.pointer.y as u32),
-            // --- drawing (vmspec F_0) ---
-            // FillRect(x, y, w, h, color) — args in r1..r5.
-            (METHOD_KIND_GAMEOLD, 0x0058) => {
-                let x = r1 as i16 as i32;
-                let y = r2 as i16 as i32;
-                let w = r3 as i16 as i32;
-                let h = r4 as i16 as i32;
-                self.fill_screen_rect(x, y, w, h, r5 as u16);
-                self.set_result(0);
+            // Legacy rectangle calls pass height and RGB565 on the stack.
+            (METHOD_KIND_GAMEOLD | METHOD_KIND_MEMORY, 0x0054) => {
+                self.draw_oldlib_rectangle(true);
             }
-            // DrawRect(x, y, w, h, color) — outline only.
-            (METHOD_KIND_GAMEOLD, 0x0054) => {
-                let x = r1 as i16 as i32;
-                let y = r2 as i16 as i32;
-                let w = r3 as i16 as i32;
-                let h = r4 as i16 as i32;
-                let c = r5 as u16;
-                if w > 0 && h > 0 {
-                    self.fill_screen_rect(x, y, w, 1, c);
-                    self.fill_screen_rect(x, y + h - 1, w, 1, c);
-                    self.fill_screen_rect(x, y, 1, h, c);
-                    self.fill_screen_rect(x + w - 1, y, 1, h, c);
-                }
-                self.set_result(0);
+            (METHOD_KIND_GAMEOLD | METHOD_KIND_MEMORY, 0x0058) => {
+                self.draw_oldlib_rectangle(false);
             }
             // --- DF resource accessors ---
             (METHOD_KIND_GAMEOLD, 0x014c) => {
@@ -1881,8 +1868,6 @@ impl NicaiMachine {
             .w32(info + 0xa0, SERVICE_BASE + TABLE_STRIDE * 2 + 14 * 4);
         self.memory
             .w32(info + 0x24, SERVICE_BASE + TABLE_STRIDE * 3 + 9 * 4);
-        self.memory
-            .w32(info + 0x58, SERVICE_BASE + TABLE_STRIDE * 4 + 19 * 4);
         self.populate_table(info + 0x20c, SERVICE_BASE + TABLE_STRIDE * 6, 22);
         for (offset, index) in [(0xa4, 2), (0xa8, 1), (0xac, 0), (0xb4, 4), (0xb8, 5)] {
             self.memory

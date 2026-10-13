@@ -4456,6 +4456,99 @@ mod tests {
     }
 
     #[test]
+    fn native_unicode_text_honors_length_position_color_and_byte_order() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let regions = machine.memory.regions.clone();
+            machine.memory = MachineMemory::new(big_endian);
+            machine.memory.regions = regions;
+            machine.initialize_screen();
+            let text = machine.allocate(8);
+            for (index, unit) in ['A' as u16, '中' as u16, 'B' as u16, 0]
+                .into_iter()
+                .enumerate()
+            {
+                machine.memory.w16(text + index as u32 * 2, unit);
+            }
+            let request = machine.allocate(28);
+            machine.memory.w32(request, 0x1234_5678);
+            machine.memory.w16(request + 4, 7);
+            machine.memory.w16(request + 6, 9);
+            machine.memory.w32(request + 8, text);
+            machine.memory.w16(request + 12, 4);
+            machine.memory.w16(request + 14, 0xf800);
+            machine.memory.w32(request + 20, 2);
+            machine.memory.w8(request + 24, 1);
+            let original: Vec<_> = (0..28).map(|i| machine.memory.r8(request + i)).collect();
+            machine.set_user_register(0, 0x454);
+            machine.set_user_register(1, request);
+            machine.handle_native_dispatch_service();
+            let latin = unifont::get_glyph('A').unwrap();
+            let chinese = unifont::get_glyph('中').unwrap();
+            for y in 0..30 {
+                for x in 0..40 {
+                    let set = if (9..25).contains(&y) && (7..31).contains(&x) {
+                        if x < 15 {
+                            latin.get_pixel((x - 7) as usize, (y - 9) as usize)
+                        } else {
+                            chinese.get_pixel((x - 15) as usize, (y - 9) as usize)
+                        }
+                    } else {
+                        false
+                    };
+                    assert_eq!(
+                        machine.memory.r16(SCREEN_IMAGE + (y * 240 + x) * 2),
+                        if set { 0xf800 } else { 0 }
+                    );
+                }
+            }
+            assert_eq!(
+                (0..28)
+                    .map(|i| machine.memory.r8(request + i))
+                    .collect::<Vec<_>>(),
+                original
+            );
+            assert_eq!(machine.register(0), 0);
+        }
+    }
+
+    #[test]
+    fn legacy_rectangles_use_stack_dimensions_and_colors() {
+        for kind in [METHOD_KIND_MEMORY, METHOD_KIND_GAMEOLD] {
+            for outline in [false, true] {
+                let mut machine = machine_from_minimal_archive();
+                machine.initialize_screen();
+                let stack = machine.allocate(8);
+                machine.memory.w32(stack, 3);
+                machine.memory.w32(stack + 4, 0xf800);
+                machine.set_user_register(reg::SP, stack);
+                for (index, value) in [0xffff_ffff, 2, 3, 4, 100, 0x001f].into_iter().enumerate() {
+                    machine.set_user_register(index as u8, value);
+                }
+                let slot = if outline { 0x54 } else { 0x58 };
+                machine.handle_method_stub(NicaiMachine::method_stub_address(kind, slot) & !1);
+                for y in 0..10 {
+                    for x in 0..10 {
+                        let inside = (2..6).contains(&x) && (3..6).contains(&y);
+                        let edge = x == 2 || x == 5 || y == 3 || y == 5;
+                        assert_eq!(
+                            machine.memory.r16(SCREEN_IMAGE + (y * 240 + x) * 2),
+                            if inside && (!outline || edge) {
+                                0xf800
+                            } else {
+                                0
+                            }
+                        );
+                    }
+                }
+                assert_eq!(machine.register(4), 100);
+                assert_eq!(machine.register(5), 0x001f);
+                assert_eq!(machine.register(0), 0);
+            }
+        }
+    }
+
+    #[test]
     fn fetched_gameold_table_binds_drawing_exports() {
         let mut machine = machine_from_minimal_archive();
         machine.initialize_screen();

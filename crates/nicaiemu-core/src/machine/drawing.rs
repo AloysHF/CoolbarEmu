@@ -482,6 +482,53 @@ impl NicaiMachine {
         self.set_result(0);
     }
 
+    /// Legacy rectangles ignore the graphics handle and target the LCD.
+    pub(crate) fn draw_oldlib_rectangle(&mut self, outline: bool) {
+        let x = signed_coord(self.register(1));
+        let y = signed_coord(self.register(2));
+        let width = signed_coord(self.register(3));
+        let height = signed_coord(self.argument(4));
+        let color = self.argument(5) as u16;
+        self.paint_rect(
+            x,
+            y,
+            width,
+            height,
+            color,
+            outline,
+            self.display_surface.width as i32,
+            self.display_surface.height as i32,
+            SCREEN_IMAGE,
+        );
+        self.set_result(0);
+    }
+
+    /// Native Unicode text requests carry coordinates and byte length in a record.
+    pub(crate) fn draw_native_ucs2_text(&mut self, argument: u32) {
+        if argument == 0 {
+            return;
+        }
+        let source = self.memory.r32(argument + 8);
+        let count = u32::from(self.memory.r16(argument + 12)) / 2;
+        if source == 0 {
+            return;
+        }
+        let mut units = Vec::new();
+        for index in 0..count {
+            let unit = self.memory.r16(source + index * 2);
+            if unit == 0 {
+                break;
+            }
+            units.push(unit);
+        }
+        let text = String::from_utf16_lossy(&units);
+        let bytes = GBK.encode(&text).0;
+        let x = self.memory.r16(argument + 4) as i16 as i32;
+        let y = self.memory.r16(argument + 6) as i16 as i32;
+        let color = self.memory.r16(argument + 14);
+        self.draw_text_bytes_on_image(SCREEN_IMAGE_STRUCT, &bytes, x, y, color);
+    }
+
     /// Native DrawStringEx: (image, text, len16, x, y, color888).
     pub(crate) fn draw_string_on_image_oldlib(&mut self) {
         let image = self.register(0);
