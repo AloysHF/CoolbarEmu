@@ -286,6 +286,11 @@ Native scene initialization loads the first SCE2 background map from its resourc
 name. Map dimensions, image slots, column-major cells and signed placement are
 preserved in guest memory. The embedded scene window draws the first map's tiles
 within its packed viewport, using the real tileset indices and signed placement.
+Its add-child method uses the shared window hierarchy. Each full background
+repaint invalidates the covered foreground windows, then runs their guest
+painters through the shared dirty-rectangle traversal. This preserves child
+and sibling overlays across frames; nested painter errors propagate to the
+caller after restoring the CPU context.
 Horizontal and vertical movement queries return signed distances, checking the
 map bounds and the directional edge bits on both source and destination cells.
 Both native scene layouts bind the movement pair: offsets +0x678/+0x67c and

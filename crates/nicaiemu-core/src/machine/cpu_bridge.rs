@@ -324,6 +324,10 @@ impl NicaiMachine {
             let relative = address - METHOD_STUB_BASE;
             if relative / METHOD_STUB_STRIDE == super::METHOD_KIND_PANEL {
                 self.handle_panel_service(relative % METHOD_STUB_STRIDE)?;
+            } else if relative / METHOD_STUB_STRIDE == super::METHOD_KIND_GAMEOLD
+                && relative % METHOD_STUB_STRIDE == 0x660
+            {
+                self.repaint_scene_window(self.register(0))?;
             } else {
                 self.handle_method_stub(address);
             }

@@ -330,10 +330,12 @@ impl NicaiMachine {
                 if scene != 0 {
                     for off in (0x650u32..=0x664).step_by(4) {
                         if self.memory.r32(scene + off) == 0 {
-                            self.memory.w32(
-                                scene + off,
-                                Self::method_stub_address(METHOD_KIND_GAMEOLD, off),
-                            );
+                            let method = if off == 0x650 {
+                                Self::method_stub_address(METHOD_KIND_PANEL, 0x28)
+                            } else {
+                                Self::method_stub_address(METHOD_KIND_GAMEOLD, off)
+                            };
+                            self.memory.w32(scene + off, method);
                         }
                     }
                 }
@@ -670,7 +672,7 @@ impl NicaiMachine {
         Ok(())
     }
 
-    fn repaint_fixed_gameold_windows(&mut self, root: u32) -> anyhow::Result<()> {
+    pub(super) fn repaint_fixed_gameold_windows(&mut self, root: u32) -> anyhow::Result<()> {
         let mut pending = vec![root];
         let mut visited = std::collections::BTreeSet::new();
         while let Some(object) = pending.pop() {
@@ -1265,7 +1267,6 @@ impl NicaiMachine {
             );
         }
         match (kind, offset) {
-            (METHOD_KIND_GAMEOLD, 0x660) => self.render_scene_window(r0),
             (METHOD_KIND_GAMEOLD, 0x680 | 0x684) => self.query_scene_movement(offset),
             (METHOD_KIND_GAMEOLD, 0x130) => self.initialize_record(),
             (METHOD_KIND_PICTURE, _) => self.handle_picture_library_method(offset),
