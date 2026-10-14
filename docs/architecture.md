@@ -284,9 +284,18 @@ assets. Explicit package image creation uses the same resource lookup path.
 
 Native scene initialization loads the first SCE2 background map from its resource
 name. Map dimensions, image slots, column-major cells and signed placement are
-preserved in guest memory for the application's own rendering callbacks. Tile
-sizes come from map metadata; malformed or truncated maps are rejected. Additional
-scene layers, script callbacks and complete gameplay remain unverified.
+preserved in guest memory. The embedded scene window draws the first map's tiles
+within its packed viewport, using the real tileset indices and signed placement.
+Horizontal and vertical movement queries return signed distances, checking the
+map bounds and the directional edge bits on both source and destination cells.
+Both native scene layouts bind the movement pair: offsets +0x678/+0x67c and
++0x680/+0x684 use the same horizontal/vertical query implementations.
+Tile sizes come from map metadata; malformed or truncated maps are rejected.
+For scenes with empty built-in actor tables, the application's trailing-data
+callback runs synchronously with the decoded stream and its byte cursor. The
+caller CPU is preserved and callback errors propagate through the service bridge.
+Additional scene layers, built-in actor tables and complete gameplay remain
+unverified.
 
 Native file-name conversion writes bounded GBK text as guest-endian UCS2 and
 returns its byte count. Resource-directory slots compare actual names and advance

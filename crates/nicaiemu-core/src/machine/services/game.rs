@@ -324,15 +324,11 @@ impl NicaiMachine {
             }
             76 if self.uses_fixed_manager_abi() => self.initialize_record(),
             77 if self.uses_fixed_manager_abi() => {
-                // initDFScene: the scene object keeps a 24-byte state at
-                // +0x628 and a method table at +0x640; the native parser
-                // invokes the table entry at +0x660 every tick after the
-                // app main returns.  The generic 0x100-byte fill never
-                // reaches it, so the slot stayed null and the parser
-                // branched to 0.
+                // The embedded scene window starts at +0x628; its methods
+                // start at +0x650, after the packed viewport bounds.
                 let scene = self.register(0);
                 if scene != 0 {
-                    for off in (0x640u32..=0x664).step_by(4) {
+                    for off in (0x650u32..=0x664).step_by(4) {
                         if self.memory.r32(scene + off) == 0 {
                             self.memory.w32(
                                 scene + off,
@@ -341,7 +337,6 @@ impl NicaiMachine {
                         }
                     }
                 }
-                self.initialize_scene_resources(scene);
                 self.set_result(scene);
             }
             79 if gameold_abi => {
@@ -1270,6 +1265,8 @@ impl NicaiMachine {
             );
         }
         match (kind, offset) {
+            (METHOD_KIND_GAMEOLD, 0x660) => self.render_scene_window(r0),
+            (METHOD_KIND_GAMEOLD, 0x680 | 0x684) => self.query_scene_movement(offset),
             (METHOD_KIND_GAMEOLD, 0x130) => self.initialize_record(),
             (METHOD_KIND_PICTURE, _) => self.handle_picture_library_method(offset),
             (METHOD_KIND_ACTOR, _) => self.handle_actor_method(offset),
