@@ -326,6 +326,19 @@ impl NicaiMachine {
         self.set_result(0);
     }
 
+    pub(crate) fn repaint_scene_window(&mut self, window: u32) -> anyhow::Result<()> {
+        self.render_scene_window(window);
+        // A full background repaint also invalidates the foreground windows it covers.
+        let size = self.framebuffer_size();
+        super::screen::invalidate_panel(&mut self.memory, window, 2, window + 24, size);
+        let child = self.memory.r32(window + 36);
+        let sibling = self.memory.r32(window + 32);
+        self.repaint_fixed_gameold_windows(child)?;
+        self.repaint_fixed_gameold_windows(sibling)?;
+        self.set_result(0);
+        Ok(())
+    }
+
     pub(crate) fn query_scene_movement(&mut self, offset: u32) {
         let scene = self.register(0);
         let map = self.memory.r32(scene + 0x61c);
@@ -515,11 +528,17 @@ mod tests {
                 }
             }
             assert_eq!(machine.memory.r16(library + 20), 1);
-            machine.cpu.reg_set(Mode::User, 0, scene + 0x628);
-            machine.handle_method_stub(
-                NicaiMachine::method_stub_address(super::super::super::METHOD_KIND_GAMEOLD, 0x660)
-                    & !1,
-            );
+            let repaint =
+                NicaiMachine::method_stub_address(super::super::super::METHOD_KIND_GAMEOLD, 0x660);
+            machine
+                .invoke_callback(
+                    repaint,
+                    scene + 0x628,
+                    0,
+                    0,
+                    crate::DEFAULT_INSTRUCTION_LIMIT,
+                )
+                .unwrap();
             let stride = machine.display_surface.stride();
             let pixel = |x: u32, y: u32| super::super::super::SCREEN_IMAGE + (y * stride + x) * 2;
             assert_eq!(machine.memory.r16(pixel(14, 18)), 0xf800);
@@ -528,6 +547,68 @@ mod tests {
             assert_eq!(machine.memory.r16(pixel(30, 34)), 0xffe0);
             assert_eq!(machine.memory.r16(pixel(42, 18)), 0);
             assert_eq!(machine.memory.r16(pixel(14, 42)), 0);
+
+            let painter = machine.allocate(16);
+            for (index, instruction) in [0x6801, 0x3101, 0x6001, 0x6841, 0x6882, 0x8011, 0x4770]
+                .into_iter()
+                .enumerate()
+            {
+                machine.memory.w16(painter + index as u32 * 2, instruction);
+            }
+            let mut panels = Vec::new();
+            let mut contexts = Vec::new();
+            for _ in 0..3 {
+                let panel = machine.allocate(72);
+                let entries = machine.allocate(4);
+                let rectangle = machine.allocate(8);
+                let context = machine.allocate(12);
+                machine.memory.w32(panel + 8, 1);
+                machine.memory.w32(panel + 12, entries);
+                machine.memory.w32(entries, rectangle);
+                machine.memory.w32(panel + 48, painter | 1);
+                machine.memory.w32(panel + 20, context);
+                machine.memory.w32(context + 4, 0xffff);
+                machine.memory.w32(context + 8, pixel(14, 18));
+                panels.push(panel);
+                contexts.push(context);
+            }
+            machine.executable.big_endian = true;
+            machine.executable.preferred_code_address = 0x0400_0000;
+            machine.cpu.reg_set(Mode::User, 0, scene);
+            machine.handle_game_service(77);
+            let add_child = machine.memory.r32(scene + 0x650);
+            machine
+                .invoke_callback(
+                    add_child,
+                    scene + 0x628,
+                    panels[0],
+                    1,
+                    crate::DEFAULT_INSTRUCTION_LIMIT,
+                )
+                .unwrap();
+            assert_eq!(machine.memory.r32(scene + 0x628 + 36), panels[0]);
+            machine.memory.w32(panels[0] + 36, panels[1]);
+            machine.memory.w32(scene + 0x628 + 32, panels[2]);
+            for count in 1..=3 {
+                machine
+                    .invoke_callback(
+                        repaint,
+                        scene + 0x628,
+                        0,
+                        0,
+                        crate::DEFAULT_INSTRUCTION_LIMIT,
+                    )
+                    .unwrap();
+                assert_eq!(machine.memory.r16(pixel(14, 18)), 0xffff);
+                for (&panel, &context) in panels.iter().zip(&contexts) {
+                    assert_eq!(machine.memory.r32(context), count);
+                    assert_eq!(machine.memory.r32(panel + 4), 0);
+                }
+                assert_eq!(machine.register(13), stack);
+            }
+            machine.memory.w32(panels[0] + 48, 0x4000_0001);
+            assert!(machine.repaint_scene_window(scene + 0x628).is_err());
+            assert_eq!(machine.register(13), stack);
             machine.cpu.reg_set(Mode::User, 0, scene);
             machine.memory.w32(stack + 12, 0x4000_0001);
             assert!(machine.initialize_scene_resources(scene).is_err());
