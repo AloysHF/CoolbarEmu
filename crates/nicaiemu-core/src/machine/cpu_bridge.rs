@@ -446,7 +446,12 @@ impl NicaiMachine {
             0 => self.handle_root_service(index),
             1 => self.handle_system_service(index),
             2 => self.handle_memory_service(index),
-            3 => self.handle_game_service(index),
+            3 => {
+                self.handle_game_service(index);
+                if index == 77 && self.uses_fixed_manager_abi() {
+                    self.initialize_scene_resources(self.register(0))?;
+                }
+            }
             4 => self.handle_lcd_service(index),
             5 => self.handle_file_service(index),
             6 => self.handle_stdio_service(index),

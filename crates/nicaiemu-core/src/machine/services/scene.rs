@@ -36,6 +36,7 @@ struct SceneMap {
     height: u16,
     name: Vec<u8>,
     position: [i16; 2],
+    tail: usize,
 }
 
 fn first_scene_map(bytes: &[u8]) -> Option<SceneMap> {
@@ -45,17 +46,23 @@ fn first_scene_map(bytes: &[u8]) -> Option<SceneMap> {
     }
     let width = reader.short()?;
     let height = reader.short()?;
-    if width == 0 || height == 0 || reader.short()? == 0 {
+    let map_count = reader.short()?;
+    if width == 0 || height == 0 || !(1..=16).contains(&map_count) {
         return None;
     }
     let name = reader.name()?.to_vec();
     let position = [reader.short()? as i16, reader.short()? as i16];
     reader.take(4)?;
+    for _ in 1..map_count {
+        reader.name()?;
+        reader.take(8)?;
+    }
     Some(SceneMap {
         width,
         height,
         name,
         position,
+        tail: reader.position,
     })
 }
 
@@ -135,31 +142,31 @@ impl NicaiMachine {
         Some(bytes)
     }
 
-    pub(crate) fn initialize_scene_resources(&mut self, scene: u32) {
+    pub(crate) fn initialize_scene_resources(&mut self, scene: u32) -> anyhow::Result<()> {
         if scene == 0 || self.register(3) == 0 {
-            return;
+            return Ok(());
         }
         let filename = self.argument(4);
         let library = self.register(3);
         if filename == 0 {
-            return;
+            return Ok(());
         }
         let name = self.read_c_bytes(filename, 256);
-        let Some(bytes) = self.scene_resource_bytes(&name) else {
-            return;
+        let Some(scene_bytes) = self.scene_resource_bytes(&name) else {
+            return Ok(());
         };
-        let Some(descriptor) = first_scene_map(&bytes) else {
-            return;
+        let Some(descriptor) = first_scene_map(&scene_bytes) else {
+            return Ok(());
         };
         let Some(bytes) = self.scene_resource_bytes(&descriptor.name) else {
-            return;
+            return Ok(());
         };
         let Some(map) = parse_tile_map(&bytes) else {
-            return;
+            return Ok(());
         };
         let ids = self.allocate(map.images.len() as u32 * 2);
         if ids == 0 {
-            return;
+            return Ok(());
         }
         for (index, name) in map.images.iter().enumerate() {
             let name_ptr = self.allocate(name.len() as u32 + 1);
@@ -174,7 +181,7 @@ impl NicaiMachine {
             self.deallocate(name_ptr);
             if id == u32::MAX {
                 self.deallocate(ids);
-                return;
+                return Ok(());
             }
             self.memory.w16(ids + index as u32 * 2, id as u16);
         }
@@ -185,7 +192,7 @@ impl NicaiMachine {
             for pointer in [ids, table, cells, object] {
                 self.deallocate(pointer);
             }
-            return;
+            return Ok(());
         }
         self.memory.write_bytes(object, &[0; 0x48]);
         for column in 0..map.columns {
@@ -216,6 +223,173 @@ impl NicaiMachine {
         self.memory.w16(scene + 2, descriptor.height);
         // The first map is the native scene's background render target.
         self.memory.w32(scene + 0x61c, object);
+        self.memory.w32(scene + 0x640, self.register(1));
+        self.memory.w32(scene + 0x644, self.register(2));
+        // Native scene layouts expose the movement pair at +0x678 or +0x680.
+        for (offset, method) in [
+            (0x678, 0x680),
+            (0x67c, 0x684),
+            (0x680, 0x680),
+            (0x684, 0x684),
+        ] {
+            self.memory.w32(
+                scene + offset,
+                Self::method_stub_address(super::super::METHOD_KIND_GAMEOLD, method),
+            );
+        }
+        // Empty actor tables precede the application-owned scene payload.
+        let mut reader = Reader {
+            bytes: &scene_bytes,
+            position: descriptor.tail,
+        };
+        if reader.short() == Some(0) && reader.short() == Some(0) {
+            let callback = self.argument(7);
+            if callback != 0 {
+                let stream = self.allocate(scene_bytes.len() as u32);
+                let cursor = self.allocate(4);
+                if stream == 0 || cursor == 0 {
+                    self.deallocate(stream);
+                    self.deallocate(cursor);
+                    anyhow::bail!("cannot allocate scene callback data");
+                }
+                self.memory.write_bytes(stream, &scene_bytes);
+                self.memory.w32(cursor, reader.position as u32);
+                let cpu = self.cpu;
+                let result = self.invoke_callback(
+                    callback,
+                    stream,
+                    cursor,
+                    0,
+                    crate::DEFAULT_INSTRUCTION_LIMIT,
+                );
+                self.cpu = cpu;
+                self.deallocate(stream);
+                self.deallocate(cursor);
+                result?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn render_scene_window(&mut self, window: u32) {
+        let scene = window.wrapping_sub(0x628);
+        let map = self.memory.r32(scene + 0x61c);
+        if map == 0 {
+            self.set_result(0);
+            return;
+        }
+        let origin_x = self.memory.r16(scene + 0x640) as i16 as i32;
+        let origin_y = self.memory.r16(scene + 0x642) as i16 as i32;
+        let viewport_width = self.memory.r16(scene + 0x644) as i32;
+        let viewport_height = self.memory.r16(scene + 0x646) as i32;
+        let x = origin_x + self.memory.r16(map + 0x40) as i16 as i32;
+        let y = origin_y + self.memory.r16(map + 0x42) as i16 as i32;
+        let tile_width = self.memory.r32(map + 8) as i32;
+        let tile_height = self.memory.r32(map + 12) as i32;
+        let columns = self.memory.r32(map + 16);
+        let rows = self.memory.r32(map + 20);
+        let table = self.memory.r32(map + 24);
+        let ids = self.memory.r32(map + 28);
+        let library = self.memory.r32(map + 36);
+        let pictures = self.memory.r32(library + 16);
+        for column in 0..columns {
+            let cells = self.memory.r32(table + column * 4);
+            for row in 0..rows {
+                let cell = self.memory.r32(cells + row * 4);
+                let id = self.memory.r16(ids + ((cell >> 24) & 15) * 2) as u32;
+                let image = self.memory.r32(pictures + id * 4);
+                let (width, _) = self.image_dims(image);
+                if width <= 0 || tile_width <= 0 || tile_height <= 0 {
+                    continue;
+                }
+                let tiles_per_row = (width / tile_width).max(1) as u32;
+                let tile = cell & 0xffffff;
+                let dx = x + column as i32 * tile_width;
+                let dy = y + row as i32 * tile_height;
+                let left = dx.max(origin_x);
+                let top = dy.max(origin_y);
+                let right = (dx + tile_width).min(origin_x + viewport_width);
+                let bottom = (dy + tile_height).min(origin_y + viewport_height);
+                self.blit_image(
+                    super::super::SCREEN_IMAGE_STRUCT,
+                    image,
+                    (tile % tiles_per_row) as i32 * tile_width + left - dx,
+                    (tile / tiles_per_row) as i32 * tile_height + top - dy,
+                    right - left,
+                    bottom - top,
+                    left,
+                    top,
+                    false,
+                );
+            }
+        }
+        self.set_result(0);
+    }
+
+    pub(crate) fn query_scene_movement(&mut self, offset: u32) {
+        let scene = self.register(0);
+        let map = self.memory.r32(scene + 0x61c);
+        if map == 0 {
+            self.set_result(0);
+            return;
+        }
+        let x = self.register(1) as i16 as i32 - self.memory.r16(map + 0x40) as i16 as i32;
+        let y = self.register(2) as i16 as i32 - self.memory.r16(map + 0x42) as i16 as i32;
+        let delta = self.register(3) as i16 as i32;
+        let tw = self.memory.r32(map + 8) as i32;
+        let th = self.memory.r32(map + 12) as i32;
+        let width = self.memory.r32(map) as i32;
+        let height = self.memory.r32(map + 4) as i32;
+        if tw <= 0 || th <= 0 || x < 0 || y < 0 || x >= width || y >= height {
+            self.set_result(0);
+            return;
+        }
+        let horizontal = offset == 0x680;
+        let coordinate = if horizontal { x } else { y };
+        let tile_size = if horizontal { tw } else { th };
+        let extent = self.memory.r32(map + if horizontal { 0 } else { 4 }) as i32;
+        let endpoint = coordinate + delta;
+        let distance = if endpoint <= 0 {
+            -coordinate
+        } else if endpoint >= extent - 1 {
+            extent - 1 - coordinate
+        } else {
+            let from = coordinate / tile_size;
+            let to = endpoint / tile_size;
+            let table = self.memory.r32(map + 24);
+            let mut cell_at = |column: i32, row: i32| {
+                let cells = self.memory.r32(table + column as u32 * 4);
+                self.memory.r32(cells + row as u32 * 4) >> 28
+            };
+            let (first, last) = if horizontal {
+                (cell_at(from, y / th), cell_at(to, y / th))
+            } else {
+                (cell_at(x / tw, from), cell_at(x / tw, to))
+            };
+            // Edge bits are left, up, right, down; inspect both crossed edges.
+            let blocked = from != to
+                && if horizontal {
+                    if delta > 0 {
+                        first & 4 != 0 || last & 1 != 0
+                    } else {
+                        first & 1 != 0 || last & 4 != 0
+                    }
+                } else if delta > 0 {
+                    first & 8 != 0 || last & 2 != 0
+                } else {
+                    first & 2 != 0 || last & 8 != 0
+                };
+            if blocked {
+                if delta > 0 {
+                    to * tile_size - 1 - coordinate
+                } else {
+                    from * tile_size - coordinate
+                }
+            } else {
+                delta
+            }
+        };
+        self.set_result(distance as i16 as i32 as u32);
     }
 }
 
@@ -239,11 +413,14 @@ mod tests {
             memory.regions = std::mem::take(&mut machine.memory.regions);
             machine.memory = memory;
             let mut png = std::io::Cursor::new(Vec::new());
-            image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
-                32,
-                32,
-                image::Rgba([255, 0, 0, 255]),
-            ))
+            image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(32, 32, |x, y| {
+                image::Rgba(match (x < 16, y < 16) {
+                    (true, true) => [255, 0, 0, 255],
+                    (false, true) => [0, 255, 0, 255],
+                    (true, false) => [0, 0, 255, 255],
+                    _ => [255, 255, 0, 255],
+                })
+            }))
             .write_to(&mut png, image::ImageFormat::Png)
             .unwrap();
             let mut map = 1u32.to_le_bytes().to_vec();
@@ -261,6 +438,7 @@ mod tests {
             for value in [4u16, 8, 1, 1] {
                 scene_bytes.extend_from_slice(&value.to_le_bytes());
             }
+            scene_bytes.extend_from_slice(&[0, 0, 0, 0, 42, 0]);
             for (name, data) in [
                 ("a.sce", packed(&scene_bytes)),
                 ("a.map", packed(&map)),
@@ -286,13 +464,42 @@ mod tests {
             let name = machine.allocate(6);
             machine.memory.write_bytes(name, b"a.sce\0");
             let stack = machine.allocate(32);
+            let marker = machine.allocate(4);
+            let callback = machine.allocate(16);
+            for (index, instruction) in [0x6808, 0x4a02, 0x6010, 0x2000, 0x4770, 0x46c0]
+                .into_iter()
+                .enumerate()
+            {
+                machine.memory.w16(callback + index as u32 * 2, instruction);
+            }
+            machine.memory.w32(callback + 12, marker);
             machine.cpu.reg_set(Mode::User, 13, stack);
             machine.memory.w32(stack, name);
+            machine.memory.w32(stack + 12, callback | 1);
             machine.cpu.reg_set(Mode::User, 0, scene);
+            machine.cpu.reg_set(Mode::User, 1, 0x000a000a);
+            machine.cpu.reg_set(Mode::User, armv4t_emu::reg::CPSR, 0x30);
+            machine.cpu.reg_set(Mode::User, 2, 0x00200020);
             machine.cpu.reg_set(Mode::User, 3, library);
-            machine.initialize_scene_resources(scene);
+            machine.initialize_scene_resources(scene).unwrap();
             assert_eq!(machine.register(0), scene);
             assert_eq!(machine.register(3), library);
+            assert_eq!(machine.register(13), stack);
+            assert_eq!(machine.memory.r32(marker), 28);
+            for (offset, method) in [
+                (0x678, 0x680),
+                (0x67c, 0x684),
+                (0x680, 0x680),
+                (0x684, 0x684),
+            ] {
+                assert_eq!(
+                    machine.memory.r32(scene + offset),
+                    NicaiMachine::method_stub_address(
+                        super::super::super::METHOD_KIND_GAMEOLD,
+                        method
+                    )
+                );
+            }
             let object = machine.memory.r32(scene + 0x61c);
             assert_ne!(object, 0);
             assert_eq!(machine.memory.r32(object + 8), 16);
@@ -308,6 +515,108 @@ mod tests {
                 }
             }
             assert_eq!(machine.memory.r16(library + 20), 1);
+            machine.cpu.reg_set(Mode::User, 0, scene + 0x628);
+            machine.handle_method_stub(
+                NicaiMachine::method_stub_address(super::super::super::METHOD_KIND_GAMEOLD, 0x660)
+                    & !1,
+            );
+            let stride = machine.display_surface.stride();
+            let pixel = |x: u32, y: u32| super::super::super::SCREEN_IMAGE + (y * stride + x) * 2;
+            assert_eq!(machine.memory.r16(pixel(14, 18)), 0xf800);
+            assert_eq!(machine.memory.r16(pixel(30, 18)), 0x001f);
+            assert_eq!(machine.memory.r16(pixel(14, 34)), 0x07e0);
+            assert_eq!(machine.memory.r16(pixel(30, 34)), 0xffe0);
+            assert_eq!(machine.memory.r16(pixel(42, 18)), 0);
+            assert_eq!(machine.memory.r16(pixel(14, 42)), 0);
+            machine.cpu.reg_set(Mode::User, 0, scene);
+            machine.memory.w32(stack + 12, 0x4000_0001);
+            assert!(machine.initialize_scene_resources(scene).is_err());
+            assert_eq!(machine.register(0), scene);
+            assert_eq!(machine.register(3), library);
+            assert_eq!(machine.register(13), stack);
+        }
+    }
+
+    #[test]
+    fn scene_movement_checks_directional_edges_and_signed_distances() {
+        for big_endian in [false, true] {
+            let mut machine = NicaiMachine::new_blank_for_tests();
+            let mut memory = super::super::super::memory::MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let scene = machine.allocate(0x700);
+            let map = machine.allocate(0x48);
+            let table = machine.allocate(16);
+            let cells = machine.allocate(64);
+            machine.memory.w32(scene + 0x61c, map);
+            for (offset, value) in [
+                (0, 64),
+                (4, 64),
+                (8, 16),
+                (12, 16),
+                (16, 4),
+                (20, 4),
+                (24, table),
+            ] {
+                machine.memory.w32(map + offset, value);
+            }
+            machine.memory.w16(map + 0x40, 4);
+            machine.memory.w16(map + 0x42, 8);
+            for column in 0..4 {
+                machine.memory.w32(table + column * 4, cells + column * 16);
+            }
+            for (offset, delta, from_flag, to_flag, expected, destination) in [
+                (0x680, 16i32, 4, 1, 11i32, 9),
+                (0x680, -16, 1, 4, -4, 1),
+                (0x684, 16, 8, 2, 11, 6),
+                (0x684, -16, 2, 8, -4, 4),
+            ] {
+                for (cell, flag) in [(5, from_flag), (destination, to_flag)] {
+                    machine.memory.write_bytes(cells, &[0; 64]);
+                    machine.memory.w32(cells + cell * 4, flag << 28);
+                    machine.cpu.reg_set(Mode::User, 0, scene);
+                    machine.cpu.reg_set(Mode::User, 1, 24);
+                    machine.cpu.reg_set(Mode::User, 2, 28);
+                    machine.cpu.reg_set(Mode::User, 3, delta as u32);
+                    machine.handle_method_stub(
+                        NicaiMachine::method_stub_address(
+                            super::super::super::METHOD_KIND_GAMEOLD,
+                            offset,
+                        ) & !1,
+                    );
+                    assert_eq!(machine.register(0) as i32, expected);
+                }
+                machine.memory.write_bytes(cells, &[0; 64]);
+                machine.cpu.reg_set(Mode::User, 0, scene);
+                machine.query_scene_movement(offset);
+                assert_eq!(machine.register(0) as i32, delta);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set NICAI_GAME_DIR)"]
+    fn real_content_scene_start_and_repeated_taps_remain_ready() {
+        let directory = std::env::var_os("NICAI_GAME_DIR").expect("NICAI_GAME_DIR is not set");
+        for game in ["魔塔V10.CBE", "魔塔(新品).CBE"] {
+            let archive =
+                crate::CbeArchive::load(&std::path::PathBuf::from(&directory).join(game)).unwrap();
+            let mut machine = NicaiMachine::new(&archive).unwrap();
+            machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            for frame in 0..2000 {
+                if [20, 60, 100, 140, 180].contains(&frame) {
+                    let (x, y) = if game == "魔塔(新品).CBE" && frame == 60 {
+                        (20, 310)
+                    } else {
+                        (120, 183)
+                    };
+                    machine.set_pointer(x, y, true);
+                }
+                machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+                machine.set_pointer(120, 183, false);
+            }
+            assert_eq!(machine.state(), crate::MachineState::Ready, "{game}");
+            assert_eq!(machine.display_size(), (240, 320), "{game}");
         }
     }
 
