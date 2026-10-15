@@ -38,7 +38,7 @@ clap = { version = "4", features = ["derive"] }  # CLI argument parsing (standal
 minifb = "0.29"           # Window creation and pixel rendering (standalone)
 x11-dl = "2.21"           # X11 property queries for XWayland scale detection (standalone)
 gilrs = "0.11"            # Physical gamepad polling (standalone)
-rodio = "0.22"            # Audio output (standalone)
+rodio = "0.23"            # Audio output (standalone)
 env_logger = "0.11"       # Log output to stderr (standalone)
 
 [profile.release]
