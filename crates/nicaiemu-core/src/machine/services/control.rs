@@ -1,4 +1,4 @@
-//! Firmware list controls with guest-owned items and screen callbacks.
+//! Firmware list and numeric input controls with guest-owned state.
 
 use armv4t_emu::Memory;
 
@@ -23,8 +23,158 @@ const LEFT_TEXT: u32 = 0x17c;
 const RIGHT_TEXT: u32 = 0x180;
 const SOFT_COLOR: u32 = 0x184;
 const ITEM_ICON: u32 = 0x188;
+// Reserved service storage keeps the input list inside serialized guest memory.
+const INPUT_HEAD: u32 = CONTROL_METHOD_SERVICE + 0x3f0;
+const INPUT_TEXT: u32 = 0x100;
+const INPUT_TAG: u32 = 0xe80;
+const INPUT_RECT: u32 = 0xe84;
+const INPUT_OWNER: u32 = 0xe8c;
+const INPUT_FOCUSED: u32 = 0xe90;
+const INPUT_PASSWORD: u32 = 0xe94;
+const INPUT_NEXT: u32 = 0xe98;
+const INPUT_CALLBACK: u32 = 0xe9c;
+const INPUT_MAGIC: u32 = 0x494e5054;
+const POPUP_TEXT: u32 = 0x80;
+const POPUP_CALLBACK: u32 = 0x84;
+const POPUP_CONTEXT: u32 = 0x88;
+const POPUP_SLOT: u32 = 0x8c;
 
 impl NicaiMachine {
+    pub(crate) fn initialize_popup_control(&mut self) {
+        let slot = self.register(0);
+        if slot == 0 || self.memory.region(slot, 4).is_none() {
+            self.set_result(0);
+            return;
+        }
+        let callback = self.argument(5);
+        let object = self.allocate(0x100);
+        if object == 0 {
+            self.set_result(0);
+            return;
+        }
+        self.memory.write_bytes(object, &[0; 0x100]);
+        for (field, method) in [
+            (0x74, 0x2ac),
+            (0x78, 0x2a8),
+            (SCREEN + 8, 0x2b4),
+            (SCREEN + 12, 0x2b0),
+        ] {
+            self.memory
+                .w32(object + field, (CONTROL_METHOD_SERVICE + method) | 1);
+        }
+        self.memory.w32(object + POPUP_CALLBACK, callback);
+        self.memory.w32(object + POPUP_SLOT, slot);
+        self.memory.w32(slot, object);
+        self.set_result(1);
+    }
+
+    fn close_popup_control(&mut self, object: u32) {
+        let slot = self.memory.r32(object + POPUP_SLOT);
+        self.cpu.reg_set(armv4t_emu::Mode::User, 0, object + SCREEN);
+        self.handle_screen_service(6);
+        if slot != 0 {
+            self.memory.w32(slot, 0);
+        }
+        self.deallocate(object);
+    }
+
+    pub(crate) fn initialize_input_control(&mut self, password: bool) {
+        let slot = self.register(0);
+        if slot == 0 || self.memory.region(slot, 4).is_none() {
+            self.set_result(0);
+            return;
+        }
+        let object = self.allocate(0xf00);
+        if object == 0 {
+            self.set_result(0);
+            return;
+        }
+        self.memory.write_bytes(object, &[0; 0xf00]);
+        for offset in (0xe00..0xe80).step_by(4) {
+            self.memory.w32(
+                object + offset,
+                (CONTROL_METHOD_SERVICE + 0x300 + offset - 0xe00) | 1,
+            );
+        }
+        self.memory.w32(object + INPUT_TAG, INPUT_MAGIC);
+        self.memory.w32(object + INPUT_RECT, self.register(2));
+        self.memory.w32(object + INPUT_RECT + 4, self.register(3));
+        self.memory.w32(object + INPUT_OWNER, self.pending_screen);
+        self.memory
+            .w32(object + INPUT_PASSWORD, u32::from(password));
+        let callback = self.argument(4);
+        self.memory.w32(object + INPUT_CALLBACK, callback);
+        let next = self.memory.r32(INPUT_HEAD);
+        self.memory.w32(object + INPUT_NEXT, next);
+        self.memory.w32(INPUT_HEAD, object);
+        self.memory.w32(slot, object);
+        self.set_result(1);
+    }
+
+    fn input_controls(&mut self) -> Vec<u32> {
+        let mut controls = Vec::new();
+        let mut object = self.memory.r32(INPUT_HEAD);
+        while object != 0 && controls.len() < 128 && !controls.contains(&object) {
+            if self.memory.region(object, 0xf00).is_none()
+                || self.memory.r32(object + INPUT_TAG) != INPUT_MAGIC
+            {
+                break;
+            }
+            controls.push(object);
+            object = self.memory.r32(object + INPUT_NEXT);
+        }
+        controls
+    }
+
+    pub(crate) fn input_control_key(&mut self, key: u8) {
+        if key > 9 {
+            return;
+        }
+        for object in self.input_controls() {
+            if self.memory.r32(object + INPUT_OWNER) != self.active_screen
+                || self.memory.r32(object + INPUT_FOCUSED) == 0
+            {
+                continue;
+            }
+            let text = self.read_c_bytes(object + INPUT_TEXT, 255);
+            if text.len() < 255 {
+                self.memory
+                    .w8(object + INPUT_TEXT + text.len() as u32, b'0' + key);
+                self.memory
+                    .w8(object + INPUT_TEXT + text.len() as u32 + 1, 0);
+                let callback = self.memory.r32(object + INPUT_CALLBACK);
+                self.defer_callback(callback, vec![object, 2], "inputChanged");
+            }
+        }
+    }
+
+    pub(crate) fn render_input_controls(&mut self) {
+        for object in self.input_controls() {
+            if self.memory.r32(object + INPUT_OWNER) != self.active_screen {
+                continue;
+            }
+            let top = self.memory.r32(object + INPUT_RECT);
+            let bottom = self.memory.r32(object + INPUT_RECT + 4);
+            let (x, y) = ((top >> 16) as i16 as i32, top as i16 as i32);
+            let (right, below) = ((bottom >> 16) as i16 as i32, bottom as i16 as i32);
+            let focused = self.memory.r32(object + INPUT_FOCUSED) != 0;
+            self.fill_screen_rect(
+                x,
+                y,
+                right - x + 1,
+                below - y + 1,
+                if focused { 0x001f } else { 0x8410 },
+            );
+            self.fill_screen_rect(x + 1, y + 1, right - x - 1, below - y - 1, 0xffff);
+            let mut text = self.read_c_bytes(object + INPUT_TEXT, 255);
+            if self.memory.r32(object + INPUT_PASSWORD) != 0 {
+                text.fill(b'*');
+            }
+            let visible = ((right - x - 4).max(0) / 8) as usize;
+            let start = text.len().saturating_sub(visible);
+            self.draw_text_bytes_on_image(SCREEN_IMAGE_STRUCT, &text[start..], x + 2, y + 2, 0);
+        }
+    }
     pub(crate) fn initialize_list_control(&mut self) {
         let slot = self.register(0);
         let capacity = self.register(1) & 0xffff;
@@ -71,7 +221,105 @@ impl NicaiMachine {
 
     pub(crate) fn handle_control_method(&mut self, offset: u32) -> anyhow::Result<()> {
         let object = self.register(0);
+        if (0x300..0x380).contains(&offset) {
+            if self.memory.region(object, 0xf00).is_none()
+                || self.memory.r32(object + INPUT_TAG) != INPUT_MAGIC
+            {
+                self.set_result(0);
+                return Ok(());
+            }
+            if offset == 0x34c {
+                let record = self.register(1);
+                let capacity = self.register(2).min(256);
+                let destination = if self.memory.region(record, 8).is_some() {
+                    self.memory.r32(record + 4)
+                } else {
+                    0
+                };
+                let text = self.read_c_bytes(object + INPUT_TEXT, capacity.saturating_sub(1));
+                if capacity > 0
+                    && destination != 0
+                    && self.memory.region(destination, capacity as usize).is_some()
+                {
+                    self.memory.write_bytes(destination, &text);
+                    self.memory.w8(destination + text.len() as u32, 0);
+                    self.memory.w16(record, text.len() as u16);
+                }
+                self.set_result(text.len() as u32);
+                return Ok(());
+            } else if offset == 0x35c {
+                self.memory
+                    .w32(object + INPUT_FOCUSED, u32::from(self.register(1) != 0));
+            }
+            self.set_result(0);
+            return Ok(());
+        }
         match offset {
+            0x2a8 => {
+                self.memory.w32(object + POPUP_TEXT, self.register(2));
+                self.memory.w32(object + POPUP_CONTEXT, self.register(3));
+                let screen = object + SCREEN;
+                if !self.screen_stack.contains(&screen) {
+                    self.screen_stack.push(screen);
+                }
+                self.pending_screen = screen;
+                self.set_result(1);
+            }
+            0x2ac => {
+                let control = self.memory.r32(object);
+                if control != 0 {
+                    self.close_popup_control(control);
+                }
+                self.set_result(0);
+            }
+            0x2b0 => {
+                let (width, height) = self.framebuffer_size();
+                let y = (height as i32 - 120) / 2;
+                self.fill_screen_rect(8, y, width as i32 - 16, 120, 0x8410);
+                self.fill_screen_rect(9, y + 1, width as i32 - 18, 118, 0xffff);
+                let source = self.memory.r32(object + POPUP_TEXT);
+                let text = self.read_c_bytes(source, 256);
+                self.draw_text_bytes_on_image(SCREEN_IMAGE_STRUCT, &text, 16, y + 12, 0);
+                self.draw_text_bytes_on_image(
+                    SCREEN_IMAGE_STRUCT,
+                    b"\xc8\xb7\xb6\xa8",
+                    16,
+                    y + 92,
+                    0,
+                );
+                self.draw_text_bytes_on_image(
+                    SCREEN_IMAGE_STRUCT,
+                    b"\xb7\xb5\xbb\xd8",
+                    width as i32 - 48,
+                    y + 92,
+                    0,
+                );
+                self.set_result(0);
+            }
+            0x2b4 => {
+                let event = self.register(1);
+                let keys = if event == 0 {
+                    self.memory.r32(self.register(2))
+                } else if event == 6 {
+                    self.key_down
+                } else {
+                    0
+                };
+                let choice = if keys & ((1 << 12) | (1 << 14)) != 0 {
+                    Some(0)
+                } else if keys & (1 << 13) != 0 {
+                    Some(1)
+                } else {
+                    None
+                };
+                if let Some(choice) = choice {
+                    let callback = self.memory.r32(object + POPUP_CALLBACK);
+                    let context = self.memory.r32(object + POPUP_CONTEXT);
+                    self.close_popup_control(object);
+                    self.defer_callback(callback, vec![object, choice, context], "popupResult");
+                }
+                self.set_result(1);
+            }
             0xd8 => {
                 let count = self.memory.r32(object + COUNT);
                 let capacity = self.memory.r32(object + CAPACITY);
@@ -275,6 +523,130 @@ impl NicaiMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn popup_control_restores_parent_and_defers_button_result() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        let parent = machine.allocate(64);
+        machine.screen_stack.push(parent);
+        machine.active_screen = parent;
+        machine.pending_screen = parent;
+        let slot = machine.allocate(4);
+        let stack = machine.allocate(8);
+        machine.memory.w32(stack + 4, 0x0100_2001);
+        machine.set_user_register(13, stack);
+        machine.set_user_register(0, slot);
+        machine.handle_ctrl_service(7);
+        let object = machine.memory.r32(slot);
+        assert_ne!(object, 0);
+        assert_ne!(machine.memory.r32(object + 0x78), 0);
+        machine.set_user_register(0, object);
+        machine.set_user_register(2, 0);
+        machine.set_user_register(3, 123);
+        machine.handle_control_method(0x2a8).unwrap();
+        assert_eq!(machine.screen_stack, [parent, object + SCREEN]);
+        machine.active_screen = object + SCREEN;
+        let payload = machine.allocate(4);
+        machine.memory.w32(payload, 1 << 14);
+        machine.set_user_register(0, object);
+        machine.set_user_register(1, 0);
+        machine.set_user_register(2, payload);
+        machine.handle_control_method(0x2b4).unwrap();
+        assert_eq!(machine.active_screen, parent);
+        assert_eq!(machine.pending_screen, parent);
+        assert_eq!(machine.memory.r32(slot), 0);
+        let (callback, args, _) = machine.pending_callbacks.pop_front().unwrap();
+        assert_eq!(callback, 0x0100_2001);
+        assert_eq!(args, [object, 0, 123]);
+    }
+
+    #[test]
+    fn input_getter_writes_the_callers_text_record_not_its_pointer() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        let slot = machine.allocate(4);
+        machine.set_user_register(0, slot);
+        machine.initialize_input_control(false);
+        let object = machine.memory.r32(slot);
+        machine.memory.write_bytes(object + INPUT_TEXT, b"123\0");
+        let record = machine.allocate(8);
+        let text = machine.allocate(8);
+        machine.memory.w32(record + 4, text);
+        machine.memory.w32(text + 4, 0x1234_5678);
+        machine.set_user_register(0, object);
+        machine.set_user_register(1, record);
+        machine.set_user_register(2, 4);
+        machine.handle_control_method(0x34c).unwrap();
+        assert_eq!(machine.memory.r32(record + 4), text);
+        assert_eq!(machine.memory.r16(record), 3);
+        assert_eq!(machine.read_c_bytes(text, 4), b"123");
+        assert_eq!(machine.memory.r8(text + 3), 0);
+        assert_eq!(machine.memory.r32(text + 4), 0x1234_5678);
+    }
+
+    #[test]
+    fn input_control_focus_text_bounds_and_snapshot_are_preserved() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        let screen = machine.allocate(64);
+        machine.pending_screen = screen;
+        machine.active_screen = screen;
+        let slot = machine.allocate(4);
+        let stack = machine.allocate(4);
+        machine.memory.w32(stack, 0x0100_1001);
+        machine.set_user_register(13, stack);
+        machine.set_user_register(0, slot);
+        machine.set_user_register(2, (10 << 16) | 40);
+        machine.set_user_register(3, (210 << 16) | 65);
+        machine.handle_ctrl_service(11);
+        assert_eq!(machine.register(0), 1);
+        let object = machine.memory.r32(slot);
+        assert_ne!(object, 0);
+        assert_eq!(machine.memory.r32(object + INPUT_PASSWORD), 1);
+        assert_eq!(machine.memory.r32(object + INPUT_RECT), (10 << 16) | 40);
+        assert_ne!(machine.memory.r32(object + 0xe4c), 0);
+        machine.set_user_register(0, object);
+        machine.set_user_register(1, 1);
+        machine.handle_control_method(0x35c).unwrap();
+        machine.set_key(4, true);
+        machine.set_key(4, false);
+        machine.set_key(2, true);
+        machine.set_key(2, false);
+        assert_eq!(machine.pending_callbacks.len(), 2);
+        let (callback, args, _) = &machine.pending_callbacks[0];
+        assert_eq!(*callback, 0x0100_1001);
+        assert_eq!(args, &[object, 2]);
+        let output = machine.allocate(8);
+        let record = machine.allocate(8);
+        machine.memory.w32(record + 4, output);
+        machine.memory.write_bytes(output, &[0xcc; 8]);
+        machine.set_user_register(0, object);
+        machine.set_user_register(1, record);
+        machine.set_user_register(2, 2);
+        machine.handle_control_method(0x34c).unwrap();
+        assert_eq!(machine.memory.r8(output), b'4');
+        assert_eq!(machine.memory.r8(output + 1), 0);
+        assert_eq!(machine.memory.r8(output + 2), 0xcc);
+        assert_eq!(machine.memory.r16(record), 1);
+        assert_eq!(machine.memory.r32(record + 4), output);
+        let mut state = vec![0; crate::save_state::SERIALIZED_SIZE];
+        crate::save_state::encode_machine(&machine, 456, &mut state).unwrap();
+        let mut restored = crate::save_state::decode_machine(&state, 456).unwrap();
+        assert_eq!(restored.input_controls(), [object]);
+        assert_eq!(restored.read_c_bytes(object + INPUT_TEXT, 256), b"42");
+        restored.active_screen = 0;
+        restored.set_key(8, true);
+        assert_eq!(restored.read_c_bytes(object + INPUT_TEXT, 256), b"42");
+    }
+
+    #[test]
+    fn input_control_rejects_invalid_output_slot_without_allocating() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        let cursor = machine.heap_cursor;
+        machine.set_user_register(0, 0);
+        machine.handle_ctrl_service(12);
+        assert_eq!(machine.register(0), 0);
+        assert_eq!(machine.heap_cursor, cursor);
+        assert_eq!(machine.memory.r32(INPUT_HEAD), 0);
+    }
     use crate::machine::memory::MachineMemory;
 
     fn list_machine(big_endian: bool) -> (NicaiMachine, u32, u32) {

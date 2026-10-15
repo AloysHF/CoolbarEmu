@@ -260,6 +260,8 @@ impl NicaiMachine {
     pub(crate) fn handle_ctrl_service(&mut self, index: u32) {
         match index {
             6 => self.initialize_list_control(),
+            7 => self.initialize_popup_control(),
+            11 | 12 => self.initialize_input_control(index == 11),
             _ => self.set_result(0),
         }
     }

@@ -1,9 +1,8 @@
 //! Guest network manager services (group 9).
 //!
 //! Online CBE titles register a channel, send or request data, and wait for
-//! asynchronous firmware callbacks. The host models that ABI with an in-memory
-//! channel table and a deferred event queue; responses are produced by the
-//! mock layer rather than a live socket.
+//! asynchronous firmware callbacks. The host retains request handles and
+//! delivers offline errors through a deferred event queue.
 
 use anyhow::Result;
 use armv4t_emu::Memory;
@@ -15,13 +14,11 @@ use super::super::NicaiMachine;
 pub(crate) const MAX_NET_CHANNELS: usize = 8;
 /// Maximum queued asynchronous network events.
 const MAX_NET_EVENTS: usize = 32;
-/// Maximum uplink bytes retained per send for mock inspection.
+/// Maximum uplink bytes retained per send for diagnostics.
 const MAX_CAPTURED_UPLINK: usize = 512;
 
-/// Event types delivered to the guest network callback in `r3`.
-pub(crate) const NET_EVENT_DATA: u32 = 0;
-pub(crate) const NET_EVENT_COMPLETE: u32 = 1;
-pub(crate) const NET_EVENT_CHANNEL_READY: u32 = 5;
+/// Offline channel-open completion delivered to the guest in `r3`.
+pub(crate) const NET_EVENT_CHANNEL_ERROR: u32 = 6;
 /// Offline completion code the firmware's HTTP callbacks observe in `r3`.
 const NETREQUEST_ERROR: u32 = 9;
 
@@ -45,11 +42,8 @@ pub(crate) struct NetEvent {
     pub(crate) context: u32,
     /// Frames remaining before the callback fires. Zero means due now.
     pub(crate) delay_frames: u32,
-    /// Offline HTTP completions that only matter while the boot flow has
-    /// not presented a screen yet: screenless booters (the downinfo
-    /// readers) need the callback to build their first screen, while
-    /// games that already presented one treat the synchronous success as
-    /// final and re-entering their state machine corrupts it.
+    /// Legacy screenless gate retained for existing serialized event queues.
+    /// New HTTP requests deliver errors even when a loading screen exists.
     pub(crate) screenless_only: bool,
 }
 
@@ -85,10 +79,9 @@ impl NicaiMachine {
         }
     }
 
-    /// Register an asynchronous network channel (`connect`).
+    /// Register an offline channel attempt and defer its failure callback.
     ///
-    /// ABI: r0/r1 = request cookies, r2 = guest callback, r3 = out-pointer for
-    /// the generated connect id (optional). Returns nonzero on success.
+    /// ABI: r0 = URL, r1 = method, r2 = callback, r3 = handle out-pointer.
     fn network_connect(&mut self) {
         let callback = self.register(2);
         let connect_id_out = self.register(3);
@@ -103,18 +96,18 @@ impl NicaiMachine {
         if connect_id_out != 0 {
             self.memory.w32(connect_id_out, connect_id);
         }
-        self.queue_net_event(NET_EVENT_CHANNEL_READY, 0, 0, 0, callback, 0, 1, false);
-        self.set_result(1);
+        self.queue_net_event(NET_EVENT_CHANNEL_ERROR, 0, 0, 0, callback, 0, 1, false);
+        self.set_result(0);
     }
 
-    /// Accept an uplink packet and queue a mock completion.
+    /// Capture an attempted uplink packet; the offline backend cannot send it.
     ///
-    /// ABI: r0 = payload pointer, r1 = payload length, r2 = connect id.
+    /// ABI: r0 = connect id, r1 = payload length, r2 = payload pointer.
     fn network_send(&mut self) {
-        let data_ptr = self.register(0);
+        let connect_id = self.register(0);
         let data_len = self.register(1);
-        let connect_id = self.register(2);
-        if data_ptr == 0 || data_len == 0 {
+        let data_ptr = self.register(2);
+        if data_ptr == 0 || data_len == 0 || self.channel_callback(connect_id).is_none() {
             self.set_result(0);
             return;
         }
@@ -125,11 +118,7 @@ impl NicaiMachine {
         }
         self.net_last_uplink = captured;
         self.net_uplink_bytes = self.net_uplink_bytes.saturating_add(data_len as u64);
-        if let Some((callback, context)) = self.channel_callback(connect_id) {
-            let response = self.build_mock_uplink_response();
-            self.queue_mock_response(callback, context, &response);
-        }
-        self.set_result(data_len);
+        self.set_result(0);
     }
 
     /// Unregister a network channel.
@@ -167,8 +156,8 @@ impl NicaiMachine {
     /// F_20 `PostHttpData(r0 url, r1 length, r2 body, r3 callback, [sp]
     /// out)`.  The firmware's offline path hands out a request handle and
     /// defers a single `(0, 0, 0, NETREQUEST_ERROR)` callback — not the
-    /// data/complete pair the raw channel send uses — so the guest's
-    /// continuation observes exactly one completion with the error code
+    /// fabricated data/complete pair — so the guest's continuation
+    /// observes exactly one completion with the error code
     /// in `r3`.
     fn network_http_post(&mut self) {
         let url_ptr = self.register(0);
@@ -197,10 +186,8 @@ impl NicaiMachine {
         if out != 0 {
             self.memory.w32(out, self.next_net_connect_id);
         }
-        // Three-frame delay plus the screenless gate: screen-holding
-        // games present their screen within that window and drop the
-        // completion; screenless booters are still waiting and receive it.
-        self.queue_net_event(NETREQUEST_ERROR, 0, 0, 0, callback, 0, 3, true);
+        // Loading screens still need the completion to enter their offline path.
+        self.queue_net_event(NETREQUEST_ERROR, 0, 0, 0, callback, 0, 3, false);
         self.set_result(1);
     }
 
@@ -254,38 +241,6 @@ impl NicaiMachine {
         });
     }
 
-    /// Copy `bytes` into guest heap and queue a data event followed by complete.
-    pub(crate) fn queue_mock_response(&mut self, callback: u32, context: u32, bytes: &[u8]) {
-        let payload_len = bytes.len() as u32;
-        let payload_ptr = if payload_len == 0 {
-            0
-        } else {
-            let ptr = self.allocate(payload_len);
-            if ptr == 0 {
-                return;
-            }
-            if !self.memory.write_bytes(ptr, bytes) {
-                return;
-            }
-            ptr
-        };
-        self.net_downlink_bytes = self.net_downlink_bytes.saturating_add(payload_len as u64);
-        // Deliver data on the next guest tick, completion one tick later so
-        // firmware that processes the body first still observes a trailing
-        // complete event.
-        self.queue_net_event(
-            NET_EVENT_DATA,
-            payload_ptr,
-            payload_len,
-            payload_len,
-            callback,
-            context,
-            1,
-            false,
-        );
-        self.queue_net_event(NET_EVENT_COMPLETE, 0, 0, 0, callback, context, 2, false);
-    }
-
     /// Advance queued network events and invoke due guest callbacks.
     pub(crate) fn dispatch_network_events(&mut self, instruction_limit: u64) -> Result<()> {
         let screen_present = self.active_screen != 0;
@@ -293,9 +248,7 @@ impl NicaiMachine {
         let mut remaining = std::collections::VecDeque::new();
         for event in self.net_events.drain(..) {
             if event.screenless_only && screen_present {
-                // The boot flow already presented a screen: it treated the
-                // synchronous success as final, and re-entering its state
-                // machine through the offline completion corrupts it.
+                // Preserve the behavior of gated events from older snapshots.
                 continue;
             }
             if event.delay_frames > 0 {
@@ -343,17 +296,5 @@ impl NicaiMachine {
             bytes.push(byte);
         }
         String::from_utf8_lossy(&bytes).into_owned()
-    }
-
-    /// Default mock body for raw uplink packets.
-    fn build_mock_uplink_response(&self) -> Vec<u8> {
-        if std::env::var("CBE_TRACE").is_ok() {
-            eprintln!(
-                "network mock uplink len={} head={:02x?}",
-                self.net_last_uplink.len(),
-                &self.net_last_uplink[..self.net_last_uplink.len().min(16)]
-            );
-        }
-        vec![1]
     }
 }
