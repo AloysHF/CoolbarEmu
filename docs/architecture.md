@@ -3,7 +3,31 @@
 Offline HTTP GET uses `(url, callback, handle_out)`: the third argument receives
 a unique request handle. The deferred callback receives `(0, 0, 0, 9)` rather than
 a fabricated application data packet. GET errors reach active screens as well as
-screenless callers; raw channel responses retain their existing mock behavior.
+screenless callers. Raw channel attempts deliver `(0, 0, 0, 6)` with a false
+synchronous result instead of claiming a live connection. `SendData` takes the
+channel handle, length and payload pointer in that order and returns false
+offline; it retains bounded diagnostic bytes without fabricating server data.
+HTTP POST uses `(url, length, body, callback, handle_out)` and delivers the same
+offline error after its existing three-tick delay, including to loading screens.
+An accepted request is not a completed update: suppressing that callback leaves
+embedded applications waiting at their startup prompt.
+
+An empty registered resource package is populated from the already parsed main
+archive when a known resource is requested. Both guest package tables and host
+resource data are initialized, so embedded programs can resolve images through
+their own package methods. Registered child packages are resolved by the existing
+named-package loader. Fixed-manager image-stream decoding also accepts the alternate LCD
+slot 50 when the caller supplies a mapped output image header.
+
+Fixed-manager input factories 11 and 12 create password and account controls.
+Their state and private registry live in guest memory so snapshots preserve
+focus and text without a codec layout change. Controls accept numeric keys,
+mask password pixels, notify guest edit callbacks and fill bounded text records
+containing a length and caller-owned buffer pointer. Painting is restricted to
+their owning active screen. Basic modal popups support confirmation, cancel,
+release and deferred button results. General text input, full input-method
+dialogs and account authentication are not implemented. Firmware popup messages
+can still be missing, and the XiaoKu client has no usable content pages offline.
 
 Native dispatch 0xaf consumes a pointer to one allocation-size word and returns
 a scalar request handle. Fetch 0x7d1 writes the allocated pointer to the supplied
@@ -191,6 +215,12 @@ pixel data in the same heap allocation, with a host tag; opaque blits copy
 original colors and alpha blits consult the mask. Guest-created images without
 this metadata retain zero-color transparency. The mask is part of guest-memory
 save states, so no serialized field layout change is required.
+
+Image streams may reside in guest static buffers as well as host heap
+allocations. Decoding stays within the mapped memory region and, when known,
+the remaining allocation boundary. Resource-package initialization writes only
+its compact descriptor fields; adjacent objects in the same allocation retain
+their image tables and callbacks.
 
 Some custom GIF headers resemble ICO files, so a failed standard-image decode
 falls back to the CBE decoder. The desktop frontend converts the completed

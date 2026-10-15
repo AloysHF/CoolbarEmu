@@ -147,17 +147,8 @@ impl NicaiMachine {
             self.memory.w32(package + 16, offsets);
             self.memory.w32(package + 20, ids);
             self.memory.w32(package + 24, 0);
-            // The file-backed end field (+96) lives past the firmware-visible
-            // struct.  Games sometimes pass a stack-allocated package whose
-            // frame ends before it, so only clear it inside a host heap block
-            // we allocated ourselves; otherwise the write lands on the
-            // caller's saved registers (it zeroed 鹿鼎记's saved LR).
-            if self
-                .allocation_size(package)
-                .is_some_and(|size| size >= 100)
-            {
-                self.memory.w32(package + 96, 0);
-            }
+            // Compact descriptors can share an allocation with adjacent objects.
+            // Their mapped resource pointers do not use extended file metadata.
             debug!("loaded {count} CBE resources into guest memory");
         } else {
             warn!("CBE main resource package is empty");
@@ -551,6 +542,25 @@ impl NicaiMachine {
             if let Some(id) = self.package_resource_id_by_decoded_name(package, &name) {
                 return Some(id);
             }
+            // Embedded programs can register an empty package after offline startup.
+            // Populate its tables as well as the host cache for guest-side lookups.
+            if self.memory.r16(package + 8) == 0
+                && (self
+                    .resources
+                    .iter()
+                    .any(|resource| resource_names_match(&resource.name, &name))
+                    || self.resource_packages.iter().any(|package| {
+                        package
+                            .resources
+                            .iter()
+                            .any(|resource| resource_names_match(&resource.name, &name))
+                    }))
+            {
+                self.load_main_resource_package(package);
+            }
+            if let Some(id) = self.package_resource_id_by_decoded_name(package, &name) {
+                return Some(id);
+            }
         }
         self.resources
             .iter()
@@ -579,6 +589,74 @@ fn resource_names_match(left: &str, right: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resource_lookup_populates_an_empty_registered_package() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.resources.push(HostResource {
+            name: "title.gif".into(),
+            data: vec![1, 2, 3],
+        });
+        let package = machine.allocate(DATA_PACKAGE_SIZE);
+        machine.initialize_data_package(package, 0);
+        machine.memory.w32(DREAM_FACTORY_PACKAGE_SLOT, package);
+        let name = machine.allocate_gbk_string("title.gif");
+        assert_eq!(machine.resource_id_by_name(name), Some(0));
+        assert_eq!(machine.memory.r16(package + 8), 1);
+        let source = machine.package_resource_by_id(package, 0);
+        assert_ne!(source, 0);
+        assert_eq!(machine.memory.r8(source), 1);
+        assert_eq!(machine.memory.r8(source + 2), 3);
+        assert_ne!(machine.package_resource_name_by_id(package, 0), 0);
+        let cursor = machine.heap_cursor;
+        assert_eq!(machine.resource_id_by_name(name), Some(0));
+        assert_eq!(machine.heap_cursor, cursor);
+    }
+
+    #[test]
+    fn unknown_resource_does_not_populate_an_empty_package() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine.resources.push(HostResource {
+            name: "title.gif".into(),
+            data: vec![1],
+        });
+        let package = machine.allocate(DATA_PACKAGE_SIZE);
+        machine.initialize_data_package(package, 0);
+        machine.memory.w32(DREAM_FACTORY_PACKAGE_SLOT, package);
+        let name = machine.allocate_gbk_string("missing.gif");
+        let cursor = machine.heap_cursor;
+        assert_eq!(machine.resource_id_by_name(name), None);
+        assert_eq!(machine.memory.r16(package + 8), 0);
+        assert_eq!(machine.heap_cursor, cursor);
+    }
+
+    #[test]
+    fn resource_lookup_loads_registered_named_packages_without_root_resources() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        machine
+            .resource_packages
+            .push(crate::machine::packages::HostResourcePackage {
+                name: "images".into(),
+                resources: vec![HostResource {
+                    name: "title.gif".into(),
+                    data: vec![7, 8, 9],
+                }],
+            });
+        let package = machine.allocate(DATA_PACKAGE_SIZE);
+        machine.initialize_data_package(package, 1);
+        let package_name = machine.allocate_gbk_string("images");
+        assert_eq!(machine.add_data_package(package, package_name), 1);
+        machine.memory.w32(DREAM_FACTORY_PACKAGE_SLOT, package);
+        let name = machine.allocate_gbk_string("title.gif");
+        assert_eq!(machine.resource_id_by_name(name), Some(256));
+        assert_eq!(machine.memory.r16(package + 8), 0);
+        let source = machine.package_resource_by_id(package, 256);
+        assert_ne!(source, 0);
+        assert_eq!(machine.memory.r8(source), 7);
+        let cursor = machine.heap_cursor;
+        assert_eq!(machine.resource_id_by_name(name), Some(256));
+        assert_eq!(machine.heap_cursor, cursor);
+    }
 
     #[test]
     fn image_page_uses_embedded_resources_instead_of_main_resource_ids() {

@@ -50,6 +50,7 @@ const BUILTIN_PROFILE: &[(u32, u64)] = &[
     (0x20845BF0, 376402),  // Resident Evil new variant
     (0x817C11BE, 249023),  // Zombie
     (0xECCDF7C3, 493544),  // Zombie Master variant
+    (0x153A8556, 442121),  // Zombie Master V101
 ];
 
 /// User-supplied entries registered by a frontend; they win over the built-in

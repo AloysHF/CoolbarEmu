@@ -1724,6 +1724,9 @@ impl NicaiMachine {
     /// Set a guest key state. Key codes use the platform ABI values (0-20).
     pub fn set_key(&mut self, key: u8, pressed: bool) {
         if update_physical_key_bits(&mut self.key_held_physical, key, pressed) {
+            if pressed {
+                self.input_control_key(key);
+            }
             self.pending_key_events.push_back(KeyEvent { key, pressed });
         }
     }
@@ -1806,6 +1809,7 @@ impl NicaiMachine {
     /// Copy the current RGB565 framebuffer into 0x00RRGGBB pixels, applying
     /// the configured display orientation.
     pub fn frame_pixels(&mut self) -> Vec<u32> {
+        self.render_input_controls();
         let (width, height) = self.framebuffer_size();
         let mut pixels = Vec::with_capacity((width * height) as usize);
         for y in 0..height {
@@ -1876,7 +1880,7 @@ impl NicaiMachine {
         self.net_uplink_bytes
     }
 
-    /// Total bytes delivered to guest network callbacks by the mock layer.
+    /// Total bytes delivered to guest network callbacks by the host backend.
     pub fn network_downlink_bytes(&self) -> u64 {
         self.net_downlink_bytes
     }
@@ -2020,12 +2024,12 @@ mod tests {
     }
 
     #[test]
-    fn network_connect_registers_channel_and_queues_ready_event() {
+    fn network_connect_registers_attempt_and_queues_offline_error() {
         let mut machine = NicaiMachine::new_blank_for_tests();
         machine.set_user_register(2, 0x0100_1235);
         machine.set_user_register(3, HEAP_BASE + 0x100);
         machine.handle_network_service(0);
-        assert_eq!(machine.register(0), 1);
+        assert_eq!(machine.register(0), 0);
         let connect_id = machine.memory.r32(HEAP_BASE + 0x100);
         assert_ne!(connect_id, 0);
         assert!(machine
@@ -2035,7 +2039,34 @@ mod tests {
         assert!(machine
             .net_events
             .iter()
-            .any(|event| event.event_type == services::network::NET_EVENT_CHANNEL_READY));
+            .any(|event| event.event_type == services::network::NET_EVENT_CHANNEL_ERROR));
+        assert_eq!(machine.net_events.len(), 1);
+        let event = &machine.net_events[0];
+        assert_eq!((event.r0, event.r1, event.r2), (0, 0, 0));
+        assert!(!event.screenless_only);
+        assert_eq!(machine.net_downlink_bytes, 0);
+    }
+
+    #[test]
+    fn network_send_reads_firmware_argument_order_without_mocking_server_data() {
+        let mut machine = NicaiMachine::new_blank_for_tests();
+        let output = HEAP_BASE + 0x100;
+        let payload = HEAP_BASE + 0x200;
+        machine.set_user_register(2, 0x0100_1235);
+        machine.set_user_register(3, output);
+        machine.handle_network_service(0);
+        let handle = machine.memory.r32(output);
+        machine.memory.write_bytes(payload, &[0xab, 0xcd, 0xef]);
+        machine.set_user_register(0, handle);
+        machine.set_user_register(1, 3);
+        machine.set_user_register(2, payload);
+        machine.handle_network_service(1);
+        assert_eq!(machine.register(0), 0);
+        assert_eq!(machine.net_last_uplink, [0xab, 0xcd, 0xef]);
+        assert_eq!(machine.net_uplink_bytes, 3);
+        assert_eq!(machine.net_downlink_bytes, 0);
+        assert_eq!(machine.net_events.len(), 1);
+        assert!(machine.memory.bad_accesses.is_empty());
     }
 
     #[test]
@@ -2107,38 +2138,40 @@ mod tests {
         assert!(machine.net_events.is_empty());
     }
 
-    /// PostHttpData queues one offline completion that only reaches the
-    /// guest while the boot flow is still screenless: screen-holding
-    /// games treat the synchronous success as final, screenless booters
-    /// need the callback to build their first screen.
     #[test]
-    fn network_post_completion_is_screenless_gated() {
+    fn network_post_completion_reaches_loading_screens_once() {
         let mut machine = NicaiMachine::new_blank_for_tests();
-        machine.set_user_register(3, (SERVICE_BASE + 0x8000) | 1);
+        let stub = HEAP_BASE + 0x1000;
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30);
+        let marker = HEAP_BASE;
+        // LDR r1, literal; LDR/ADD/STR r0, [r1]; BX LR.
+        for (offset, instruction) in [0x4902, 0x6808, 0x3001, 0x6008, 0x4770, 0x46c0]
+            .into_iter()
+            .enumerate()
+        {
+            machine.memory.w16(stub + offset as u32 * 2, instruction);
+        }
+        machine.memory.w32(stub + 12, marker);
+        machine.set_user_register(3, stub | 1);
         machine.handle_network_service(4);
         assert_eq!(machine.register(0), 1, "POST reports accepted");
         assert_eq!(machine.net_events.len(), 1);
         let event = &machine.net_events[0];
         assert_eq!(event.event_type, 9, "offline completion code in r3");
-        assert!(event.screenless_only);
+        assert!(!event.screenless_only);
         assert_eq!(event.delay_frames, 3);
 
-        // A screen presented before the delay elapses drops the completion.
+        // A loading screen must not consume or suppress the pending result.
         machine.active_screen = 1;
-        machine.dispatch_network_events(10_000).unwrap();
-        assert!(
-            machine.net_events.is_empty(),
-            "dropped once a screen exists"
-        );
-
-        // Without a screen the completion fires once the delay drains.
-        let mut machine = NicaiMachine::new_blank_for_tests();
-        machine.set_user_register(3, (SERVICE_BASE + 0x8000) | 1);
-        machine.handle_network_service(4);
-        for _ in 0..4 {
+        for _ in 0..3 {
             machine.dispatch_network_events(10_000).unwrap();
+            assert_eq!(machine.memory.r32(marker), 0);
         }
-        assert!(machine.net_events.is_empty(), "delivered while screenless");
+        for _ in 0..2 {
+            machine.dispatch_network_events(10_000).unwrap();
+            assert_eq!(machine.memory.r32(marker), 1);
+        }
+        assert!(machine.net_events.is_empty());
     }
 
     /// A screenless frame waits while network completions are in flight;
@@ -5035,6 +5068,123 @@ mod tests {
                 }
             }
             assert!(red > 0);
+        }
+    }
+
+    #[test]
+    fn alternate_stream_decoder_writes_pixels_dimensions_and_preserves_caller_frame() {
+        let mut machine = machine_from_minimal_archive();
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(2, 1, image::Rgb([255, 0, 0])))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let png = png.into_inner();
+        let source = machine.allocate(png.len() as u32);
+        machine.memory.write_bytes(source, &png);
+        let output = machine.allocate(16);
+        machine.memory.w32(output + 12, 0x1234_5678);
+        machine.set_user_register(0, source);
+        machine.set_user_register(1, output);
+        // This ABI is the fixed-manager variant used by embedded applications.
+        machine.executable.preferred_code_address = 0x043e_3000;
+        machine.executable.big_endian = true;
+        machine.executable.code_image_size = machine.executable.code_size as u32 + 4;
+        machine.handle_lcd_service(50);
+        assert_eq!(machine.register(0), output);
+        assert_eq!(machine.memory.r16(output + 4), 2);
+        assert_eq!(machine.memory.r16(output + 6), 1);
+        let pixels = machine.memory.r32(output);
+        assert_eq!(machine.memory.r16(pixels), 0xf800);
+        assert_eq!(machine.memory.r16(pixels + 2), 0xf800);
+        assert_eq!(machine.memory.r32(output + 12), 0x1234_5678);
+    }
+
+    #[test]
+    fn image_stream_decodes_static_guest_buffer_with_mapped_bounds() {
+        for big_endian in [false, true] {
+            let mut machine = NicaiMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let mut png = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+                3,
+                2,
+                image::Rgb([255, 0, 0]),
+            ))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+            let source = 0x0010_0010;
+            machine
+                .memory
+                .map(0x0010_0000, png.get_ref().len() + 16, false);
+            machine.memory.write_bytes(source, png.get_ref());
+            assert_eq!(machine.allocation_size(source), None);
+            let image = machine.create_image_from_stream(source, 0);
+            assert_ne!(image, 0);
+            assert_eq!(machine.image_dims(image), (3, 2));
+            let pixels = machine.memory.r32(image);
+            assert_eq!(machine.memory.r16(pixels), 0xf800);
+            assert_eq!(machine.create_image_from_stream(0x0020_0000, 0), 0);
+            assert_eq!(
+                machine.create_image_from_stream(source + png.get_ref().len() as u32 - 1, 0),
+                0
+            );
+            let truncated = machine.allocate(4);
+            let next = machine.allocate(png.get_ref().len() as u32);
+            machine.memory.write_bytes(truncated, &png.get_ref()[..4]);
+            machine.memory.write_bytes(next, png.get_ref());
+            assert_eq!(machine.create_image_from_stream(truncated, 0), 0);
+        }
+    }
+
+    #[test]
+    fn lazy_package_load_preserves_adjacent_picture_library() {
+        for big_endian in [false, true] {
+            let mut machine = NicaiMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.wide_images = true;
+            let mut png = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+                2,
+                1,
+                image::Rgb([255, 0, 0]),
+            ))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+            for name in ["first.png", "second.png"] {
+                machine.resources.push(HostResource {
+                    name: name.into(),
+                    data: png.get_ref().clone(),
+                });
+            }
+            let owner = machine.allocate(0x100);
+            let package = owner + 16;
+            let library = package + 80;
+            machine.initialize_data_package(package, 0);
+            machine.memory.w32(DREAM_FACTORY_PACKAGE_SLOT, package);
+            machine.cpu.reg_set(Mode::User, 0, library);
+            machine.cpu.reg_set(Mode::User, 1, 2);
+            machine.handle_df_engine_service(3);
+            let images = machine.memory.r32(library + 16);
+            assert_ne!(images, 0);
+            for (index, name) in ["first.png", "second.png"].into_iter().enumerate() {
+                let address = machine.allocate(name.len() as u32 + 1);
+                machine.memory.write_bytes(address, name.as_bytes());
+                machine.memory.w8(address + name.len() as u32, 0);
+                machine.cpu.reg_set(Mode::User, 0, library);
+                machine.cpu.reg_set(Mode::User, 1, address);
+                machine.handle_picture_library_method(0x1c);
+                assert_eq!(machine.memory.r32(library + 16), images);
+                assert_eq!(machine.register(0), index as u32);
+                let image = machine.memory.r32(images + index as u32 * 4);
+                assert_ne!(image, 0);
+                assert_eq!(machine.image_dims(image), (2, 1));
+            }
+            assert_eq!(machine.memory.r16(package + 8), 2);
+            assert_eq!(machine.memory.r16(library + 20), 2);
         }
     }
 

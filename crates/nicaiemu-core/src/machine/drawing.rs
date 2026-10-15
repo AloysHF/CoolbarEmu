@@ -1252,7 +1252,16 @@ impl NicaiMachine {
                 );
                 self.set_result(result);
             }
-            49 => {
+            // Some embedded runtimes place stream decoding one slot later.
+            49 | 50
+                if index == 49
+                    || (self.uses_fixed_manager_abi()
+                        && self.register(1) != 0
+                        && self
+                            .memory
+                            .region(self.register(1), self.image_header_len() as usize)
+                            .is_some()) =>
+            {
                 let result = self.create_image_from_stream(self.register(0), self.register(1));
                 self.set_result(result);
             }
@@ -1282,15 +1291,18 @@ impl NicaiMachine {
             .iter()
             .position(|pointer| *pointer == source)
         else {
-            let Some(size) = self.allocation_size(source) else {
-                warn!("image stream at 0x{source:08X} has no allocation boundary");
-                return 0;
-            };
-            let Some(region) = self.memory.region(source, size as usize) else {
+            let Some(region) = self.memory.region(source, 1) else {
                 return 0;
             };
             let offset = (source - region.base) as usize;
-            let resource = region.data[offset..offset + size as usize].to_vec();
+            // Guest file loaders also use static buffers outside the host heap.
+            let available = region.data.len() - offset;
+            let size = self
+                .allocation_size(source)
+                .map_or(available, |size| size as usize)
+                .min(available)
+                .min(HEAP_SIZE);
+            let resource = region.data[offset..offset + size].to_vec();
             return self.create_image_from_bytes(&resource, "guest stream", output);
         };
         self.create_image_from_resource_index(resource_index, output)

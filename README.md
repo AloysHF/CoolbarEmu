@@ -32,6 +32,11 @@ by supported games.
   packed-rectangle collision detection
 - **Guest filesystem** — sandboxed in-memory files used by CBE installers and
   file-backed resource packages
+- **Offline startup** — HTTP errors reach loading screens so supported embedded
+  applications can enter their local menus; online content and paid gameplay
+  remain subject to the limitations in [Game Compatibility](docs/Game-Compatibility.md)
+- **Login fields** — basic numeric account/password controls with focus,
+  password masking and save-state preservation; online authentication is not implemented
 - **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction with format-specific RGB565 palette byte order
 - **Text rendering** — GBK and guest-endian UCS-2 strings, clipped and wrapped
   text, and offscreen drawing with an embedded Unicode bitmap font
