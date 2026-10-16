@@ -23,9 +23,7 @@ by supported games.
 
 CoolbarEmu uses the `coolbaremu` command, crates and libretro core identifiers.
 Save states use the `CBARSTAT` signature. Previous project names, save-state
-signatures and configuration keys are not supported. See the
-[project migration guide](docs/Project-Migration.md) for identifiers and external
-service updates.
+signatures and configuration keys are not supported.
 
 ## Features
 

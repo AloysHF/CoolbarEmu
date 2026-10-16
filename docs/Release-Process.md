@@ -82,7 +82,6 @@ Submit the current `crates/coolbaremu-libretro/coolbaremu_libretro.info` there.
 For the project rename, coordinate removal of the old core entry and addition
 of the new one with the buildbot, GitLab mirror and documentation maintainers.
 Updating this repository alone does not publish the new Core Downloader entry.
-See the [migration guide](Project-Migration.md#external-services).
 
 ## Troubleshooting
 

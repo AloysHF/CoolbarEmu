@@ -9,8 +9,7 @@ Android RetroArch-based frontends.
 
 The renamed core requires coordinated upstream buildbot and core-info updates.
 Until those updates are published, install a CoolbarEmu release manually;
-availability under the new name in Core Downloader is not assumed. See the
-[migration guide](Project-Migration.md#external-services).
+availability under the new name in Core Downloader is not assumed.
 
 1. **Download** `coolbaremu-android-libretro.tar.gz` from the
    [Releases](https://github.com/AloysHF/CoolbarEmu/releases) page. It
