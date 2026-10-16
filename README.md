@@ -1,4 +1,4 @@
-# CoolbarEmu — A Coolbar/CBE application emulator written in Rust
+# CoolbarEmu (formerly NicaiEmu) — A Coolbar/CBE application emulator written in Rust
 
 <p align="center">
   <img src="res/logo-banner.png" alt="CoolbarEmu" width="600">
