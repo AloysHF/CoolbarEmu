@@ -76,9 +76,11 @@ Pushing the tag triggers `.github/workflows/release.yml`, which:
 
 ### 6. Sync upstream libretro metadata and builds
 
-Core metadata is maintained in
-[libretro-core-info](https://github.com/libretro/libretro-core-info).
-Submit the current `crates/coolbaremu-libretro/coolbaremu_libretro.info` there.
+Submit core metadata changes to
+[libretro-super](https://github.com/libretro/libretro-super/tree/master/dist/info)
+under `dist/info/coolbaremu_libretro.info`, using the current
+`crates/coolbaremu-libretro/coolbaremu_libretro.info` from this repository.
+The separate `libretro-core-info` repository is a mirror.
 For the project rename, coordinate removal of the old core entry and addition
 of the new one with the buildbot, GitLab mirror and documentation maintainers.
 Updating this repository alone does not publish the new Core Downloader entry.
