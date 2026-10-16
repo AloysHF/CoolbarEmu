@@ -54,6 +54,9 @@ change cannot establish that they have happened.
    binding after the repository rename. Preserve project history. Verify the
    existing CI token can analyze the new key and run analysis again. Do not
    disable the quality gate to mask an incomplete service migration.
+   If a PR analysis has automatically created a separate project at the new key,
+   remove that new project before assigning its key to the historical project.
+   Keep the historical project until its migration and binding are verified.
 3. **Libretro:** coordinate the GitLab buildbot mirror/project name, source URL,
    core build recipe and artifact name with its maintainers. Rename the entry in
    [libretro-core-info](https://github.com/libretro/libretro-core-info) to

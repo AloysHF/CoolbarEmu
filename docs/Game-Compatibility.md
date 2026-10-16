@@ -14,6 +14,8 @@ The tables below record the current core's 200-frame idle execution and captured
 RGB565 frame. Each callback permits 100,000,000 instructions; each file has a
 90-second wall-clock limit. An execution result is not a gameplay rating.
 `Ready` means the machine remains active; `Halted` means guest execution stopped.
+The current CoolbarEmu captures contain 243 `Ready` and two `Halted` results,
+with no execution failures or timeouts across the 245 files.
 A captured image may be a loading screen or prompt. Blank frames and guest
 assertion halts do not establish usable startup. Interaction is unverified unless
 explicitly listed in the Coverage / limitation column. Bookstore B retains its verified offline failure prompt and deliberate timed exit;
