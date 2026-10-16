@@ -5,15 +5,17 @@
 The local validation corpus contains 245 distinct CBE files in three groups: A (123), B
 (74), and C (48). Group identifiers distinguish archive variants, including
 applications with the same name. Game files are supplied separately and are not
-included in this repository. Local files are organized under
-`tmp/nicai_game/A`, `tmp/nicai_game/B`, and `tmp/nicai_game/C`; table filenames
-are relative to `tmp/nicai_game`. Byte-identical archives are retained once,
+included in this repository. Table filenames use group-relative paths such as
+`A/`, `B/`, and `C/`. These collection groups do not identify handset models.
+Byte-identical archives are retained once,
 with group priority B, then C, then A; differently encoded variants remain separate.
 
 The tables below record the current core's 200-frame idle execution and captured
 RGB565 frame. Each callback permits 100,000,000 instructions; each file has a
 90-second wall-clock limit. An execution result is not a gameplay rating.
 `Ready` means the machine remains active; `Halted` means guest execution stopped.
+The current CoolbarEmu captures contain 243 `Ready` and two `Halted` results,
+with no execution failures or timeouts across the 245 files.
 A captured image may be a loading screen or prompt. Blank frames and guest
 assertion halts do not establish usable startup. Interaction is unverified unless
 explicitly listed in the Coverage / limitation column. Bookstore B retains its verified offline failure prompt and deliberate timed exit;
@@ -341,7 +343,7 @@ and error text. Reproduce with `cbe_boot` and scripted phone keys where possible
 Do not attach copyrighted game packages to public reports.
 
 ```bash
-cargo run --release -p nicaiemu-tools --bin cbe_boot -- \
+cargo run --release -p coolbaremu-tools --bin cbe_boot -- \
   path/to/game.CBE --frames 200 --key-event 1:14 --screenshot frame.png
 ```
 

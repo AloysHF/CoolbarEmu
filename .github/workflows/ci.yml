@@ -1,4 +1,4 @@
-name: NicaiEmu CI
+name: CoolbarEmu CI
 
 on:
   push:
@@ -36,7 +36,7 @@ jobs:
         run: cargo build --workspace --release
 
       - name: Build libretro core
-        run: cargo build -p nicaiemu-libretro --release
+        run: cargo build -p coolbaremu-libretro --release
 
       - name: Run tests
         run: cargo test --workspace

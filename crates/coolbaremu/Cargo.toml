@@ -1,0 +1,26 @@
+[package]
+name = "coolbaremu"
+description = "Coolbar/CBE game emulator - Desktop application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "coolbaremu"
+path = "src/main.rs"
+
+[dependencies]
+coolbaremu-core.workspace = true
+anyhow.workspace = true
+log.workspace = true
+clap.workspace = true
+minifb.workspace = true
+gilrs.workspace = true
+env_logger.workspace = true
+image.workspace = true
+crc32fast.workspace = true
+rodio.workspace = true
+
+# X11/XWayland scale probe used by the Linux/BSD window backend only.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+x11-dl.workspace = true

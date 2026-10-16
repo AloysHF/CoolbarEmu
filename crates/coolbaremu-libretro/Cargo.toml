@@ -1,0 +1,17 @@
+[package]
+name = "coolbaremu-libretro"
+description = "Coolbar/CBE game emulator - Libretro core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "coolbaremu"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+coolbaremu-core.workspace = true
+anyhow.workspace = true
+log.workspace = true
+crc32fast.workspace = true

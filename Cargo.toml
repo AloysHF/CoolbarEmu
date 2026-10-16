@@ -1,25 +1,25 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/nicaiemu-core",
-    "crates/nicaiemu",
-    "crates/nicaiemu-tools",
-    "crates/nicaiemu-libretro",
+    "crates/coolbaremu-core",
+    "crates/coolbaremu",
+    "crates/coolbaremu-tools",
+    "crates/coolbaremu-libretro",
 ]
 # The libretro buildbot runs a bare `cargo build --release --target <triple>` at
 # the repo root. Restrict the default build set to the libretro core so the CI
 # does not try to cross-compile the standalone GUI binary (minifb/rodio, which
 # need X11/ALSA). Explicit `-p` / `--workspace` selections are unaffected.
-default-members = ["crates/nicaiemu-libretro"]
+default-members = ["crates/coolbaremu-libretro"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "A Nicai/MStar CBE game emulator written in Rust"
+description = "A Coolbar/CBE game emulator written in Rust"
 license = "BSD-3-Clause"
 
 [workspace.dependencies]
-nicaiemu-core = { path = "crates/nicaiemu-core" }
+coolbaremu-core = { path = "crates/coolbaremu-core" }
 anyhow = "1"              # Error handling (ergonomic Result types)
 thiserror = "2"           # Error handling (custom error enums)
 log = "0.4"               # Logging facade

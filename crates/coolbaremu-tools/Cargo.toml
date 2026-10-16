@@ -1,0 +1,19 @@
+[package]
+name = "coolbaremu-tools"
+version.workspace = true
+edition.workspace = true
+description = "Tools for analyzing CBE game files"
+license.workspace = true
+
+[[bin]]
+name = "cbe-analyze"
+path = "src/bin/cbe_analyze.rs"
+
+[dependencies]
+coolbaremu-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+log.workspace = true
+env_logger.workspace = true
+image.workspace = true
+unarm.workspace = true

@@ -1,19 +1,19 @@
 # DESCRIPTION: GitLab CI/CD for libRetro (NOT FOR GitLab-proper)
 #
-# This recipe is consumed by the Libretro buildbot so the NicaiEmu core can
+# This recipe is consumed by the Libretro buildbot so the CoolbarEmu core can
 # be distributed through RetroArch's Online Updater > Core Downloader.
 #
-# NicaiEmu is written in Rust, so it uses the official Rust CI templates from
+# CoolbarEmu is written in Rust, so it uses the official Rust CI templates from
 # libretro-infrastructure/ci-templates. Those templates run
 # `cargo build --release --target <triple>` and rename the produced cdylib to
-# `${CORENAME}_libretro.<ext>`. The cdylib lib target is named `nicaiemu`
-# (see crates/nicaiemu-libretro/Cargo.toml) and the workspace `default-members`
+# `${CORENAME}_libretro.<ext>`. The cdylib lib target is named `coolbaremu`
+# (see crates/coolbaremu-libretro/Cargo.toml) and the workspace `default-members`
 # is set to the libretro core, so the bare cargo build only builds the core.
 
 # Core definitions
 .core-defs:
   variables:
-    CORENAME: nicaiemu
+    CORENAME: coolbaremu
 
 include:
   # Windows 64-bit

@@ -1,6 +1,6 @@
 # iOS Libretro Core
 
-NicaiEmu can run as a libretro core on RetroArch, allowing you to play
+CoolbarEmu can run as a libretro core on RetroArch, allowing you to play
 CBE games on iPhone / iPad.
 
 > **Note**: iOS support is currently experimental. The libretro core is
@@ -16,8 +16,8 @@ CBE games on iPhone / iPad.
 - iPhone or iPad (arm64, iOS 15+)
 - RetroArch 1.17.0 IPA
   ([official download](https://buildbot.libretro.com/stable/1.17.0/apple/ios-arm64/RetroArch.ipa))
-- Download `nicaiemu-ios-libretro.tar.gz` from the
-  [Releases](https://github.com/AloysHF/NicaiEmu/releases) page (when available).
+- Download `coolbaremu-ios-libretro.tar.gz` from the
+  [Releases](https://github.com/AloysHF/CoolbarEmu/releases) page (when available).
 - A file manager and IPA signing app (e.g. ESign, SideStore, or AltStore)
 
 ### Step 1: Rename IPA to ZIP and extract
@@ -28,13 +28,13 @@ CBE games on iPhone / iPad.
 
 ### Step 2: Inject the core binary
 
-Copy `nicaiemu_libretro_ios.dylib` into: `Payload/RetroArch.app/modules/`
+Copy `coolbaremu_libretro_ios.dylib` into: `Payload/RetroArch.app/modules/`
 
 ### Step 3: Inject the core metadata
 
 1. Locate `assets.zip` inside `RetroArch.app/`
 2. Extract `assets.zip` and navigate into the extracted `assets/` directory
-3. Copy `nicaiemu_libretro.info` into `assets/info/`
+3. Copy `coolbaremu_libretro.info` into `assets/info/`
 4. Recompress the entire `assets/` directory, making sure the output is named
    `assets.zip`
 5. Move the new `assets.zip` back into `RetroArch.app/`, replacing the original
@@ -69,7 +69,7 @@ before it can be installed.
    - Update Overlays
 4. Restart RetroArch
 
-The NicaiEmu core should now appear in the core list automatically.
+The CoolbarEmu core should now appear in the core list automatically.
 
 ### Troubleshooting
 
@@ -77,8 +77,8 @@ The NicaiEmu core should now appear in the core list automatically.
 
 - Make sure you are using RetroArch **1.17.0** (newer versions have a different
   folder structure)
-- Verify `nicaiemu_libretro_ios.dylib` is in the `modules/` directory
-- Verify `nicaiemu_libretro.info` is in `assets/info/` (inside `assets.zip`)
+- Verify `coolbaremu_libretro_ios.dylib` is in the `modules/` directory
+- Verify `coolbaremu_libretro.info` is in `assets/info/` (inside `assets.zip`)
 - Ensure the IPA was correctly re-signed
 
 #### IPA installation fails
@@ -99,20 +99,20 @@ Build for real devices (arm64 + x86_64 universal library):
 
 ```bash
 # Build for arm64 (real devices)
-cargo build -p nicaiemu-libretro --release --target aarch64-apple-ios
+cargo build -p coolbaremu-libretro --release --target aarch64-apple-ios
 
 # Build for x86_64 (real devices)
-cargo build -p nicaiemu-libretro --release --target x86_64-apple-ios
+cargo build -p coolbaremu-libretro --release --target x86_64-apple-ios
 
 # Create universal library
 lipo -create \
-  target/aarch64-apple-ios/release/libnicaiemu.dylib \
-  target/x86_64-apple-ios/release/libnicaiemu.dylib \
-  -output nicaiemu_libretro_ios.dylib
+  target/aarch64-apple-ios/release/libcoolbaremu.dylib \
+  target/x86_64-apple-ios/release/libcoolbaremu.dylib \
+  -output coolbaremu_libretro_ios.dylib
 ```
 
 Build for simulator (Apple Silicon Mac):
 
 ```bash
-cargo build -p nicaiemu-libretro --release --target aarch64-apple-ios-sim
+cargo build -p coolbaremu-libretro --release --target aarch64-apple-ios-sim
 ```

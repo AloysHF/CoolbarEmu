@@ -1,6 +1,6 @@
-# Game File Format — CBE (Cool Bar Engine)
+# Coolbar/CBE Application Format
 
-Nicai/MStar games use the **CBE** container format. This document describes the
+Coolbar games use the **CBE** container format. This document describes the
 file structure, section layout, and resource types.
 
 ## Overview
@@ -62,7 +62,7 @@ Offset   Size   Field
 
 ## Executable Format
 
-CBE executables contain ARM/Thumb code designed for Nicai/MStar phones:
+CBE executables contain ARM/Thumb code designed for Coolbar phones:
 
 - **Display**: 240×400 (WQVGA)
 - **Pixel format**: RGB565 (16-bit, 5-6-5 bit layout)
