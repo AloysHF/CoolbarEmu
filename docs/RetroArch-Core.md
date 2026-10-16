@@ -1,6 +1,6 @@
 # RetroArch Core
 
-This guide covers installing and running the NicaiEmu libretro core for
+This guide covers installing and running the CoolbarEmu libretro core for
 RetroArch, loading content, supported features, and controls.
 
 ## Supported Platforms
@@ -18,21 +18,21 @@ RetroArch, loading content, supported features, and controls.
 Build the libretro core:
 
 ```bash
-cargo build -p nicaiemu-libretro --release
+cargo build -p coolbaremu-libretro --release
 ```
 
 Cargo names the cdylib after its lib target, so this produces
-`nicaiemu.dll` on Windows (`libnicaiemu.so` on Linux,
-`libnicaiemu.dylib` on macOS) under `target/release/`.
+`coolbaremu.dll` on Windows (`libcoolbaremu.so` on Linux,
+`libcoolbaremu.dylib` on macOS) under `target/release/`.
 
-RetroArch expects the core file to be named `nicaiemu_libretro.<ext>`, so
+RetroArch expects the core file to be named `coolbaremu_libretro.<ext>`, so
 rename it accordingly before placing it into RetroArch's `cores/` directory.
-Copy `nicaiemu_libretro.info` into RetroArch's `info/` directory so the
+Copy `coolbaremu_libretro.info` into RetroArch's `info/` directory so the
 frontend can display the core metadata and supported features.
 
 ## Loading Games
 
-1. Open RetroArch and select **Load Core > Nicai/MStar CBE (NicaiEmu)**.
+1. Open RetroArch and select **Load Core > Coolbar/CBE (CoolbarEmu)**.
 2. Select **Load Content**.
 3. Choose a `.CBE` file.
 
@@ -101,7 +101,7 @@ on top of it and turns profiled games sideways again. Pointer input is mapped
 back through the active orientation, so taps stay correct in every mode.
 
 Additional titles can be covered without a core update by placing a
-`nicaiemu_orientation.csv` file in RetroArch's **system directory** (Settings >
+`coolbaremu_orientation.csv` file in RetroArch's **system directory** (Settings >
 Directory > System/BIOS). The format is one `crc32,length,orientation` entry
 per line (`crc32` hex, `length` decimal bytes, `orientation` one of
 `landscape`, `portrait`), matching the standalone `--orientation-profile`

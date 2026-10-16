@@ -1,10 +1,10 @@
-// NicaiEmu site interactions: i18n toggle, reveal animations, counters,
+// CoolbarEmu site interactions: i18n toggle, reveal animations, counters,
 // hero screenshot, and the game gallery.
 
 (function () {
   "use strict";
 
-  var REPO = "https://raw.githubusercontent.com/AloysHF/NicaiEmu/master";
+  var REPO = "https://raw.githubusercontent.com/AloysHF/CoolbarEmu/master";
 
   // All portrait (240x400) screenshots under docs/images/, featured first.
   var PORTRAIT = [
@@ -94,12 +94,12 @@
     "nav.arch": { zh: "技术架构", en: "Architecture" },
     "nav.quickstart": { zh: "快速开始", en: "Quick Start" },
     "hero.lead": {
-      zh: "NicaiEmu 用 Rust 真实执行 CBE 应用的 ARM/Thumb 代码，并桥接固件服务。同一套核心同时驱动桌面窗口与 RetroArch 前端。",
-      en: "NicaiEmu runs the ARM/Thumb code of CBE apps for real and bridges the firmware services. One core drives both the desktop window and the RetroArch frontend.",
+      zh: "CoolbarEmu 用 Rust 真实执行 CBE 应用的 ARM/Thumb 代码，并桥接固件服务。同一套核心同时驱动桌面窗口与 RetroArch 前端。",
+      en: "CoolbarEmu runs the ARM/Thumb code of CBE apps for real and bridges the firmware services. One core drives both the desktop window and the RetroArch frontend.",
     },
     "hero.download": { zh: "下载 Release", en: "Download Release" },
     "hero.source": { zh: "查看源码 ↗", en: "View Source ↗" },
-    "hero.note": { zh: "NicaiEmu 实际运行画面", en: "Actual NicaiEmu output" },
+    "hero.note": { zh: "CoolbarEmu 实际运行画面", en: "Actual CoolbarEmu output" },
     "hero.title": {
       zh: "让尘封的<span class=\"accent\">手机游戏</span><br>在现代设备上重生",
       en: "Bring forgotten <span class=\"accent\">phone games</span><br>back to life on modern devices",
@@ -167,9 +167,9 @@
     "qs.s3": { zh: "方向键移动 · Enter 确认 · Q/E 软键 · R 重置", en: "Arrows move · Enter confirms · Q/E soft keys · R resets" },
     "qs.retro": { zh: "RetroArch", en: "RetroArch" },
     "qs.r1": { zh: "下载 libretro 核心并放入 cores/", en: "Download the libretro core into cores/" },
-    "qs.r2": { zh: "放入 nicaiemu_libretro.info 到 info/", en: "Put nicaiemu_libretro.info into info/" },
+    "qs.r2": { zh: "放入 coolbaremu_libretro.info 到 info/", en: "Put coolbaremu_libretro.info into info/" },
     "qs.build": { zh: "从源码编译", en: "Build from Source" },
-    "footer.desc": { zh: "用 Rust 编写的 Nicai/MStar CBE 游戏模拟器", en: "A Rust emulator for Nicai/MStar CBE games" },
+    "footer.desc": { zh: "用 Rust 编写的 Coolbar/CBE 游戏模拟器", en: "A Rust emulator for Coolbar/CBE games" },
     "footer.project": { zh: "项目", en: "Project" },
     "footer.contrib": { zh: "贡献指南", en: "Contributing" },
     "footer.docs": { zh: "文档", en: "Docs" },
@@ -178,7 +178,7 @@
     "footer.gamelist": { zh: "游戏兼容性", en: "Game Compatibility" },
   };
 
-  var currentLang = localStorage.getItem("nicai-site-lang") || "zh";
+  var currentLang = localStorage.getItem("coolbar-site-lang") || "zh";
 
   function applyLang(lang) {
     document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
@@ -202,7 +202,7 @@
     }
     toggle.addEventListener("click", function () {
       currentLang = currentLang === "zh" ? "en" : "zh";
-      localStorage.setItem("nicai-site-lang", currentLang);
+      localStorage.setItem("coolbar-site-lang", currentLang);
       applyLang(currentLang);
     });
   }
@@ -267,7 +267,7 @@
     var img = document.getElementById("hero-shot");
     if (img) {
       img.src = imageUrl("魔塔");
-      img.alt = "NicaiEmu running 魔塔";
+      img.alt = "CoolbarEmu running 魔塔";
     }
   }
 

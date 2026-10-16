@@ -16,26 +16,26 @@ jobs:
         include:
           - platform: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: nicaiemu-linux-x86_64
+            artifact: coolbaremu-linux-x86_64
           - platform: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-            artifact: nicaiemu-linux-aarch64
+            artifact: coolbaremu-linux-aarch64
           - platform: ubuntu-latest
             target: i686-unknown-linux-gnu
-            artifact: nicaiemu-linux-i686
+            artifact: coolbaremu-linux-i686
             libretro_only: true
           - platform: macos-latest
             target: x86_64-apple-darwin
-            artifact: nicaiemu-macos-x86_64
+            artifact: coolbaremu-macos-x86_64
           - platform: macos-latest
             target: aarch64-apple-darwin
-            artifact: nicaiemu-macos-aarch64
+            artifact: coolbaremu-macos-aarch64
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: nicaiemu-windows-x86_64
+            artifact: coolbaremu-windows-x86_64
           - platform: windows-latest
             target: i686-pc-windows-msvc
-            artifact: nicaiemu-windows-i686
+            artifact: coolbaremu-windows-i686
             libretro_only: true
 
     runs-on: ${{ matrix.platform }}
@@ -69,10 +69,10 @@ jobs:
         # packages on the runner; the 32-bit targets exist for RetroArch, so
         # they build the core only, the way the GitLab jobs do.
         if: ${{ !matrix.libretro_only }}
-        run: cargo build -p nicaiemu --release --target ${{ matrix.target }}
+        run: cargo build -p coolbaremu --release --target ${{ matrix.target }}
 
       - name: Build libretro core
-        run: cargo build -p nicaiemu-libretro --release --target ${{ matrix.target }}
+        run: cargo build -p coolbaremu-libretro --release --target ${{ matrix.target }}
 
       - name: Stage libretro core
         shell: bash
@@ -80,32 +80,32 @@ jobs:
           out="libretro/${{ matrix.artifact }}"
           mkdir -p "$out"
           rel="target/${{ matrix.target }}/release"
-          # Cargo names the cdylib after its lib target (nicaiemu); copy it
-          # to the nicaiemu_libretro.<ext> name RetroArch expects.
-          for f in "nicaiemu.dll:nicaiemu_libretro.dll" \
-                   "libnicaiemu.so:nicaiemu_libretro.so" \
-                   "libnicaiemu.dylib:nicaiemu_libretro.dylib"; do
+          # Cargo names the cdylib after its lib target (coolbaremu); copy it
+          # to the coolbaremu_libretro.<ext> name RetroArch expects.
+          for f in "coolbaremu.dll:coolbaremu_libretro.dll" \
+                   "libcoolbaremu.so:coolbaremu_libretro.so" \
+                   "libcoolbaremu.dylib:coolbaremu_libretro.dylib"; do
             src="${f%%:*}"; dst="${f##*:}"
             if [ -f "$rel/$src" ]; then
               cp "$rel/$src" "$out/$dst"
               break
             fi
           done
-          cp crates/nicaiemu-libretro/nicaiemu_libretro.info "$out/nicaiemu_libretro.info" 2>/dev/null || true
+          cp crates/coolbaremu-libretro/coolbaremu_libretro.info "$out/coolbaremu_libretro.info" 2>/dev/null || true
           ls -la "$out"
 
       - name: Package (Unix)
         if: ${{ runner.os != 'Windows' && !matrix.libretro_only }}
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../${{ matrix.artifact }}.tar.gz nicaiemu
+          tar czf ../../../${{ matrix.artifact }}.tar.gz coolbaremu
           cd ../../..
 
       - name: Package (Windows)
         if: ${{ runner.os == 'Windows' && !matrix.libretro_only }}
         run: |
           cd target/${{ matrix.target }}/release
-          7z a ../../../${{ matrix.artifact }}.zip nicaiemu.exe
+          7z a ../../../${{ matrix.artifact }}.zip coolbaremu.exe
           cd ../../..
 
       - name: Package libretro (Unix)
@@ -166,7 +166,7 @@ jobs:
           cargo ndk \
             -t arm64-v8a -t armeabi-v7a -t x86 -t x86_64 \
             --platform 21 \
-            build -p nicaiemu-libretro --release
+            build -p coolbaremu-libretro --release
 
       - name: Stage libretro core (Android)
         shell: bash
@@ -181,27 +181,27 @@ jobs:
           )
           for abi in "${!ABI_TRIPLE[@]}"; do
             triple="${ABI_TRIPLE[$abi]}"
-            out="libretro/nicaiemu-android/$abi"
+            out="libretro/coolbaremu-android/$abi"
             mkdir -p "$out"
-            cp "target/$triple/release/libnicaiemu.so" \
-               "$out/nicaiemu_libretro_android.so"
+            cp "target/$triple/release/libcoolbaremu.so" \
+               "$out/coolbaremu_libretro_android.so"
           done
-          cp crates/nicaiemu-libretro/nicaiemu_libretro.info \
-             libretro/nicaiemu-android/nicaiemu_libretro.info 2>/dev/null || true
-          ls -laR libretro/nicaiemu-android
+          cp crates/coolbaremu-libretro/coolbaremu_libretro.info \
+             libretro/coolbaremu-android/coolbaremu_libretro.info 2>/dev/null || true
+          ls -laR libretro/coolbaremu-android
 
       - name: Package libretro (Android)
         shell: bash
         run: |
           cd libretro
-          tar czf ../nicaiemu-android-libretro.tar.gz nicaiemu-android
+          tar czf ../coolbaremu-android-libretro.tar.gz coolbaremu-android
           cd ..
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: nicaiemu-android
-          path: nicaiemu-android-libretro.tar.gz
+          name: coolbaremu-android
+          path: coolbaremu-android-libretro.tar.gz
 
   build-ios:
     name: Build libretro (iOS)
@@ -222,48 +222,48 @@ jobs:
 
       - name: Build libretro core (arm64 for real devices)
         run: |
-          cargo build -p nicaiemu-libretro --release --target aarch64-apple-ios
+          cargo build -p coolbaremu-libretro --release --target aarch64-apple-ios
 
       - name: Build libretro core (x86_64 for real devices)
         run: |
-          cargo build -p nicaiemu-libretro --release --target x86_64-apple-ios
+          cargo build -p coolbaremu-libretro --release --target x86_64-apple-ios
 
       - name: Build libretro core (arm64 for simulator)
         run: |
-          cargo build -p nicaiemu-libretro --release --target aarch64-apple-ios-sim
+          cargo build -p coolbaremu-libretro --release --target aarch64-apple-ios-sim
 
       - name: Create universal library and stage
         shell: bash
         run: |
-          out="libretro/nicaiemu-ios"
+          out="libretro/coolbaremu-ios"
           mkdir -p "$out/simulator"
 
           # Create universal library for real devices (arm64 + x86_64)
           lipo -create \
-            target/aarch64-apple-ios/release/libnicaiemu.dylib \
-            target/x86_64-apple-ios/release/libnicaiemu.dylib \
-            -output "$out/nicaiemu_libretro_ios.dylib"
+            target/aarch64-apple-ios/release/libcoolbaremu.dylib \
+            target/x86_64-apple-ios/release/libcoolbaremu.dylib \
+            -output "$out/coolbaremu_libretro_ios.dylib"
 
           # Copy arm64 simulator library
-          cp target/aarch64-apple-ios-sim/release/libnicaiemu.dylib \
-             "$out/simulator/nicaiemu_libretro_ios.dylib"
+          cp target/aarch64-apple-ios-sim/release/libcoolbaremu.dylib \
+             "$out/simulator/coolbaremu_libretro_ios.dylib"
 
           # Copy info file
-          cp crates/nicaiemu-libretro/nicaiemu_libretro.info "$out/" 2>/dev/null || true
+          cp crates/coolbaremu-libretro/coolbaremu_libretro.info "$out/" 2>/dev/null || true
           ls -laR "$out"
 
       - name: Package libretro (iOS)
         shell: bash
         run: |
           cd libretro
-          tar czf ../nicaiemu-ios-libretro.tar.gz nicaiemu-ios
+          tar czf ../coolbaremu-ios-libretro.tar.gz coolbaremu-ios
           cd ..
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: nicaiemu-ios
-          path: nicaiemu-ios-libretro.tar.gz
+          name: coolbaremu-ios
+          path: coolbaremu-ios-libretro.tar.gz
 
   build-webos:
     name: Build libretro (webOS)
@@ -303,33 +303,33 @@ jobs:
           CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABI_LINKER: arm-webos-linux-gnueabi-gcc
           CC_armv7_unknown_linux_gnueabi: arm-webos-linux-gnueabi-gcc
           AR_armv7_unknown_linux_gnueabi: arm-webos-linux-gnueabi-ar
-        run: cargo build -p nicaiemu-libretro --release --target "$RUST_TARGET"
+        run: cargo build -p coolbaremu-libretro --release --target "$RUST_TARGET"
 
       - name: Verify and stage libretro core (webOS)
         shell: bash
         run: |
-          core="target/$RUST_TARGET/release/libnicaiemu.so"
+          core="target/$RUST_TARGET/release/libcoolbaremu.so"
           arm-webos-linux-gnueabi-readelf -h "$core"
           arm-webos-linux-gnueabi-readelf -d "$core"
 
-          out="libretro/nicaiemu-webos"
+          out="libretro/coolbaremu-webos"
           mkdir -p "$out"
-          cp "$core" "$out/nicaiemu_libretro.so"
-          cp crates/nicaiemu-libretro/nicaiemu_libretro.info "$out/" 2>/dev/null || true
+          cp "$core" "$out/coolbaremu_libretro.so"
+          cp crates/coolbaremu-libretro/coolbaremu_libretro.info "$out/" 2>/dev/null || true
           ls -la "$out"
 
       - name: Package libretro (webOS)
         shell: bash
         run: |
           cd libretro
-          tar czf ../nicaiemu-webos-libretro.tar.gz nicaiemu-webos
+          tar czf ../coolbaremu-webos-libretro.tar.gz coolbaremu-webos
           cd ..
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: nicaiemu-webos
-          path: nicaiemu-webos-libretro.tar.gz
+          name: coolbaremu-webos
+          path: coolbaremu-webos-libretro.tar.gz
 
   release:
     name: Create Release
@@ -348,38 +348,38 @@ jobs:
           draft: true
           prerelease: false
           generate_release_notes: true
-          name: "NicaiEmu ${{ github.ref_name }}"
+          name: "CoolbarEmu ${{ github.ref_name }}"
           body: |
-            NicaiEmu ${{ github.ref_name }}
+            CoolbarEmu ${{ github.ref_name }}
 
             ## Downloads
 
             ### Standalone emulator
-            - **Linux x86_64**: `nicaiemu-linux-x86_64.tar.gz`
-            - **Linux aarch64**: `nicaiemu-linux-aarch64.tar.gz`
-            - **macOS x86_64**: `nicaiemu-macos-x86_64.tar.gz`
-            - **macOS aarch64**: `nicaiemu-macos-aarch64.tar.gz`
-            - **Windows x86_64**: `nicaiemu-windows-x86_64.zip`
+            - **Linux x86_64**: `coolbaremu-linux-x86_64.tar.gz`
+            - **Linux aarch64**: `coolbaremu-linux-aarch64.tar.gz`
+            - **macOS x86_64**: `coolbaremu-macos-x86_64.tar.gz`
+            - **macOS aarch64**: `coolbaremu-macos-aarch64.tar.gz`
+            - **Windows x86_64**: `coolbaremu-windows-x86_64.zip`
 
             ### libretro core (for RetroArch)
-            - Files ending in `-libretro.*` contain `nicaiemu_libretro.<ext>`
-              plus `nicaiemu_libretro.info`, ready to drop into RetroArch.
-            - 32-bit builds ship the core only: `nicaiemu-linux-i686-libretro.tar.gz`
-              and `nicaiemu-windows-i686-libretro.zip`.
+            - Files ending in `-libretro.*` contain `coolbaremu_libretro.<ext>`
+              plus `coolbaremu_libretro.info`, ready to drop into RetroArch.
+            - 32-bit builds ship the core only: `coolbaremu-linux-i686-libretro.tar.gz`
+              and `coolbaremu-windows-i686-libretro.zip`.
 
             ### Android libretro core (for RetroArch on Android)
-            - `nicaiemu-android-libretro.tar.gz` contains
-              `nicaiemu_libretro_android.so` for the `arm64-v8a`,
+            - `coolbaremu-android-libretro.tar.gz` contains
+              `coolbaremu_libretro_android.so` for the `arm64-v8a`,
               `armeabi-v7a`, `x86` and `x86_64` ABIs.
 
             ### iOS libretro core (for RetroArch on iOS)
-            - `nicaiemu-ios-libretro.tar.gz` contains:
-              - `nicaiemu_libretro_ios.dylib` for real devices (arm64)
-              - `simulator/nicaiemu_libretro_ios.dylib` for iOS Simulator (Apple Silicon)
+            - `coolbaremu-ios-libretro.tar.gz` contains:
+              - `coolbaremu_libretro_ios.dylib` for real devices (arm64)
+              - `simulator/coolbaremu_libretro_ios.dylib` for iOS Simulator (Apple Silicon)
 
             ### webOS libretro core (for RetroArch on LG webOS TVs)
-            - `nicaiemu-webos-libretro.tar.gz` contains
-              `nicaiemu_libretro.so` for the webOS ARMv7 ABI.
+            - `coolbaremu-webos-libretro.tar.gz` contains
+              `coolbaremu_libretro.so` for the webOS ARMv7 ABI.
           files: artifacts/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

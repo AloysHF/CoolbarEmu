@@ -1,0 +1,5978 @@
+//! CBE machine root: executable parsing, boot, frame loop, and input state.
+//!
+//! The machine is split across submodules by responsibility:
+//! - [`memory`]: sparse guest memory regions and endian-aware access
+//! - [`packages`]: native/flat/grouped guest resource package parsing
+//! - [`cpu_bridge`]: execution loop, interworking branches, service dispatch
+//! - [`drawing`]: framebuffer drawing, blits, rects, and text
+//! - [`services`]: firmware service handlers grouped by manager
+
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+
+use anyhow::{bail, Context, Result};
+use armv4t_emu::{reg, Cpu, Memory, Mode};
+use log::{debug, warn};
+use serde::{Deserialize, Serialize};
+
+use crate::audio_engine::{AudioDiagnostics, AudioEngine};
+use crate::cbe::CbeArchive;
+use crate::orientation_profile::orientation_for_archive;
+
+mod cpu_bridge;
+mod display;
+mod drawing;
+mod memory;
+mod packages;
+mod services;
+mod virtual_fs;
+
+use display::DisplaySurface;
+use memory::MachineMemory;
+pub use memory::MemoryRegionInfo;
+use packages::{
+    grouped_package_resources, named_package_resources, native_package_resources, HostResource,
+    HostResourcePackage,
+};
+use virtual_fs::VirtualFileSystem;
+
+/// Default guest framebuffer width in pixels.
+pub const FRAME_WIDTH: u32 = 240;
+/// Default guest framebuffer height in pixels.
+pub const FRAME_HEIGHT: u32 = 400;
+
+/// Display orientation of the presented frame.
+///
+/// The active LCD surface may be portrait or landscape. Games with
+/// pre-rotated artwork require an additional presentation rotation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DisplayOrientation {
+    /// Resolve automatically from the content-identity profile (default).
+    #[default]
+    Auto,
+    /// Present the active LCD surface as-is.
+    Portrait,
+    /// Present the active LCD surface rotated 90 degrees counterclockwise.
+    Landscape,
+}
+
+impl DisplayOrientation {
+    /// Whether this orientation changes the output dimensions.
+    pub fn swaps_dimensions(self) -> bool {
+        matches!(self, DisplayOrientation::Landscape)
+    }
+
+    /// Map a presented display coordinate back to a guest framebuffer
+    /// coordinate using the active surface width.
+    pub fn unrotate(self, display_x: i32, display_y: i32, framebuffer_width: u32) -> (i32, i32) {
+        match self {
+            DisplayOrientation::Auto | DisplayOrientation::Portrait => (display_x, display_y),
+            DisplayOrientation::Landscape => (framebuffer_width as i32 - 1 - display_y, display_x),
+        }
+    }
+}
+
+/// Rotate a row-major pixel buffer 90 degrees counterclockwise for
+/// presentation.
+///
+/// The output keeps the same pixel count but swaps dimensions: a `width` x
+/// `height` source becomes `height` x `width`. Source (x, y) maps to output
+/// (y, width - 1 - x). `Auto` and `Portrait` return an untouched copy.
+pub(crate) fn rotate_frame(
+    pixels: &[u32],
+    width: u32,
+    height: u32,
+    orientation: DisplayOrientation,
+) -> Vec<u32> {
+    match orientation {
+        DisplayOrientation::Auto | DisplayOrientation::Portrait => pixels.to_vec(),
+        DisplayOrientation::Landscape => {
+            let mut rotated = Vec::with_capacity(pixels.len());
+            for y in 0..width {
+                for x in 0..height {
+                    rotated.push(pixels[(x * width + (width - 1 - y)) as usize]);
+                }
+            }
+            rotated
+        }
+    }
+}
+
+const ROM_BASE: u32 = 0x0100_0000;
+/// Guest stack.  The top stays at 0x0210_0000 (matching the firmware's
+/// initial SP); the base sits low enough that deep init call chains in the
+/// big-endian templates don't grow past the mapped region into unmapped
+/// memory — where a `push` would silently drop its store and the matching
+/// `pop` would read zero, corrupting the return address.
+const STACK_BASE: u32 = 0x0106_0000;
+const STACK_SIZE: usize = 0x10A_0000;
+const HEAP_BASE: u32 = 0x0500_0000;
+const HEAP_SIZE: usize = 0x100_0000;
+const MANAGER_BASE: u32 = 0x0a00_0000;
+const MANAGER_SIZE: usize = 0x10_0000;
+const SERVICE_BASE: u32 = 0x0c00_0000;
+const SERVICE_SIZE: u32 = 0x10_0000;
+const LOG_NOOP_SERVICE: u32 = SERVICE_BASE + SERVICE_SIZE - 4;
+const EXIT_ADDRESS: u32 = 0x0f00_0000;
+const FIXED_MANAGER_INIT: u32 = SERVICE_BASE + 0xe000;
+/// Per-manager "get table" stubs that return the canonical dense function
+/// table for the caller's group. Fixed-ABI directory entries place the init
+/// stub at +0 and this getter at +4 so bootstrap code can either install a
+/// private table or fetch the shared one.
+const FIXED_MANAGER_GET: u32 = FIXED_MANAGER_INIT + 18 * 4;
+const FIXED_MANAGER_DIRECTORY: u32 = MANAGER_BASE + 0xa000;
+const FIXED_GAMEOLD_OBJECT_SERVICE: u32 = SERVICE_BASE + 0xd000;
+/// Dedicated old-lib drawing entries avoid collisions with shared manager slots.
+const OLDLIB_DRAW_SERVICE: u32 = SERVICE_BASE + 0xd200;
+const FIXED_GAMEOLD_REGION_SERVICE: u32 = SERVICE_BASE + 0xd100;
+// Legacy wrappers derive the SMS entry from the billing function addresses.
+const NATIVE_BILLING_PAYNUM: u32 = SERVICE_BASE + 0xd300;
+const NATIVE_BILLING_REMAIN_DAY: u32 = NATIVE_BILLING_PAYNUM + 3764;
+const NATIVE_BILLING_SEND_SMS: u32 = NATIVE_BILLING_REMAIN_DAY + 1376;
+const NATIVE_DISPATCH_SERVICE: u32 = SERVICE_BASE + 0xf000;
+const NATIVE_SYSTEM_TIME_SERVICE: u32 = SERVICE_BASE + 0xf100;
+const NATIVE_DIRTY_RECT_SERVICE: u32 = SERVICE_BASE + 0xf200;
+/// Per-slot method stubs for guest object/method tables.  The address
+/// encodes both the *table kind* and the *byte offset* of the slot so the
+/// dispatcher can bind real semantics (memset/alloc/free for the memory
+/// manager, picture ops for the picture library, …) instead of one shared
+/// stub that has to guess from the calling convention.
+const METHOD_STUB_BASE: u32 = SERVICE_BASE + 0x9000;
+/// Io manager method stubs live in their own region, one every 0x100 bytes.
+/// The boot loader's `nvReadWriteInit` identifies the NV block size from
+/// `obj[1] - obj[0]` and only installs the NV read/write methods for a size
+/// it recognises (0x100 / 0xDE / 0xF8); consecutive service-table words are
+/// only 4 apart, so that probe always failed and the methods stayed null.
+const IO_METHOD_BASE: u32 = SERVICE_BASE + 0x7800;
+const IO_METHOD_STRIDE: u32 = 0x100;
+/// nvReadWriteInit derives the NV method addresses from the word at
+/// `obj + 0x44`.  For the 0x100 block size it calls `slot + 0x1A` as the NV
+/// reader and `slot + 0x1A4` as the NV writer; slot +0x44 is method 17.
+const IO_NV_READ_OFFSET: u32 = 17 * IO_METHOD_STRIDE + 0x1a;
+const IO_NV_WRITE_OFFSET: u32 = 17 * IO_METHOD_STRIDE + 0x1a4;
+/// Size of the guest NV block for the 0x100 variant.
+const NV_BLOCK_SIZE: u32 = 0x100;
+const NV_BLOCK_PATH: &str = "nvram.bin";
+const METHOD_STUB_STRIDE: u32 = 0x800;
+const METHOD_STUB_KINDS: u32 = 8;
+const CONTROL_METHOD_SERVICE: u32 = SERVICE_BASE + 0x10000;
+/// Table kinds — mirrors the reference's `api::lookup(tag, name)` split.
+/// Kind 0 is reserved for the slots of auto-created result objects: their
+/// stubs always return zero rather than spawning another result object.
+const METHOD_KIND_AUTO: u32 = 0;
+const METHOD_KIND_MEMORY: u32 = 1;
+const METHOD_KIND_GAMEOLD: u32 = 2;
+const METHOD_KIND_PICTURE: u32 = 3;
+const METHOD_KIND_ACTOR: u32 = 4;
+const METHOD_KIND_PANEL: u32 = 5;
+const METHOD_KIND_TEXTBOX: u32 = 6;
+const METHOD_KIND_MEMBLOCK: u32 = 7;
+
+const TABLE_STRIDE: u32 = 0x400;
+const MAX_TIMERS: usize = 20;
+const TIMER_BASE_ID: u32 = 100;
+const TIMER_FRAME_MS: u32 = 100;
+const MEMORY_BLOCK_POOL: u32 = HEAP_BASE + 0x40_0000;
+const MEMORY_BLOCK_PTR: u32 = HEAP_BASE + 0x80_0000;
+const MEMORY_BLOCK_SERVICE: u32 = SERVICE_BASE + 0x6c48;
+/// Callable target of the data package's `ptr - 52` slot: the guest stores
+/// `DF_DataPackage_GetFullPaths + 52` in the package's DP_GetFileID slot and
+/// recovers the real function by subtracting 52 before calling it.
+/// Callable target of the data package's `ptr - 52` slot: the boot loader
+/// reads the package's DP_GetFileID word at +0x44, subtracts 52, and calls
+/// the result as `DF_DataPackage_GetFullPaths`.  With the package's method
+/// slots laid out as service-table words that subtraction lands exactly
+/// here (group 20 index 252), so this is the slot that must answer.
+const DATA_PACKAGE_FULL_PATH_SERVICE: u32 = SERVICE_BASE + TABLE_STRIDE * 20 + 252 * 4;
+/// Virtual path at which the loaded CBE is served to the guest; returned by
+/// `DF_DataPackage_GetFullPaths` so the boot loader can reopen the container.
+const DATA_PACKAGE_CBE_PATH: &str = "app.cbe";
+const DREAM_FACTORY_PACKAGE_SLOT: u32 = MANAGER_BASE + 0x7ff0;
+const DREAM_FACTORY_MEMORY_BLOCK_SLOT: u32 = MANAGER_BASE + 0x7ff4;
+const DREAM_FACTORY_FORMAT_BUFFER: u32 = MANAGER_BASE + 0x7f80;
+const DREAM_FACTORY_FORMAT_BUFFER_SIZE: usize = 64;
+const KEY_EVENT_ARG: u32 = MANAGER_BASE + 0x7fdc;
+const TOUCH_EVENT_ARG: u32 = MANAGER_BASE + 0x7fd8;
+const DATA_PACKAGE_SIZE: u32 = 108;
+const SCREEN_IMAGE_STRUCT: u32 = MEMORY_BLOCK_PTR + 0x408;
+const SCREEN_IMAGE: u32 = SCREEN_IMAGE_STRUCT + 24;
+const SCREEN_IS_IN_QUIT: u32 = MANAGER_BASE + 0x7fe0;
+const DL_LOAD_MANAGER: u32 = MANAGER_BASE + 0xe_0000;
+const VIDEO_MANAGER: u32 = MANAGER_BASE + 0xe_0400;
+const DL_PAY_MANAGER: u32 = MANAGER_BASE + 0xe_0800;
+const DL_RESOURCE_MANAGER: u32 = MANAGER_BASE + 0xe_0c00;
+const DL_IMAGE_MANAGER: u32 = MANAGER_BASE + 0xe_1000;
+const APP_STORE_MANAGER: u32 = MANAGER_BASE + 0xe_1400;
+
+fn fixed_manager_specs() -> &'static [(u32, u32, u32)] {
+    &[
+        (0x00, 5, 0x60 / 4),
+        (0x08, 4, 0xfc / 4),
+        (0x10, 7, 0x18 / 4),
+        (0x18, 8, 0x3c / 4),
+        (0x20, 2, 0x48 / 4),
+        (0x28, 12, 0x40 / 4),
+        (0x30, 14, 0x2c / 4),
+        (0x38, 9, 0x1c / 4),
+        (0x40, 13, 0x30 / 4),
+        (0x48, 1, 0x6c / 4),
+        (0x50, 15, 0x58 / 4),
+        (0x58, 16, 0xa0 / 4),
+        (0x60, 10, 0xa0 / 4),
+        (0x68, 11, 0x3c / 4),
+        (0x70, 29, 0xf0 / 4),
+        (0x78, 18, 0x24 / 4),
+        (0x80, 3, 0x27c / 4),
+        (0x8c, 19, 0x1c / 4),
+    ]
+}
+
+fn manager_initializer_count(index: u32) -> Option<u32> {
+    Some(match index {
+        0 => 30,
+        2 => 95,
+        4 => 10,
+        6 => 21,
+        8 => 27,
+        10 => 38,
+        12 => 12,
+        14 => 43,
+        16 => 11,
+        18 => 115,
+        20 => TABLE_STRIDE / 4,
+        22 => 24,
+        24 => 40,
+        28 => 61,
+        30 => 31,
+        32 => 144,
+        35 => 11,
+        37 => 22,
+        45 => 6,
+        _ => return None,
+    })
+}
+
+fn game_service_string_uses_wide_length(index: u32) -> Option<bool> {
+    match index {
+        97 => Some(false),
+        101 => Some(true),
+        _ => None,
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum VariadicArgument {
+    Register(u8),
+    Stack(u32),
+}
+
+fn variadic_argument_location(first_register: u32, argument_index: u32) -> VariadicArgument {
+    let register_index = first_register + argument_index;
+    if register_index <= 3 {
+        VariadicArgument::Register(register_index as u8)
+    } else {
+        VariadicArgument::Stack((register_index - 4) * 4)
+    }
+}
+
+/// Executable image metadata stored at the beginning of a CBE file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CbeExecutable {
+    pub preferred_code_address: u32,
+    pub code_image_size: u32,
+    pub preferred_data_address: u32,
+    pub data_image_size: u32,
+    pub code_offset: usize,
+    pub code_size: usize,
+    pub data_offset: usize,
+    pub initialized_data_size: usize,
+    pub embedded_package_offset: usize,
+    pub embedded_package_size: usize,
+    pub resource_package_offset: usize,
+    pub resource_package_size: usize,
+    pub big_endian: bool,
+}
+
+impl CbeExecutable {
+    /// Parse the executable header and verify all three segment checksums.
+    pub fn parse(data: &[u8]) -> Result<Self> {
+        if data.len() < 0x98 {
+            bail!("CBE executable header is truncated");
+        }
+        let read_be = |offset: usize| -> Result<u32> {
+            let bytes = data
+                .get(offset..offset + 4)
+                .with_context(|| format!("CBE header field at 0x{offset:X} is truncated"))?;
+            Ok(u32::from_be_bytes(bytes.try_into().unwrap()))
+        };
+        for index in 0..5 {
+            let offset = index * 12;
+            if data.get(offset..offset + 8) != Some(&[0xfe; 8]) {
+                bail!("invalid CBE header marker at 0x{offset:X}");
+            }
+        }
+
+        let preferred_code_address = read_be(8)?;
+        let code_image_size = read_be(20)?;
+        let preferred_data_address = read_be(32)?;
+        let data_image_size = read_be(44)?;
+        let variable_header_size = read_be(56)? as usize;
+        let segment_header = 68usize
+            .checked_add(variable_header_size)
+            .context("CBE segment header offset overflow")?;
+        for index in 0..6 {
+            let offset = segment_header + index * 12;
+            if data.get(offset..offset + 8) != Some(&[0xfe; 8]) {
+                bail!("invalid CBE segment marker at 0x{offset:X}");
+            }
+        }
+
+        let code_size = read_be(segment_header + 8)? as usize;
+        let code_checksum = read_be(segment_header + 20)?;
+        let initialized_data_size = read_be(segment_header + 32)? as usize;
+        let data_checksum = read_be(segment_header + 44)?;
+        let embedded_package_size = read_be(segment_header + 56)? as usize;
+        let embedded_checksum = read_be(segment_header + 68)?;
+
+        let mut cursor = segment_header
+            .checked_add(6 * 12)
+            .context("CBE executable header size overflow")?;
+        let (code_offset, big_endian) =
+            locate_checked_segment(data, cursor, code_size, code_checksum, None, "code")?;
+        cursor = code_offset;
+        cursor = checked_advance(cursor, code_size, data.len(), "code")?;
+        let (data_offset, _) = locate_checked_segment(
+            data,
+            cursor,
+            initialized_data_size,
+            data_checksum,
+            Some(big_endian),
+            "initialized data",
+        )?;
+        cursor = data_offset;
+        cursor = checked_advance(
+            cursor,
+            initialized_data_size,
+            data.len(),
+            "initialized data",
+        )?;
+        let (embedded_package_offset, _) = locate_checked_segment(
+            data,
+            cursor,
+            embedded_package_size,
+            embedded_checksum,
+            Some(big_endian),
+            "embedded package",
+        )?;
+        cursor = embedded_package_offset;
+        cursor = checked_advance(
+            cursor,
+            embedded_package_size,
+            data.len(),
+            "embedded package",
+        )?;
+        cursor = skip_marker(data, cursor)?;
+        let resource_package_size = read_be(cursor)? as usize;
+        cursor = checked_advance(cursor, 4, data.len(), "resource package length")?;
+        cursor = skip_marker(data, cursor)?;
+        let resource_package_offset = cursor;
+        checked_advance(
+            cursor,
+            resource_package_size,
+            data.len(),
+            "resource package",
+        )?;
+
+        Ok(Self {
+            preferred_code_address,
+            code_image_size,
+            preferred_data_address,
+            data_image_size,
+            code_offset,
+            code_size,
+            data_offset,
+            initialized_data_size,
+            embedded_package_offset,
+            embedded_package_size,
+            resource_package_offset,
+            resource_package_size,
+            big_endian,
+        })
+    }
+
+    pub fn code_address(&self) -> u32 {
+        if self.preferred_code_address == 0 {
+            ROM_BASE
+        } else {
+            self.preferred_code_address
+        }
+    }
+
+    pub fn data_address(&self) -> u32 {
+        if self.preferred_code_address == 0 {
+            self.code_address().wrapping_add(self.code_image_size)
+        } else {
+            self.preferred_data_address
+        }
+    }
+}
+
+fn checked_advance(cursor: usize, size: usize, file_size: usize, name: &str) -> Result<usize> {
+    let end = cursor
+        .checked_add(size)
+        .with_context(|| format!("{name} range overflow"))?;
+    if end > file_size {
+        bail!("{name} extends beyond the CBE file");
+    }
+    Ok(end)
+}
+
+fn locate_checked_segment(
+    data: &[u8],
+    separator_start: usize,
+    size: usize,
+    expected_checksum: u32,
+    big_endian: Option<bool>,
+    name: &str,
+) -> Result<(usize, bool)> {
+    let mut separator_end = separator_start;
+    while data.get(separator_end) == Some(&0xfe) {
+        separator_end += 1;
+    }
+    let separator_len = separator_end.saturating_sub(separator_start);
+    if separator_len < 8 {
+        bail!("missing CBE segment separator at 0x{separator_start:X}");
+    }
+
+    let candidates = if size == 0 {
+        separator_len..=separator_len
+    } else {
+        8..=separator_len
+    };
+    for separator_size in candidates {
+        let offset = separator_start + separator_size;
+        let Some(segment) = data.get(offset..offset.saturating_add(size)) else {
+            continue;
+        };
+        match big_endian {
+            Some(true) if checksum_be(segment) == expected_checksum => return Ok((offset, true)),
+            Some(false) if checksum_le(segment) == expected_checksum => return Ok((offset, false)),
+            None if checksum_le(segment) == expected_checksum => return Ok((offset, false)),
+            None if checksum_be(segment) == expected_checksum => return Ok((offset, true)),
+            _ => {}
+        }
+    }
+
+    // The reference treats the checksum purely as an endianness probe and
+    // keeps loading when it does not match; aborting here rejected corpus
+    // files whose payload is otherwise intact.
+    log::warn!("CBE {name} checksum mismatch (expected 0x{expected_checksum:08X}); loading anyway");
+    Ok((separator_start + 8, big_endian.unwrap_or(true)))
+}
+
+fn skip_marker(data: &[u8], mut cursor: usize) -> Result<usize> {
+    let start = cursor;
+    while data.get(cursor) == Some(&0xfe) {
+        cursor += 1;
+    }
+    if cursor.saturating_sub(start) < 8 {
+        bail!("missing CBE segment separator at 0x{start:X}");
+    }
+    Ok(cursor)
+}
+
+fn checksum_le(data: &[u8]) -> u32 {
+    data.as_chunks::<4>().0.iter().fold(0u32, |sum, bytes| {
+        sum.wrapping_add(u32::from_le_bytes(*bytes))
+    })
+}
+
+fn checksum_be(data: &[u8]) -> u32 {
+    data.as_chunks::<4>().0.iter().fold(0u32, |sum, bytes| {
+        sum.wrapping_add(u32::from_be_bytes(*bytes))
+    })
+}
+
+fn signed_coord(value: u32) -> i32 {
+    value as u16 as i16 as i32
+}
+
+fn default_oldlib_clip() -> [i32; 4] {
+    [0, 0, 240, 400]
+}
+
+fn arm_blx_immediate_target(pc: u32, instruction: u32) -> Option<u32> {
+    if instruction & 0xfe00_0000 != 0xfa00_0000 {
+        return None;
+    }
+    let offset = ((instruction & 0x00ff_ffff) << 2) | ((instruction >> 23) & 2);
+    let signed_offset = ((offset << 6) as i32) >> 6;
+    Some(pc.wrapping_add(8).wrapping_add(signed_offset as u32))
+}
+
+fn thumb_add_pc_target(pc: u32, instruction: u16, source_value: u32) -> Option<u32> {
+    if instruction & 0xff87 != 0x4487 {
+        return None;
+    }
+    Some(pc.wrapping_add(4).wrapping_add(source_value) & !1)
+}
+
+fn ascii_uppercase(value: u16) -> u16 {
+    if (b'a' as u16..=b'z' as u16).contains(&value) {
+        value - (b'a' - b'A') as u16
+    } else {
+        value
+    }
+}
+
+fn image_payload(resource: &[u8]) -> &[u8] {
+    if resource.first() == Some(&3)
+        && resource.len() >= 17
+        && (image::guess_format(&resource[9..]).is_ok() || &resource[9..17] == b"\x89PNGGAME")
+    {
+        &resource[9..]
+    } else if matches!(resource.first(), Some(1 | 3)) {
+        &resource[1..]
+    } else {
+        resource
+    }
+}
+
+fn clip_axis(
+    source: &mut i32,
+    size: &mut i32,
+    destination: &mut i32,
+    source_limit: i32,
+    destination_limit: i32,
+) {
+    if *source < 0 {
+        *destination -= *source;
+        *size += *source;
+        *source = 0;
+    }
+    if *destination < 0 {
+        *source -= *destination;
+        *size += *destination;
+        *destination = 0;
+    }
+    *size = (*size)
+        .min(source_limit.saturating_sub(*source))
+        .min(destination_limit.saturating_sub(*destination));
+}
+
+fn service_trace_enabled(group: u32, index: u32) -> bool {
+    let Ok(value) = std::env::var("CBE_TRACE") else {
+        return false;
+    };
+    if matches!(value.as_str(), "1" | "all") {
+        return true;
+    }
+    let service = format!("{group}:{index}");
+    value.split(',').any(|filter| filter.trim() == service)
+}
+
+fn update_key_bits(key_down: &mut u32, key_held: &mut u32, key: u8, pressed: bool) {
+    if key >= 31 {
+        return;
+    }
+    let mask = 1u32 << key;
+    if pressed {
+        if *key_held & mask == 0 {
+            *key_down |= mask;
+        }
+        *key_held |= mask;
+    } else {
+        *key_held &= !mask;
+    }
+}
+
+fn update_physical_key_bits(key_held: &mut u32, key: u8, pressed: bool) -> bool {
+    if key >= 31 {
+        return false;
+    }
+    let mask = 1u32 << key;
+    let was_pressed = *key_held & mask != 0;
+    if pressed {
+        *key_held |= mask;
+    } else {
+        *key_held &= !mask;
+    }
+    was_pressed != pressed
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MachineState {
+    Created,
+    Initializing,
+    Ready,
+    Halted,
+    Faulted,
+}
+
+/// Guest touch/pointer state with press and release edges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+struct PointerState {
+    held: bool,
+    down: bool,
+    up: bool,
+    x: i32,
+    y: i32,
+    press_x: i32,
+    press_y: i32,
+}
+
+/// One scheduled guest timer callback.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct GuestTimer {
+    active: bool,
+    callback: u32,
+    context: u32,
+    remaining_frames: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct KeyEvent {
+    key: u8,
+    pressed: bool,
+}
+
+impl PointerState {
+    fn new() -> Self {
+        Self {
+            held: false,
+            down: false,
+            up: false,
+            x: 0,
+            y: 0,
+            press_x: 0,
+            press_y: 0,
+        }
+    }
+
+    /// Update the pointer from a frontend source; edges are derived here.
+    fn set(&mut self, x: i32, y: i32, down: bool) {
+        self.x = x.clamp(0, 239);
+        self.y = y.clamp(0, 399);
+        if down && !self.held {
+            self.down = true;
+            self.press_x = self.x;
+            self.press_y = self.y;
+        }
+        if !down && self.held {
+            self.up = true;
+        }
+        self.held = down;
+    }
+
+    /// Clear per-frame edges after the guest frame consumed them.
+    fn end_frame(&mut self) {
+        self.down = false;
+        self.up = false;
+    }
+
+    /// A held pointer that moved away from its press position.
+    fn dragging(&self) -> bool {
+        self.held && (self.x != self.press_x || self.y != self.press_y)
+    }
+}
+
+/// A platform-independent ARM machine for executable CBE games.
+#[derive(Serialize, Deserialize)]
+pub struct CoolbarMachine {
+    cpu: Cpu,
+    memory: MachineMemory,
+    audio: AudioEngine,
+    executable: CbeExecutable,
+    state: MachineState,
+    heap_cursor: u32,
+    // Pen origin carried by the GetScreenImage (LCD group 4 index 1) call
+    // that immediately precedes DrawText (index 10). Games draw text through
+    // a helper that passes the origin there and submits DrawText with zero
+    // coordinates; see the LCD service notes in drawing.rs.
+    #[serde(skip, default)]
+    latched_text_origin: (i32, i32),
+    #[serde(skip, default)]
+    heap_allocations: BTreeMap<u32, u32>,
+    /// Cache of the firmware-style auto result objects handed back by
+    /// unimplemented manager methods, keyed by (table kind, slot offset).
+    #[serde(skip, default)]
+    auto_objects: BTreeMap<(u32, u32), u32>,
+    /// Cached buffer returned by DF_DataPackage_GetFullPaths.
+    #[serde(skip, default)]
+    data_package_path_buffer: u32,
+    /// Cached DF map render/scroll buffers handed out by F_4 indices 12/11.
+    #[serde(skip, default)]
+    df_render_buffer: u32,
+    #[serde(skip, default)]
+    df_vscroll_buffer: u32,
+    /// Deferred guest callbacks (billing results, payment prompts, …) that
+    /// the firmware delivers after the initiating service returns, each
+    /// tagged so CancelSms can drop only the SMS results.
+    #[serde(skip, default)]
+    pending_callbacks: VecDeque<(u32, Vec<u32>, &'static str)>,
+    /// Per-app billing registration state: (status, used).
+    #[serde(skip, default)]
+    billing_reg: BTreeMap<u16, (u8, u8)>,
+    #[serde(skip, default)]
+    free_heap_blocks: Vec<(u32, u32)>,
+    app_main: u32,
+    app_exit: u32,
+    service_calls: HashMap<(u32, u32), u64>,
+    recent_services: VecDeque<(u32, u32, u32, u32)>,
+    instruction_count: u64,
+    frame_count: u64,
+    last_pc: u32,
+    recent_pcs: VecDeque<u32>,
+    /// Recent non-fallthrough control transfers (from, to), newest last.
+    /// Diagnostic-only: excluded from save states, capped in run_until_return.
+    #[serde(skip, default)]
+    recent_branches: VecDeque<(u32, u32)>,
+    /// v3 gamelib image-header mode: width/height as u32 at +4/+8 with the
+    /// kind byte at +12 (16-byte headers), switched on when the guest asks
+    /// for the v3 GameManagerOld table through native dispatch sid 143.
+    #[serde(default)]
+    wide_images: bool,
+    /// Cached v3 GameManagerOld table handed out by native dispatch sid 143.
+    #[serde(default)]
+    gamelib_v3_table: u32,
+    /// Per-sid objects handed out by native dispatch for unknown ids: each
+    /// is a table of zero-returning stubs, mirroring the reference's
+    /// `old_obj(sid)`.
+    #[serde(default)]
+    native_objects: std::collections::BTreeMap<u32, u32>,
+    /// Clip rectangle of the old-lib drawing API (SetClip and the DrawUI
+    /// family), stored as [x0, y0, x1, y1].
+    #[serde(default = "default_oldlib_clip")]
+    oldlib_clip: [i32; 4],
+    /// Full register file captured at the most recent branch, so a fault that
+    /// executes junk between the branch and the crash still reports the state
+    /// at dispatch time. Diagnostic-only, not serialized.
+    #[serde(skip, default)]
+    branch_regs: Option<[u32; 16]>,
+    pending_screen: u32,
+    active_screen: u32,
+    screen_stack: Vec<u32>,
+    screen_contexts: BTreeMap<u32, u32>,
+    screen_initialized: bool,
+    resource_load_pending: bool,
+    resource_load_screen: u32,
+    key_down: u32,
+    key_held: u32,
+    key_held_physical: u32,
+    // Reserved legacy input fields in the machine snapshot.
+    _legacy_key_press_frame: [u32; 31],
+    _legacy_key_frame_counter: u32,
+    #[serde(skip, default)]
+    pending_key_events: VecDeque<KeyEvent>,
+    // Auto-BGM compatibility layer: plays the first packaged MIDI when the
+    // guest never touches the audio manager. Deliberately excluded from save
+    // states; frontends re-apply it after load/reset.
+    #[serde(skip, default)]
+    auto_bgm: bool,
+    #[serde(skip, default)]
+    auto_bgm_data: Option<Vec<u8>>,
+    #[serde(skip, default)]
+    auto_bgm_gave_way: bool,
+    /// Resource id last accepted by PlayForGame/PlayForApp. Used to ignore
+    /// the per-tick restart storm games issue while BGM is already queued.
+    #[serde(skip, default)]
+    playing_resource_id: Option<u32>,
+    // Display orientation is a frontend presentation concern rather than
+    // guest state; frontends re-apply it after load/reset.
+    #[serde(skip, default)]
+    orientation: DisplayOrientation,
+    /// Resolved orientation after automatic landscape detection.
+    #[serde(skip, default)]
+    effective_orientation: DisplayOrientation,
+    // Geometry is restored from the serialized guest screen header.
+    #[serde(skip, default)]
+    display_surface: DisplaySurface,
+    pointer: PointerState,
+    timers: Vec<GuestTimer>,
+    resources: Vec<HostResource>,
+    #[serde(skip, default)]
+    resource_packages: Vec<HostResourcePackage>,
+    resource_data: Vec<u32>,
+    resource_names: Vec<u32>,
+    app_image_package: u32,
+    inner_image_package: u32,
+    current_image_package: u32,
+    native_app_parser: u32,
+    native_app_exit: u32,
+    native_system_info: u32,
+    native_property_info: u32,
+    #[serde(skip, default)]
+    native_scalar_results: BTreeMap<u32, u32>,
+    #[serde(skip, default)]
+    virtual_fs: VirtualFileSystem,
+    #[serde(skip, default)]
+    pub(crate) net_channels: Vec<services::network::NetChannel>,
+    #[serde(skip, default)]
+    pub(crate) net_events: std::collections::VecDeque<services::network::NetEvent>,
+    #[serde(skip, default)]
+    pub(crate) next_net_connect_id: u32,
+    #[serde(skip, default)]
+    pub(crate) net_uplink_bytes: u64,
+    #[serde(skip, default)]
+    pub(crate) net_downlink_bytes: u64,
+    #[serde(skip, default)]
+    pub(crate) net_last_uplink: Vec<u8>,
+    #[serde(skip, default)]
+    pub(crate) net_last_http_url: String,
+    /// Deterministic LCG state for the guest `rand` service. Skipped in
+    /// save-states so the codec layout stays stable.
+    #[serde(skip, default = "default_rand_state")]
+    pub(crate) rand_state: u32,
+}
+
+fn default_rand_state() -> u32 {
+    0x1234_5678
+}
+
+impl std::fmt::Debug for CoolbarMachine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CoolbarMachine")
+            .field("executable", &self.executable)
+            .field("state", &self.state)
+            .field("app_main", &format_args!("0x{:08X}", self.app_main))
+            .field("instruction_count", &self.instruction_count)
+            .field("resource_package_count", &self.resource_packages.len())
+            .field("virtual_file_count", &self.virtual_fs.file_count())
+            .field("last_pc", &format_args!("0x{:08X}", self.last_pc))
+            .field(
+                "recent_pcs",
+                &self
+                    .recent_pcs
+                    .iter()
+                    .map(|pc| format!("0x{pc:08X}"))
+                    .collect::<Vec<_>>(),
+            )
+            .field("recent_services", &self.recent_services)
+            .finish()
+    }
+}
+
+impl CoolbarMachine {
+    pub fn new(archive: &CbeArchive) -> Result<Self> {
+        let executable = CbeExecutable::parse(archive.bytes())?;
+        let code_address = executable.code_address();
+        let data_address = executable.data_address();
+        let resource_package_offset = executable.resource_package_offset;
+        let resource_package_size = executable.resource_package_size;
+        // The firmware keeps a guard page run past the end of the data
+        // image; guests routinely read a little past the BSS tail while
+        // walking object graphs, and without the guard those accesses
+        // become unmapped faults.
+        let rom_size = executable
+            .code_image_size
+            .saturating_add(executable.data_image_size)
+            .saturating_add(0x1_0000)
+            .max(executable.code_size as u32)
+            .next_multiple_of(0x1000) as usize;
+        let mut memory = MachineMemory::new(executable.big_endian);
+        memory.map(code_address, rom_size, false);
+        memory.map(STACK_BASE, STACK_SIZE, false);
+        memory.map(HEAP_BASE, HEAP_SIZE, false);
+        memory.map(MANAGER_BASE, MANAGER_SIZE, false);
+        // Guest firmware tables live at SERVICE_BASE and are read as data
+        // (function pointers, manager descriptors) before being invoked.
+        memory.map(SERVICE_BASE, SERVICE_SIZE as usize, false);
+        memory.load(
+            code_address,
+            &archive.bytes()[executable.code_offset..executable.code_offset + executable.code_size],
+        )?;
+        memory.load(
+            data_address,
+            &archive.bytes()
+                [executable.data_offset..executable.data_offset + executable.initialized_data_size],
+        )?;
+
+        let mut machine = Self {
+            cpu: Cpu::new(),
+            memory,
+            audio: AudioEngine::new(),
+            executable,
+            state: MachineState::Created,
+            heap_cursor: HEAP_BASE,
+            latched_text_origin: (0, 0),
+            heap_allocations: BTreeMap::new(),
+            auto_objects: BTreeMap::new(),
+            data_package_path_buffer: 0,
+            df_render_buffer: 0,
+            df_vscroll_buffer: 0,
+            pending_callbacks: VecDeque::new(),
+            billing_reg: BTreeMap::new(),
+            free_heap_blocks: Vec::new(),
+            app_main: 0,
+            app_exit: 0,
+            service_calls: HashMap::new(),
+            recent_services: VecDeque::with_capacity(16),
+            instruction_count: 0,
+            frame_count: 0,
+            last_pc: 0,
+            recent_pcs: VecDeque::with_capacity(32),
+            recent_branches: VecDeque::with_capacity(16),
+            wide_images: false,
+            gamelib_v3_table: 0,
+            oldlib_clip: default_oldlib_clip(),
+            native_objects: std::collections::BTreeMap::new(),
+            branch_regs: None,
+            pending_screen: 0,
+            active_screen: 0,
+            screen_stack: Vec::new(),
+            screen_contexts: BTreeMap::new(),
+            screen_initialized: false,
+            resource_load_pending: false,
+            resource_load_screen: 0,
+            key_down: 0,
+            key_held: 0,
+            key_held_physical: 0,
+            _legacy_key_press_frame: [u32::MAX; 31],
+            _legacy_key_frame_counter: 0,
+            pending_key_events: VecDeque::new(),
+            auto_bgm: false,
+            auto_bgm_data: None,
+            auto_bgm_gave_way: false,
+            playing_resource_id: None,
+            orientation: DisplayOrientation::Auto,
+            effective_orientation: DisplayOrientation::Portrait,
+            display_surface: DisplaySurface::default(),
+            pointer: PointerState::new(),
+            timers: vec![
+                GuestTimer {
+                    active: false,
+                    callback: 0,
+                    context: 0,
+                    remaining_frames: 0,
+                };
+                MAX_TIMERS
+            ],
+            resource_packages: named_package_resources(
+                archive.bytes(),
+                resource_package_offset,
+                resource_package_size,
+            ),
+            resources: {
+                let mut native = native_package_resources(archive.bytes(), resource_package_offset);
+                if native.is_empty() {
+                    native = grouped_package_resources(
+                        archive.bytes(),
+                        resource_package_offset,
+                        resource_package_size,
+                    );
+                }
+                if native.is_empty() {
+                    archive
+                        .sections()
+                        .iter()
+                        .find(|section| {
+                            section.header.file_offset as usize + 8 == resource_package_offset
+                        })
+                        .map(|section| {
+                            section
+                                .resources
+                                .iter()
+                                .filter_map(|resource| {
+                                    archive.read_resource_bytes(resource).ok().map(|data| {
+                                        HostResource {
+                                            name: resource.name.clone(),
+                                            data: data.to_vec(),
+                                        }
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    native
+                }
+            },
+            resource_data: Vec::new(),
+            resource_names: Vec::new(),
+            app_image_package: 0,
+            inner_image_package: 0,
+            current_image_package: 0,
+            native_app_parser: 0,
+            native_app_exit: 0,
+            native_system_info: 0,
+            native_property_info: 0,
+            native_scalar_results: BTreeMap::new(),
+            virtual_fs: VirtualFileSystem::default(),
+            net_channels: vec![
+                services::network::NetChannel::default();
+                services::network::MAX_NET_CHANNELS
+            ],
+            net_events: std::collections::VecDeque::new(),
+            next_net_connect_id: 0,
+            net_uplink_bytes: 0,
+            net_downlink_bytes: 0,
+            net_last_uplink: Vec::new(),
+            net_last_http_url: String::new(),
+            rand_state: default_rand_state(),
+        };
+        machine.initialize_tables();
+        machine.initialize_screen();
+        // The boot loader re-opens the application's own CBE to walk its
+        // container footer ("CoolBars" trailer).  Serve the loaded bytes
+        // under the path DF_DataPackage_GetFullPaths hands back.
+        machine
+            .virtual_fs
+            .write_file(DATA_PACKAGE_CBE_PATH, archive.bytes().to_vec());
+        // Resolve the default Auto orientation from the content-identity profile.
+        machine.effective_orientation = orientation_for_archive(archive.bytes());
+        // Sidecar files shipped next to the CBE (pay kernels, save records,
+        // update data) stand in for the device filesystem.
+        machine.virtual_fs.set_host_dir(archive.path().parent());
+        Ok(machine)
+    }
+
+    fn initialize_tables(&mut self) {
+        for table_index in 0..27u32 {
+            let table = MANAGER_BASE + TABLE_STRIDE * (table_index + 1);
+            let service = SERVICE_BASE + TABLE_STRIDE * table_index;
+            self.populate_table(table, service, TABLE_STRIDE / 4);
+        }
+        self.populate_table(
+            MANAGER_BASE + TABLE_STRIDE * 30,
+            SERVICE_BASE + TABLE_STRIDE * 29,
+            61,
+        );
+        self.memory
+            .w32(MANAGER_BASE + 8, MANAGER_BASE + TABLE_STRIDE);
+        self.memory.w32(MANAGER_BASE + 12, LOG_NOOP_SERVICE);
+        self.memory.w32(MANAGER_BASE + 16, MANAGER_BASE + 0x9000);
+        if self.uses_fixed_manager_abi() {
+            for (index, &(offset, _, _)) in fixed_manager_specs().iter().enumerate() {
+                self.memory.w32(
+                    FIXED_MANAGER_DIRECTORY + offset,
+                    FIXED_MANAGER_INIT + index as u32 * 4,
+                );
+                // Adjacent word is a "get table" stub so bootstrap code that
+                // indexes the directory as a dense pointer array (entry+4)
+                // receives the shared manager function table instead of null.
+                self.memory.w32(
+                    FIXED_MANAGER_DIRECTORY + offset + 4,
+                    FIXED_MANAGER_GET + index as u32 * 4,
+                );
+            }
+            self.memory.w32(MANAGER_BASE + 8, FIXED_MANAGER_DIRECTORY);
+        }
+        self.initialize_download_managers();
+    }
+
+    fn initialize_download_managers(&mut self) {
+        self.populate_table(DL_LOAD_MANAGER, SERVICE_BASE + TABLE_STRIDE * 22, 11);
+        self.populate_table(VIDEO_MANAGER, SERVICE_BASE + TABLE_STRIDE * 23, 38);
+        self.populate_table(DL_PAY_MANAGER, SERVICE_BASE + TABLE_STRIDE * 24, 16);
+        self.populate_table(DL_RESOURCE_MANAGER, SERVICE_BASE + TABLE_STRIDE * 25, 20);
+        self.populate_table(DL_IMAGE_MANAGER, SERVICE_BASE + TABLE_STRIDE * 26, 12);
+        self.populate_table(APP_STORE_MANAGER, SERVICE_BASE + TABLE_STRIDE * 28, 40);
+    }
+
+    fn uses_fixed_manager_abi(&self) -> bool {
+        self.executable.big_endian
+            && self.executable.preferred_code_address != 0
+            && self.executable.code_image_size as usize > self.executable.code_size
+    }
+
+    fn uses_native_dispatch_abi(&self) -> bool {
+        self.executable.big_endian
+            && self.executable.preferred_code_address != 0
+            && !self.uses_fixed_manager_abi()
+    }
+
+    fn initialize_screen(&mut self) {
+        self.memory.w32(SCREEN_IMAGE_STRUCT, SCREEN_IMAGE);
+        self.write_screen_header();
+    }
+
+    /// Screen framebuffer header: narrow layout keeps the u16 width/height
+    /// pair at +4/+6 with the stride at +8; the wide (v3 gamelib) layout
+    /// stores u32 width at +4 and u32 height at +8.
+    fn write_screen_header(&mut self) {
+        let (width, height) = self.framebuffer_size();
+        if self.wide_images {
+            self.memory.w32(SCREEN_IMAGE_STRUCT + 4, width);
+            self.memory.w32(SCREEN_IMAGE_STRUCT + 8, height);
+            self.memory.w32(SCREEN_IMAGE_STRUCT + 12, 0);
+        } else {
+            self.memory.w16(SCREEN_IMAGE_STRUCT + 4, width as u16);
+            self.memory.w16(SCREEN_IMAGE_STRUCT + 6, height as u16);
+            self.memory.w16(
+                SCREEN_IMAGE_STRUCT + 8,
+                self.display_surface.stride() as u16,
+            );
+            self.memory.w16(SCREEN_IMAGE_STRUCT + 12, 0);
+            self.memory.w16(SCREEN_IMAGE_STRUCT + 14, 0);
+        }
+        self.memory.w16(SCREEN_IMAGE_STRUCT + 16, width as u16);
+        self.memory.w16(SCREEN_IMAGE_STRUCT + 18, height as u16);
+    }
+
+    /// Image width/height pair, laid out per the active header mode.
+    fn image_dims(&mut self, image: u32) -> (i32, i32) {
+        if self.wide_images {
+            (
+                self.memory.r32(image + 4) as i32,
+                self.memory.r32(image + 8) as i32,
+            )
+        } else {
+            (
+                self.memory.r16(image + 4) as i32,
+                self.memory.r16(image + 6) as i32,
+            )
+        }
+    }
+
+    fn write_image_dims(&mut self, image: u32, width: u32, height: u32) {
+        if self.wide_images {
+            self.memory.w32(image + 4, width);
+            self.memory.w32(image + 8, height);
+        } else {
+            self.memory.w16(image + 4, width as u16);
+            self.memory.w16(image + 6, height as u16);
+        }
+    }
+
+    fn image_kind_offset(&self) -> u32 {
+        if self.wide_images {
+            12
+        } else {
+            8
+        }
+    }
+
+    fn image_header_len(&self) -> u32 {
+        if self.wide_images {
+            16
+        } else {
+            12
+        }
+    }
+
+    fn populate_table(&mut self, table: u32, service: u32, count: u32) {
+        for index in 0..count {
+            // Private Io tables must preserve the shared table's NV probe ABI.
+            // Slots beyond the fixed Io interface use the dense service table.
+            let method = if service == SERVICE_BASE + TABLE_STRIDE * 5 && index < 24 {
+                IO_METHOD_BASE + index * IO_METHOD_STRIDE
+            } else {
+                service + index * 4
+            };
+            self.memory.w32(table + index * 4, method);
+        }
+    }
+
+    pub fn boot(&mut self, instruction_limit: u64) -> Result<()> {
+        let result = self.boot_inner(instruction_limit);
+        self.observe_display_scanline(None);
+        result
+    }
+
+    fn boot_inner(&mut self, instruction_limit: u64) -> Result<()> {
+        self.state = MachineState::Initializing;
+        let code_address = self.executable.code_address();
+        let data_address = self.executable.data_address();
+        let application_interface = if self.uses_native_dispatch_abi() {
+            NATIVE_DISPATCH_SERVICE | 1
+        } else {
+            MANAGER_BASE
+        };
+        self.cpu.reg_set(Mode::User, 0, application_interface);
+        self.cpu.reg_set(Mode::User, 9, data_address);
+        self.cpu
+            .reg_set(Mode::User, reg::SP, STACK_BASE + STACK_SIZE as u32);
+        self.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+        self.cpu.reg_set(Mode::User, reg::PC, code_address);
+        self.cpu.reg_set(Mode::User, reg::CPSR, 0x30);
+        if std::env::var_os("CBE_TRACE").is_some() {
+            eprintln!(
+                "[boot] fixed={} native={} interface=0x{application_interface:08X} code=0x{code_address:08X} [iface+8]=0x{:08X}",
+                self.uses_fixed_manager_abi(),
+                self.uses_native_dispatch_abi(),
+                self.memory.r32((application_interface & !1) + 8)
+            );
+        }
+        self.run_until_return(instruction_limit)?;
+        if std::env::var_os("CBE_TRACE").is_some() {
+            // Dump BSS globals the shared template uses for dispatch stubs.
+            for addr in [
+                0x043FE558u32,
+                0x043FE55C,
+                0x043FE560,
+                0x043FE564,
+                0x043FE568,
+                0x043F9E44,
+            ] {
+                eprintln!("[boot] [0x{addr:08X}]=0x{:08X}", self.memory.r32(addr));
+            }
+        }
+        if self.state == MachineState::Halted {
+            return Ok(());
+        }
+        // Registration is content-driven: the initializer either registered
+        // its entry through the native-dispatch call (id 0x79E) or wrote the
+        // entry into the manager structure at [MANAGER_BASE]. Follow whichever
+        // actually happened rather than the static ABI classification, so
+        // games that mix the two conventions still boot.
+        if self.uses_native_dispatch_abi() || self.native_app_parser != 0 {
+            if self.native_app_parser == 0 {
+                self.state = MachineState::Faulted;
+                bail!("CBE initializer returned without registering a native application entry");
+            }
+            self.app_main = self.native_app_parser;
+            self.invoke_callback(self.native_app_parser, 0, 0, 0, instruction_limit)?;
+            if self.state == MachineState::Halted {
+                return Ok(());
+            }
+            self.state = MachineState::Ready;
+            return Ok(());
+        }
+        self.app_main = self.memory.r32(MANAGER_BASE);
+        self.app_exit = self.memory.r32(MANAGER_BASE + 4);
+        if self.app_main == 0 {
+            self.state = MachineState::Faulted;
+            bail!("CBE initializer returned without registering an application entry");
+        }
+        debug!("CBE application entry: 0x{:08X}", self.app_main);
+        self.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+        self.cpu.reg_set(Mode::User, reg::PC, self.app_main & !1);
+        let mut cpsr = self.cpu.reg_get(Mode::User, reg::CPSR);
+        if self.app_main & 1 != 0 {
+            cpsr |= 1 << 5
+        } else {
+            cpsr &= !(1 << 5)
+        }
+        self.cpu.reg_set(Mode::User, reg::CPSR, cpsr);
+        self.run_until_return(instruction_limit)?;
+        if self.state == MachineState::Halted {
+            return Ok(());
+        }
+        self.state = MachineState::Ready;
+        Ok(())
+    }
+
+    /// Rebuild the machine from an archive and re-run the boot sequence.
+    ///
+    /// Frontends use this for reset so a game restarts from a clean runtime
+    /// state without reloading the file from disk.
+    pub fn reset(&mut self, archive: &CbeArchive, instruction_limit: u64) -> Result<()> {
+        let volume = self.audio.volume();
+        let auto_bgm = self.auto_bgm;
+        let mut rebuilt = CoolbarMachine::new(archive)?;
+        rebuilt.audio.set_volume(volume);
+        rebuilt.auto_bgm = auto_bgm;
+        rebuilt.boot(instruction_limit)?;
+        *self = rebuilt;
+        Ok(())
+    }
+
+    /// Base address of the guest heap, exposed as system RAM to frontends.
+    pub fn system_ram_base() -> u32 {
+        HEAP_BASE
+    }
+
+    /// Size of the guest heap in bytes.
+    pub fn system_ram_size() -> usize {
+        HEAP_SIZE
+    }
+
+    /// Base address of the guest screen framebuffer, exposed as video RAM.
+    pub fn video_ram_base() -> u32 {
+        SCREEN_IMAGE
+    }
+
+    /// Size of the guest screen framebuffer in bytes.
+    pub fn video_ram_size() -> usize {
+        240 * 400 * 2
+    }
+
+    /// Snapshot of the mapped guest memory regions for frontend memory maps.
+    pub fn memory_regions(&self) -> Vec<MemoryRegionInfo> {
+        self.memory
+            .regions
+            .iter()
+            .map(|region| MemoryRegionInfo {
+                base: region.base,
+                size: region.data.len(),
+                read_only: region.read_only,
+            })
+            .collect()
+    }
+
+    /// Mutable pointer to guest memory at a mapped address, if any.
+    ///
+    /// Region backing buffers are allocated once at map time, so the pointer
+    /// stays valid for the lifetime of the machine.
+    pub fn memory_pointer(&mut self, address: u32) -> Option<*mut u8> {
+        let region = self.memory.region_mut(address, 1)?;
+        let offset = address.checked_sub(region.base)? as usize;
+        Some(unsafe { region.data.as_mut_ptr().add(offset) })
+    }
+
+    /// Mutable pointer to the guest heap, or null if it is not mapped.
+    pub fn system_ram_pointer(&mut self) -> Option<*mut u8> {
+        self.memory_pointer(Self::system_ram_base())
+    }
+
+    /// Mutable pointer to the guest screen framebuffer, or null if unmapped.
+    pub fn video_ram_pointer(&mut self) -> Option<*mut u8> {
+        self.memory_pointer(Self::video_ram_base())
+    }
+
+    fn allocate(&mut self, size: u32) -> u32 {
+        if size == 0 {
+            return 0;
+        }
+        let aligned = size.saturating_add(7) & !7;
+        if let Some(index) = self
+            .free_heap_blocks
+            .iter()
+            .position(|(_, available)| *available >= aligned)
+        {
+            let (pointer, available) = self.free_heap_blocks.remove(index);
+            if available > aligned {
+                self.free_heap_blocks
+                    .insert(index, (pointer + aligned, available - aligned));
+            }
+            self.heap_allocations.insert(pointer, aligned);
+            return pointer;
+        }
+        let pointer = self.heap_cursor;
+        let end = pointer.saturating_add(aligned);
+        if end > MEMORY_BLOCK_POOL {
+            warn!("CBE heap exhausted while allocating {size} bytes");
+            0
+        } else {
+            self.heap_cursor = end;
+            self.heap_allocations.insert(pointer, aligned);
+            pointer
+        }
+    }
+
+    fn deallocate(&mut self, pointer: u32) {
+        let Some(size) = self.heap_allocations.remove(&pointer) else {
+            return;
+        };
+        self.free_heap_blocks.push((pointer, size));
+        self.free_heap_blocks.sort_unstable_by_key(|block| block.0);
+
+        let mut index = 0;
+        while index + 1 < self.free_heap_blocks.len() {
+            let (start, length) = self.free_heap_blocks[index];
+            let (next_start, next_length) = self.free_heap_blocks[index + 1];
+            if start.saturating_add(length) == next_start {
+                self.free_heap_blocks[index].1 = length.saturating_add(next_length);
+                self.free_heap_blocks.remove(index + 1);
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    fn allocation_size(&self, address: u32) -> Option<u32> {
+        let (&start, &size) = self.heap_allocations.range(..=address).next_back()?;
+        let offset = address.checked_sub(start)?;
+        (offset < size).then_some(size - offset)
+    }
+
+    /// Execute one screen update and render pass.
+    pub fn run_frame(&mut self, instruction_limit: u64) -> Result<()> {
+        let result = self.run_frame_inner(instruction_limit);
+        self.observe_display_scanline(None);
+        self.finish_display_discovery();
+        result
+    }
+
+    fn run_frame_inner(&mut self, instruction_limit: u64) -> Result<()> {
+        if self.state == MachineState::Halted {
+            self.key_down = 0;
+            self.pointer.end_frame();
+            return Ok(());
+        }
+        if self.state != MachineState::Ready {
+            bail!("CBE machine is not ready");
+        }
+        self.maybe_run_auto_bgm();
+        self.frame_count = self.frame_count.wrapping_add(1);
+        self.dispatch_network_events(instruction_limit)?;
+        if self.finish_halted_frame() {
+            return Ok(());
+        }
+        let had_screen_before_timers =
+            self.active_screen != 0 || self.pending_screen != 0 || !self.screen_stack.is_empty();
+        self.dispatch_timers(instruction_limit)?;
+        self.dispatch_pending_callbacks(instruction_limit)?;
+        if self.finish_halted_frame() {
+            return Ok(());
+        }
+        if had_screen_before_timers && self.finish_screen_callback_frame() {
+            return Ok(());
+        }
+        if (self.uses_native_dispatch_abi() || self.native_app_parser != 0)
+            && self.active_screen == 0
+            && self.pending_screen == 0
+        {
+            self.key_down = 0;
+            if let Some(event) = self.pending_key_events.pop_front() {
+                update_key_bits(
+                    &mut self.key_down,
+                    &mut self.key_held,
+                    event.key,
+                    event.pressed,
+                );
+            }
+            self.invoke_callback(self.native_app_parser, 0, 0, 0, instruction_limit)?;
+            self.key_down = 0;
+            if self.active_screen == 0 && self.pending_screen == 0 {
+                return Ok(());
+            }
+        }
+        if self.pending_screen != 0 && self.pending_screen != self.active_screen {
+            self.active_screen = self.pending_screen;
+            self.screen_initialized = false;
+        }
+        if self.active_screen == 0 {
+            // A screenless frame is legitimate while asynchronous work is
+            // still in flight: guest timers (already handled) and network
+            // responses whose callback is what registers the first screen.
+            // Bailing before that callback runs kills the boot flow on the
+            // same frame the request was issued.
+            if self.timers.iter().any(|timer| timer.active) || !self.net_events.is_empty() {
+                self.key_down = 0;
+                self.pointer.end_frame();
+                return Ok(());
+            }
+            bail!("CBE application has no active screen");
+        }
+
+        let screen = self.active_screen;
+        let screen_this = self.screen_call_parameter(screen);
+        if std::env::var("CBE_TRACE").is_ok() {
+            eprintln!(
+                "screen callbacks screen={screen:08X} this={screen_this:08X} init={:08X} logic={:08X} render={:08X} load={:08X} pending_load={} sp={:08X}",
+                self.memory.r32(screen),
+                self.memory.r32(screen + 8),
+                self.memory.r32(screen + 12),
+                self.memory.r32(screen + 24),
+                self.resource_load_pending,
+                self.register(reg::SP),
+            );
+        }
+        // Requested resources must exist before the new screen initializes.
+        let resources_requested = self.resource_load_pending
+            && (self.resource_load_screen == 0 || self.resource_load_screen == screen);
+        if self.load_pending_screen_resources(screen, screen_this, instruction_limit)? {
+            return Ok(());
+        }
+        if !self.screen_initialized {
+            let init = self.memory.r32(screen);
+            self.invoke_callback(init, screen_this, 0, 0, instruction_limit)?;
+            if self.finish_screen_callback_frame() {
+                return Ok(());
+            }
+            self.screen_initialized = true;
+            // A registered screen also owns an initial resource-load callback.
+            // Explicit requests keep their earlier load-before-init ordering.
+            if !resources_requested && !self.resource_load_pending {
+                let load = self.memory.r32(screen + 24);
+                self.invoke_callback(load, screen_this, 0, 0, instruction_limit)?;
+                if self.finish_screen_callback_frame() {
+                    return Ok(());
+                }
+            }
+        }
+        // Initialization may itself request another resource callback.
+        if self.load_pending_screen_resources(screen, screen_this, instruction_limit)? {
+            return Ok(());
+        }
+        if self.pending_screen != 0 && self.pending_screen != screen {
+            self.key_down = 0;
+            self.pointer.end_frame();
+            return Ok(());
+        }
+
+        self.key_down = 0;
+        let key_event = self.pending_key_events.pop_front();
+        if let Some(event) = key_event {
+            update_key_bits(
+                &mut self.key_down,
+                &mut self.key_held,
+                event.key,
+                event.pressed,
+            );
+        }
+
+        // Registered native screens poll input once in the idle callback.
+        // Sending an extra edge callback makes event-agnostic logic act twice.
+        if let Some(event) = key_event.filter(|_| self.native_app_parser == 0) {
+            self.memory.w32(KEY_EVENT_ARG, 1u32 << event.key);
+            self.dispatch_screen_logic(
+                screen,
+                u32::from(!event.pressed),
+                KEY_EVENT_ARG,
+                instruction_limit,
+            )?;
+            if self.finish_screen_callback_frame() {
+                return Ok(());
+            }
+            self.key_down = 0;
+            if self.pending_screen != 0 && self.pending_screen != screen {
+                self.pointer.end_frame();
+                return Ok(());
+            }
+        }
+        if key_event.is_none() && self.native_app_parser == 0 {
+            // The firmware routes taps through the same screen logic callback:
+            // event type 3 (down), 4 (up), or 5 (drag) with packed screen
+            // coordinates at the payload pointer, one event per tick and
+            // shared with key events. Tap-driven menus rely on this path.
+            let touch_type = if self.pointer.down {
+                Some(3)
+            } else if self.pointer.up {
+                Some(4)
+            } else if self.pointer.dragging() {
+                Some(5)
+            } else {
+                None
+            };
+            if let Some(touch_type) = touch_type {
+                let packed = (self.pointer.x as u32) | ((self.pointer.y as u32) << 16);
+                self.memory.w32(TOUCH_EVENT_ARG, packed);
+                self.dispatch_screen_logic(screen, touch_type, TOUCH_EVENT_ARG, instruction_limit)?;
+                if self.finish_screen_callback_frame() {
+                    return Ok(());
+                }
+                if self.pending_screen != 0 && self.pending_screen != screen {
+                    self.pointer.end_frame();
+                    return Ok(());
+                }
+            }
+        }
+        self.dispatch_screen_logic(screen, 6, 0, instruction_limit)?;
+        if self.finish_screen_callback_frame() {
+            return Ok(());
+        }
+        if self.pending_screen == 0 || self.pending_screen == screen {
+            // Draw stacked screens from bottom to top so modal overlays retain
+            // their application's background and controls.
+            let layers = if self.screen_stack.is_empty() {
+                vec![screen]
+            } else {
+                self.screen_stack.clone()
+            };
+            for layer in layers {
+                if !self.screen_stack.is_empty() && !self.screen_stack.contains(&layer) {
+                    continue;
+                }
+                let render = self.memory.r32(layer + 12);
+                let parameter = self.screen_call_parameter(layer);
+                self.invoke_callback(render, parameter, 0, 0, instruction_limit)?;
+                if self.finish_screen_callback_frame() {
+                    return Ok(());
+                }
+            }
+        }
+        self.key_down = 0;
+        self.pointer.end_frame();
+        Ok(())
+    }
+
+    fn dispatch_screen_logic(
+        &mut self,
+        screen: u32,
+        event: u32,
+        data: u32,
+        instruction_limit: u64,
+    ) -> Result<()> {
+        let layers = if self.screen_stack.is_empty() {
+            vec![screen]
+        } else {
+            self.screen_stack.clone()
+        };
+        // An overlay returning zero lets the underlying screen handle the event.
+        for layer in layers.into_iter().rev() {
+            if !self.screen_stack.is_empty() && !self.screen_stack.contains(&layer) {
+                continue;
+            }
+            let logic = self.memory.r32(layer + 8);
+            if logic == 0 {
+                continue;
+            }
+            let parameter = self.screen_call_parameter(layer);
+            self.invoke_callback(logic, parameter, event, data, instruction_limit)?;
+            if self.register(0) != 0
+                || self.state != MachineState::Ready
+                || (self.pending_screen != 0 && self.pending_screen != screen)
+            {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn finish_halted_frame(&mut self) -> bool {
+        if self.state != MachineState::Halted {
+            return false;
+        }
+        self.key_down = 0;
+        self.pointer.end_frame();
+        true
+    }
+
+    fn load_pending_screen_resources(
+        &mut self,
+        screen: u32,
+        screen_this: u32,
+        instruction_limit: u64,
+    ) -> Result<bool> {
+        if !self.resource_load_pending
+            || (self.resource_load_screen != 0 && self.resource_load_screen != screen)
+        {
+            return Ok(false);
+        }
+        self.resource_load_pending = false;
+        self.resource_load_screen = 0;
+        let load_resource = self.memory.r32(screen + 24);
+        self.invoke_callback(load_resource, screen_this, 0, 0, instruction_limit)?;
+        Ok(self.finish_screen_callback_frame())
+    }
+
+    fn finish_screen_callback_frame(&mut self) -> bool {
+        if self.state != MachineState::Halted
+            && self.active_screen == 0
+            && self.pending_screen == 0
+            && self.screen_stack.is_empty()
+        {
+            self.state = MachineState::Halted;
+        }
+        self.finish_halted_frame()
+    }
+
+    fn screen_call_parameter(&self, screen: u32) -> u32 {
+        if let Some(&context) = self.screen_contexts.get(&screen) {
+            return context;
+        }
+        if screen >= self.executable.data_address() {
+            screen.saturating_sub(0x18)
+        } else {
+            screen
+        }
+    }
+
+    /// Play the first packaged MIDI resource as background music when the
+    /// guest never touches the audio manager.
+    ///
+    /// Some games (for example the local 魔塔 build) ship `.mid` resources but
+    /// never call any audio-manager service, so the packaged soundtrack stays
+    /// silent on real hardware-adjacent emulation. This compatibility layer
+    /// restarts the first MIDI once the previous pass is consumed, and hands
+    /// audio back to the game as soon as the guest issues its own audio call.
+    fn maybe_run_auto_bgm(&mut self) {
+        if !self.auto_bgm || self.auto_bgm_gave_way {
+            return;
+        }
+        // Still playing with samples left, or paused: leave the cue alone.
+        // A finished one-shot now reports stopped with an empty queue, so
+        // both drained and never-started states fall through to (re)start.
+        let state = self.audio.state();
+        if (state == 1 && self.audio.buffered_frames() != 0) || state == 2 {
+            return;
+        }
+        if self.auto_bgm_data.is_none() {
+            self.auto_bgm_data = self
+                .resources
+                .iter()
+                .find(|resource| {
+                    let name = resource.name.to_ascii_lowercase();
+                    name.ends_with(".mid") || name.ends_with(".midi")
+                })
+                .map(|resource| resource.data.clone());
+        }
+        let Some(data) = self.auto_bgm_data.clone() else {
+            return;
+        };
+        match self.audio.play_bytes(&data) {
+            Ok(()) => log::debug!("Auto BGM started ({} bytes)", data.len()),
+            Err(error) => log::warn!("Auto BGM rejected: {error:#}"),
+        }
+    }
+
+    /// Enable or disable the packaged-MIDI auto-BGM compatibility layer.
+    ///
+    /// The guest audio manager always wins: the layer stops permanently as
+    /// soon as the game issues any audio-manager call of its own.
+    pub fn set_auto_bgm(&mut self, enabled: bool) {
+        let was_enabled = self.auto_bgm;
+        self.auto_bgm = enabled;
+        if enabled {
+            // Re-enabling the layer also lets it take over again after the
+            // guest previously issued its own audio-manager calls.
+            self.auto_bgm_gave_way = false;
+        } else if was_enabled && !self.auto_bgm_gave_way {
+            // Only the layer's own playback stops when the layer is turned
+            // off. Frontends apply options after boot, so an unconditional
+            // stop here would also wipe BGM the guest started itself.
+            self.audio.stop();
+        }
+    }
+
+    /// Whether the packaged-MIDI auto-BGM compatibility layer is enabled.
+    pub fn auto_bgm(&self) -> bool {
+        self.auto_bgm
+    }
+
+    /// Set a guest key state. Key codes use the platform ABI values (0-20).
+    pub fn set_key(&mut self, key: u8, pressed: bool) {
+        if update_physical_key_bits(&mut self.key_held_physical, key, pressed) {
+            if pressed {
+                self.input_control_key(key);
+            }
+            self.pending_key_events.push_back(KeyEvent { key, pressed });
+        }
+    }
+
+    /// Bitmask of guest keys physically held down (key code as bit index).
+    pub fn held_keys(&self) -> u32 {
+        self.key_held_physical
+    }
+
+    pub(crate) fn normalize_input_after_load(&mut self) {
+        self.restore_display_surface();
+        self.key_down = 0;
+        self.key_held = self.key_held_physical;
+        self.pending_key_events.clear();
+    }
+
+    /// Set the playback volume, clamped to 0-100.
+    pub fn set_volume(&mut self, volume: u32) {
+        self.audio.set_volume(volume);
+    }
+
+    /// Set the guest touch/pointer state in screen coordinates.
+    pub fn set_pointer(&mut self, x: i32, y: i32, down: bool) {
+        self.pointer.set(x, y, down);
+    }
+
+    /// Set the display orientation applied by [`CoolbarMachine::frame_pixels`].
+    pub fn set_orientation(&mut self, orientation: DisplayOrientation) {
+        self.orientation = orientation;
+        if orientation != DisplayOrientation::Auto {
+            self.effective_orientation = orientation;
+        }
+    }
+
+    /// Re-resolve the automatic display orientation from the content-identity
+    /// profile.
+    ///
+    /// Only a requested `Auto` mode consults the profile; explicit
+    /// `Portrait`/`Landscape` overrides win. Presentation state is skipped by
+    /// the save-state codec, so frontends call this after restoring a saved
+    /// machine or applying a frontend orientation setting.
+    pub fn resolve_auto_orientation(&mut self, archive: &CbeArchive) {
+        if self.orientation == DisplayOrientation::Auto {
+            self.effective_orientation = orientation_for_archive(archive.bytes());
+        }
+    }
+
+    /// The display orientation applied by [`CoolbarMachine::frame_pixels`].
+    pub fn orientation(&self) -> DisplayOrientation {
+        self.orientation
+    }
+
+    /// The resolved orientation currently applied to output.
+    pub fn effective_orientation(&self) -> DisplayOrientation {
+        if self.orientation == DisplayOrientation::Auto
+            && self.display_surface.width > self.display_surface.height
+        {
+            DisplayOrientation::Portrait
+        } else {
+            self.effective_orientation
+        }
+    }
+
+    /// Presented output size in pixels after orientation.
+    pub fn display_size(&self) -> (u32, u32) {
+        let (width, height) = self.framebuffer_size();
+        if self.effective_orientation().swaps_dimensions() {
+            (height, width)
+        } else {
+            (width, height)
+        }
+    }
+
+    /// Map a presented display coordinate back to guest framebuffer space.
+    pub fn display_to_framebuffer(&self, display_x: i32, display_y: i32) -> (i32, i32) {
+        self.display_surface
+            .unrotate(self.effective_orientation(), display_x, display_y)
+    }
+
+    /// Copy the current RGB565 framebuffer into 0x00RRGGBB pixels, applying
+    /// the configured display orientation.
+    pub fn frame_pixels(&mut self) -> Vec<u32> {
+        self.render_input_controls();
+        let (width, height) = self.framebuffer_size();
+        let mut pixels = Vec::with_capacity((width * height) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let color = self
+                    .memory
+                    .r16(SCREEN_IMAGE + (y * self.display_surface.stride() + x) * 2);
+                let red = ((color >> 11) & 0x1f) as u32;
+                let green = ((color >> 5) & 0x3f) as u32;
+                let blue = (color & 0x1f) as u32;
+                pixels
+                    .push(((red * 255 / 31) << 16) | ((green * 255 / 63) << 8) | (blue * 255 / 31));
+            }
+        }
+        rotate_frame(&pixels, width, height, self.effective_orientation())
+    }
+
+    /// Pull up to `max_frames` stereo frames of guest audio.
+    pub fn take_audio_samples(&mut self, max_frames: usize) -> Vec<i16> {
+        self.audio.pull_samples(max_frames)
+    }
+
+    /// Deterministic evidence about guest audio playback.
+    pub fn audio_diagnostics(&self) -> AudioDiagnostics {
+        self.audio.diagnostics()
+    }
+
+    pub fn state(&self) -> MachineState {
+        self.state
+    }
+    pub fn executable(&self) -> &CbeExecutable {
+        &self.executable
+    }
+    pub fn app_main(&self) -> u32 {
+        self.app_main
+    }
+    pub fn last_pc(&self) -> u32 {
+        self.last_pc
+    }
+    pub fn instruction_count(&self) -> u64 {
+        self.instruction_count
+    }
+    /// Number of guest screen ticks executed so far (one per `run_frame`).
+    pub fn frame_count(&self) -> u64 {
+        self.frame_count
+    }
+    pub fn service_calls(&self) -> &HashMap<(u32, u32), u64> {
+        &self.service_calls
+    }
+    pub fn bad_accesses(&self) -> &BTreeSet<u32> {
+        &self.memory.bad_accesses
+    }
+    pub fn active_screen(&self) -> u32 {
+        self.active_screen
+    }
+    pub fn pending_screen(&self) -> u32 {
+        self.pending_screen
+    }
+    pub fn register_value(&self, register: u8) -> u32 {
+        self.register(register)
+    }
+    pub fn read_u32(&mut self, address: u32) -> u32 {
+        self.memory.r32(address)
+    }
+
+    /// Total bytes accepted by network `send` calls.
+    pub fn network_uplink_bytes(&self) -> u64 {
+        self.net_uplink_bytes
+    }
+
+    /// Total bytes delivered to guest network callbacks by the host backend.
+    pub fn network_downlink_bytes(&self) -> u64 {
+        self.net_downlink_bytes
+    }
+
+    /// Last URL requested through the network HTTP service, if any.
+    pub fn network_last_http_url(&self) -> &str {
+        &self.net_last_http_url
+    }
+
+    /// Construct a blank machine with the standard memory map for unit tests
+    /// that exercise host-side service state without a CBE archive.
+    #[cfg(test)]
+    pub(crate) fn new_blank_for_tests() -> Self {
+        let mut memory = MachineMemory::new(false);
+        memory.map(STACK_BASE, STACK_SIZE, false);
+        memory.map(HEAP_BASE, HEAP_SIZE, false);
+        memory.map(MANAGER_BASE, MANAGER_SIZE, false);
+        memory.map(SERVICE_BASE, SERVICE_SIZE as usize, false);
+        Self {
+            cpu: Cpu::new(),
+            memory,
+            audio: AudioEngine::new(),
+            executable: CbeExecutable {
+                preferred_code_address: 0,
+                code_image_size: 0x1000,
+                preferred_data_address: 0,
+                data_image_size: 0,
+                code_offset: 0,
+                code_size: 0,
+                data_offset: 0,
+                initialized_data_size: 0,
+                embedded_package_offset: 0,
+                embedded_package_size: 0,
+                resource_package_offset: 0,
+                resource_package_size: 0,
+                big_endian: false,
+            },
+            state: MachineState::Ready,
+            heap_cursor: HEAP_BASE,
+            latched_text_origin: (0, 0),
+            heap_allocations: BTreeMap::new(),
+            auto_objects: BTreeMap::new(),
+            data_package_path_buffer: 0,
+            df_render_buffer: 0,
+            df_vscroll_buffer: 0,
+            pending_callbacks: VecDeque::new(),
+            billing_reg: BTreeMap::new(),
+            free_heap_blocks: Vec::new(),
+            app_main: 0,
+            app_exit: 0,
+            service_calls: HashMap::new(),
+            recent_services: VecDeque::new(),
+            instruction_count: 0,
+            frame_count: 0,
+            last_pc: 0,
+            recent_pcs: VecDeque::new(),
+            recent_branches: VecDeque::new(),
+            wide_images: false,
+            gamelib_v3_table: 0,
+            native_objects: std::collections::BTreeMap::new(),
+            oldlib_clip: default_oldlib_clip(),
+            branch_regs: None,
+            pending_screen: 0,
+            active_screen: 0,
+            screen_stack: Vec::new(),
+            screen_contexts: BTreeMap::new(),
+            screen_initialized: false,
+            resource_load_pending: false,
+            resource_load_screen: 0,
+            key_down: 0,
+            key_held: 0,
+            key_held_physical: 0,
+            _legacy_key_press_frame: [u32::MAX; 31],
+            _legacy_key_frame_counter: 0,
+            pending_key_events: VecDeque::new(),
+            auto_bgm: false,
+            auto_bgm_data: None,
+            auto_bgm_gave_way: false,
+            playing_resource_id: None,
+            orientation: DisplayOrientation::Portrait,
+            effective_orientation: DisplayOrientation::Portrait,
+            display_surface: DisplaySurface::default(),
+            pointer: PointerState::new(),
+            timers: vec![
+                GuestTimer {
+                    active: false,
+                    callback: 0,
+                    context: 0,
+                    remaining_frames: 0,
+                };
+                MAX_TIMERS
+            ],
+            resources: Vec::new(),
+            resource_packages: Vec::new(),
+            resource_data: Vec::new(),
+            resource_names: Vec::new(),
+            app_image_package: 0,
+            inner_image_package: 0,
+            current_image_package: 0,
+            native_app_parser: 0,
+            native_app_exit: 0,
+            native_system_info: 0,
+            native_property_info: 0,
+            native_scalar_results: BTreeMap::new(),
+            virtual_fs: VirtualFileSystem::default(),
+            net_channels: vec![
+                services::network::NetChannel::default();
+                services::network::MAX_NET_CHANNELS
+            ],
+            net_events: VecDeque::new(),
+            next_net_connect_id: 0,
+            net_uplink_bytes: 0,
+            net_downlink_bytes: 0,
+            net_last_uplink: Vec::new(),
+            net_last_http_url: String::new(),
+            rand_state: default_rand_state(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_user_register(&mut self, register: u8, value: u32) {
+        self.cpu.reg_set(armv4t_emu::Mode::User, register, value);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_base_region_accepts_guest_data_reads() {
+        let mut memory = MachineMemory::new(false);
+        memory.map(SERVICE_BASE, SERVICE_SIZE as usize, false);
+        memory.w32(SERVICE_BASE + 4, 0x0c00_0040);
+        assert_eq!(memory.r32(SERVICE_BASE + 4), 0x0c00_0040);
+        assert!(memory.bad_accesses.is_empty());
+        // Nearby low addresses must still be rejected so null-pointer walks
+        // remain visible instead of silently reading zeros.
+        assert_eq!(memory.r32(0x0000_0004), 0);
+        assert!(memory.bad_accesses.contains(&0x0000_0004));
+    }
+
+    #[test]
+    fn network_connect_registers_attempt_and_queues_offline_error() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.set_user_register(2, 0x0100_1235);
+        machine.set_user_register(3, HEAP_BASE + 0x100);
+        machine.handle_network_service(0);
+        assert_eq!(machine.register(0), 0);
+        let connect_id = machine.memory.r32(HEAP_BASE + 0x100);
+        assert_ne!(connect_id, 0);
+        assert!(machine
+            .net_channels
+            .iter()
+            .any(|channel| channel.active && channel.connect_id == connect_id));
+        assert!(machine
+            .net_events
+            .iter()
+            .any(|event| event.event_type == services::network::NET_EVENT_CHANNEL_ERROR));
+        assert_eq!(machine.net_events.len(), 1);
+        let event = &machine.net_events[0];
+        assert_eq!((event.r0, event.r1, event.r2), (0, 0, 0));
+        assert!(!event.screenless_only);
+        assert_eq!(machine.net_downlink_bytes, 0);
+    }
+
+    #[test]
+    fn network_send_reads_firmware_argument_order_without_mocking_server_data() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        let output = HEAP_BASE + 0x100;
+        let payload = HEAP_BASE + 0x200;
+        machine.set_user_register(2, 0x0100_1235);
+        machine.set_user_register(3, output);
+        machine.handle_network_service(0);
+        let handle = machine.memory.r32(output);
+        machine.memory.write_bytes(payload, &[0xab, 0xcd, 0xef]);
+        machine.set_user_register(0, handle);
+        machine.set_user_register(1, 3);
+        machine.set_user_register(2, payload);
+        machine.handle_network_service(1);
+        assert_eq!(machine.register(0), 0);
+        assert_eq!(machine.net_last_uplink, [0xab, 0xcd, 0xef]);
+        assert_eq!(machine.net_uplink_bytes, 3);
+        assert_eq!(machine.net_downlink_bytes, 0);
+        assert_eq!(machine.net_events.len(), 1);
+        assert!(machine.memory.bad_accesses.is_empty());
+    }
+
+    #[test]
+    fn network_http_get_returns_handle_and_offline_error_without_payload() {
+        for big_endian in [false, true] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let out = HEAP_BASE + 0x100;
+            machine.memory.w32(out, 0xfeed_beef);
+            machine.set_user_register(1, 0x0100_2001);
+            machine.set_user_register(2, out);
+            machine.handle_network_service(3);
+            assert_eq!(machine.register(0), 1);
+            let first_handle = machine.memory.r32(out);
+            assert_ne!(first_handle, 0);
+            assert_ne!(first_handle, 0xfeed_beef);
+            assert_eq!(machine.net_events.len(), 1);
+            let event = &machine.net_events[0];
+            assert_eq!(event.event_type, 9);
+            assert_eq!((event.r0, event.r1, event.r2), (0, 0, 0));
+            assert_eq!(event.callback, 0x0100_2001);
+            assert!(!event.screenless_only);
+            assert_eq!(machine.net_downlink_bytes, 0);
+            machine.set_user_register(1, 0x0100_2001);
+            machine.set_user_register(2, out);
+            machine.handle_network_service(3);
+            assert_ne!(machine.memory.r32(out), first_handle);
+        }
+    }
+
+    #[test]
+    fn network_close_deactivates_channel() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.set_user_register(2, 0x0100_3001);
+        machine.handle_network_service(0);
+        let connect_id = machine
+            .net_channels
+            .iter()
+            .find(|channel| channel.active)
+            .map(|channel| channel.connect_id)
+            .expect("connect should register a channel");
+        machine.set_user_register(0, connect_id);
+        machine.handle_network_service(2);
+        assert!(!machine
+            .net_channels
+            .iter()
+            .any(|channel| channel.active && channel.connect_id == connect_id));
+    }
+
+    #[test]
+    fn network_dispatch_delivers_event_after_delay() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        // Return-immediately stub at a mapped code address.
+        let stub = SERVICE_BASE + 0x8000;
+        // BX LR (Thumb): 0x4770
+        machine.memory.w16(stub, 0x4770);
+        machine.set_user_register(1, stub | 1);
+        machine.set_user_register(2, 0);
+        machine.handle_network_service(3);
+        assert_eq!(machine.net_events.len(), 1);
+        // First tick only decrements the delay; the screen must not suppress GET errors.
+        machine.active_screen = HEAP_BASE;
+        machine.dispatch_network_events(10_000).unwrap();
+        assert_eq!(machine.net_events.len(), 1);
+        assert_eq!(machine.net_events[0].event_type, 9);
+        machine.dispatch_network_events(10_000).unwrap();
+        assert!(machine.net_events.is_empty());
+    }
+
+    #[test]
+    fn network_post_completion_reaches_loading_screens_once() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        let stub = HEAP_BASE + 0x1000;
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30);
+        let marker = HEAP_BASE;
+        // LDR r1, literal; LDR/ADD/STR r0, [r1]; BX LR.
+        for (offset, instruction) in [0x4902, 0x6808, 0x3001, 0x6008, 0x4770, 0x46c0]
+            .into_iter()
+            .enumerate()
+        {
+            machine.memory.w16(stub + offset as u32 * 2, instruction);
+        }
+        machine.memory.w32(stub + 12, marker);
+        machine.set_user_register(3, stub | 1);
+        machine.handle_network_service(4);
+        assert_eq!(machine.register(0), 1, "POST reports accepted");
+        assert_eq!(machine.net_events.len(), 1);
+        let event = &machine.net_events[0];
+        assert_eq!(event.event_type, 9, "offline completion code in r3");
+        assert!(!event.screenless_only);
+        assert_eq!(event.delay_frames, 3);
+
+        // A loading screen must not consume or suppress the pending result.
+        machine.active_screen = 1;
+        for _ in 0..3 {
+            machine.dispatch_network_events(10_000).unwrap();
+            assert_eq!(machine.memory.r32(marker), 0);
+        }
+        for _ in 0..2 {
+            machine.dispatch_network_events(10_000).unwrap();
+            assert_eq!(machine.memory.r32(marker), 1);
+        }
+        assert!(machine.net_events.is_empty());
+    }
+
+    /// A screenless frame waits while network completions are in flight;
+    /// the callback they deliver is what registers the first screen.  The
+    /// bail only returns once the queue is empty.
+    #[test]
+    fn screenless_frame_waits_for_pending_network_events() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.queue_net_event(0, 0, 0, 0, (SERVICE_BASE + 0x8000) | 1, 0, 1, false);
+        machine.run_frame(10_000).unwrap();
+        machine.dispatch_network_events(10_000).unwrap();
+        machine.dispatch_network_events(10_000).unwrap();
+        assert!(machine.net_events.is_empty());
+        let error = machine.run_frame(10_000).unwrap_err();
+        assert!(error.to_string().contains("no active screen"));
+    }
+
+    #[test]
+    fn rotate_frame_swaps_dimensions_and_keeps_orientation() {
+        // 2x3 source: rows map to columns when rotated.
+        // Layout: (0,0)=1 (1,0)=2 / (0,1)=3 (1,1)=4 / (0,2)=5 (1,2)=6.
+        let source = vec![1, 2, 3, 4, 5, 6];
+
+        // Counterclockwise: source (x, y) -> output (y, width - 1 - x).
+        let landscape = rotate_frame(&source, 2, 3, DisplayOrientation::Landscape);
+        assert_eq!(landscape.len(), 6);
+        assert_eq!(landscape, vec![2, 4, 6, 1, 3, 5]);
+
+        // Portrait returns an untouched copy, and Auto behaves like Portrait
+        // before resolution.
+        assert_eq!(
+            rotate_frame(&source, 2, 3, DisplayOrientation::Portrait),
+            source
+        );
+        assert_eq!(
+            rotate_frame(&source, 2, 3, DisplayOrientation::Auto),
+            source
+        );
+    }
+
+    #[test]
+    fn orientation_unrotate_maps_display_back_to_framebuffer() {
+        assert_eq!(DisplayOrientation::Portrait.unrotate(10, 20, 240), (10, 20));
+        // Landscape output pixel (x, y) came from framebuffer (239 - y, x).
+        assert_eq!(
+            DisplayOrientation::Landscape.unrotate(10, 20, 240),
+            (219, 10)
+        );
+        assert_eq!(
+            DisplayOrientation::Landscape.unrotate(399, 239, 240),
+            (0, 399)
+        );
+    }
+
+    #[test]
+    fn orientation_profile_rejects_unknown_content() {
+        assert_eq!(
+            orientation_for_archive(b"arbitrary game bytes"),
+            DisplayOrientation::Portrait
+        );
+        assert_eq!(orientation_for_archive(b""), DisplayOrientation::Portrait);
+        // The profile lookup is content-keyed: a different length with the
+        // same CRC must not match.
+        assert_ne!(
+            orientation_for_archive(&[0; 341737]),
+            DisplayOrientation::Landscape
+        );
+    }
+
+    #[test]
+    fn manager_initializers_use_firmware_table_lengths() {
+        assert_eq!(manager_initializer_count(0), Some(30));
+        assert_eq!(manager_initializer_count(18), Some(115));
+        assert_eq!(manager_initializer_count(32), Some(144));
+        assert_eq!(manager_initializer_count(45), Some(6));
+        assert_eq!(manager_initializer_count(26), None);
+    }
+
+    #[test]
+    fn game_service_string_readers_use_firmware_length_widths() {
+        assert_eq!(game_service_string_uses_wide_length(97), Some(false));
+        assert_eq!(game_service_string_uses_wide_length(101), Some(true));
+        assert_eq!(game_service_string_uses_wide_length(96), None);
+        assert_eq!(game_service_string_uses_wide_length(102), None);
+    }
+
+    #[test]
+    fn variadic_arguments_continue_from_registers_to_stack() {
+        assert_eq!(
+            variadic_argument_location(1, 0),
+            VariadicArgument::Register(1)
+        );
+        assert_eq!(
+            variadic_argument_location(1, 2),
+            VariadicArgument::Register(3)
+        );
+        assert_eq!(variadic_argument_location(1, 3), VariadicArgument::Stack(0));
+        assert_eq!(variadic_argument_location(2, 2), VariadicArgument::Stack(0));
+    }
+
+    #[test]
+    fn held_keys_remain_visible_without_repeating_down_edges() {
+        let mut down = 0;
+        let mut held = 0;
+        let mut physical = 0;
+
+        assert!(update_physical_key_bits(&mut physical, 16, true));
+        update_key_bits(&mut down, &mut held, 16, true);
+        assert_eq!(down, 1 << 16);
+        assert_eq!(held, 1 << 16);
+
+        down = 0;
+        assert!(!update_physical_key_bits(&mut physical, 16, true));
+        assert_eq!(down, 0);
+        assert_eq!(held, 1 << 16);
+
+        assert!(update_physical_key_bits(&mut physical, 16, false));
+        update_key_bits(&mut down, &mut held, 16, false);
+        assert_eq!(physical, 0);
+        assert_eq!(held, 0);
+    }
+
+    #[test]
+    fn type_three_image_payload_skips_stream_metadata() {
+        let mut resource = vec![3, 0, 0, 0, 8, 0, 1, 0, 1];
+        resource.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+        assert_eq!(image_payload(&resource), b"\x89PNG\r\n\x1a\n");
+    }
+
+    #[test]
+    fn checksum_ignores_partial_words() {
+        assert_eq!(checksum_le(&[1, 0, 0, 0, 9]), 1);
+        assert_eq!(checksum_be(&[0, 0, 0, 1, 9]), 1);
+    }
+
+    #[test]
+    fn segment_locator_distinguishes_padding_from_leading_fe_data() {
+        let padded = [
+            0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 1, 0, 0, 0,
+        ];
+        assert_eq!(
+            locate_checked_segment(&padded, 0, 4, 1, None, "test").unwrap(),
+            (9, false)
+        );
+
+        let leading_fe = [
+            0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xb5, 0, 0,
+        ];
+        let expected = checksum_le(&leading_fe[8..12]);
+        assert_eq!(
+            locate_checked_segment(&leading_fe, 0, 4, expected, None, "test").unwrap(),
+            (8, false)
+        );
+    }
+
+    #[test]
+    fn executable_code_follows_variable_header_and_separator() {
+        let variable_header_size = 6usize;
+        let segment_header = 68 + variable_header_size;
+        let header_end = segment_header + 6 * 12;
+        let code = [1u8, 0, 0, 0];
+        let initialized = [2u8, 0, 0, 0];
+        let embedded = [3u8, 0, 0, 0];
+        let mut data = vec![0u8; header_end];
+
+        for index in 0..5 {
+            data[index * 12..index * 12 + 8].fill(0xfe);
+        }
+        data[56..60].copy_from_slice(&(variable_header_size as u32).to_be_bytes());
+        for index in 0..6 {
+            let offset = segment_header + index * 12;
+            data[offset..offset + 8].fill(0xfe);
+        }
+        for (index, value) in [
+            code.len() as u32,
+            checksum_le(&code),
+            initialized.len() as u32,
+            checksum_le(&initialized),
+            embedded.len() as u32,
+            checksum_le(&embedded),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let offset = segment_header + index * 12 + 8;
+            data[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+        }
+
+        data.extend_from_slice(&[0xfe; 9]);
+        let code_offset = data.len();
+        data.extend_from_slice(&code);
+        data.extend_from_slice(&[0xfe; 8]);
+        let data_offset = data.len();
+        data.extend_from_slice(&initialized);
+        data.extend_from_slice(&[0xfe; 8]);
+        let embedded_offset = data.len();
+        data.extend_from_slice(&embedded);
+        data.extend_from_slice(&[0xfe; 8]);
+        data.extend_from_slice(&0u32.to_be_bytes());
+        data.extend_from_slice(&[0xfe; 8]);
+        let resource_package_offset = data.len();
+
+        let executable = CbeExecutable::parse(&data).unwrap();
+        assert_eq!(executable.code_offset, code_offset);
+        assert_eq!(executable.data_offset, data_offset);
+        assert_eq!(executable.embedded_package_offset, embedded_offset);
+        assert_eq!(executable.resource_package_offset, resource_package_offset);
+        assert!(!executable.big_endian);
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_reaches_audio_services() {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("激情砖块.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(5_000_000).unwrap();
+        for _ in 0..20 {
+            let _ = machine.run_frame(5_000_000);
+        }
+
+        assert!(
+            machine
+                .service_calls()
+                .keys()
+                .any(|(group, _)| *group == 18),
+            "game never called the audio manager"
+        );
+        let diagnostics = machine.audio_diagnostics();
+        assert_eq!(diagnostics.channels, 2);
+        assert_eq!(
+            diagnostics.sample_rate,
+            crate::audio_engine::AUDIO_SAMPLE_RATE
+        );
+        assert!(
+            diagnostics.decoded_frames > 0,
+            "guest MIDI audio never reached the engine"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_uses_timer_services_without_error() {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("魔塔.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(5_000_000).unwrap();
+        for _ in 0..60 {
+            machine.run_frame(5_000_000).unwrap();
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready);
+        assert!(
+            machine.service_calls().get(&(6, 3)).copied().unwrap_or(0) > 0,
+            "game never used the timer service"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_loads_resources_after_legacy_screen_transition() {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        for game in ["暴力摩托.CBE", "恶魔城.CBE", "雷霆战机.CBE"] {
+            let game_path = std::path::PathBuf::from(&game_dir).join(game);
+            assert!(game_path.is_file(), "missing {}", game_path.display());
+
+            let archive = CbeArchive::load(&game_path).unwrap();
+            let mut machine = CoolbarMachine::new(&archive).unwrap();
+            machine.boot(5_000_000).unwrap();
+            for _ in 0..2 {
+                machine.run_frame(5_000_000).unwrap();
+            }
+
+            assert_eq!(machine.state(), MachineState::Ready, "{game} faulted");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_shooter_advances_projectiles_and_registers_hits() {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("雷霆战机.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        for frame in 0..1_200 {
+            let confirm = matches!(frame, 5 | 50 | 100 | 150);
+            if confirm {
+                machine.set_key(14, true);
+            }
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            if confirm {
+                machine.set_key(14, false);
+            }
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready);
+        for index in 103..=106 {
+            assert!(
+                machine
+                    .service_calls()
+                    .get(&(3, index))
+                    .copied()
+                    .unwrap_or(0)
+                    > 0,
+                "game never called required game-math service {index}"
+            );
+        }
+        let score = machine
+            .memory
+            .r32(machine.executable.data_address() + 0x396c);
+        assert!(score > 0, "projectiles never registered a hit");
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_leidian_attack_flow_stays_ready_with_default_budget() {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("雷电.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        // Navigate: menu -> flight select -> confirm popup -> sortie ->
+        // second confirm popup -> sortie. The second sortie starts the stage
+        // intro, whose single heavy render frame previously exceeded the
+        // default callback budget and aborted the machine.
+        let taps = [
+            (30, 0, 0, true),      // key 14 opens the flight-select screen.
+            (60, 30, 375, false),  // Tap the bottom-left confirm checkmark.
+            (90, 38, 214, false),  // Tap the sortie button in the popup.
+            (150, 30, 375, false), // Tap the checkmark again.
+            (180, 38, 214, false), // Tap sortie to start the stage.
+        ];
+        for frame in 0..300 {
+            let event = taps
+                .iter()
+                .find(|&&(event_frame, _, _, _)| event_frame == frame)
+                .copied();
+            if let Some((_, x, y, key_press)) = event {
+                if key_press {
+                    machine.set_key(14, true);
+                } else {
+                    machine.set_pointer(x, y, true);
+                }
+            }
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            if let Some((_, x, y, key_press)) = event {
+                if key_press {
+                    machine.set_key(14, false);
+                } else {
+                    machine.set_pointer(x, y, false);
+                }
+            }
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready);
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_completes_high_cost_idle_frames_with_default_budget() {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        for (game, frames) in [
+            ("疯狂捕鸟.CBE", 1),
+            ("疯狂企鹅大冒险.CBE", 28),
+            ("僵尸先生.CBE", 1),
+        ] {
+            let game_path = std::path::PathBuf::from(&game_dir).join(game);
+            assert!(game_path.is_file(), "missing {}", game_path.display());
+
+            let archive = CbeArchive::load(&game_path).unwrap();
+            let mut machine = CoolbarMachine::new(&archive).unwrap();
+            machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            for _ in 0..frames {
+                machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            }
+
+            assert_eq!(machine.state(), MachineState::Ready, "{game} faulted");
+        }
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_installs_and_enters_zombie_game() {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("僵尸先生.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        let installer_screen = machine.active_screen();
+        for _ in 0..330 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+        assert_eq!(
+            machine
+                .virtual_fs
+                .file("PlantsZombies/bwandou_zidan.actor")
+                .map(<[u8]>::len),
+            Some(324),
+            "installer wrote a resource with the wrong boundary"
+        );
+        for _ in 0..50 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready);
+        assert_ne!(machine.active_screen(), installer_screen);
+        assert!(machine
+            .virtual_fs
+            .file("PlantsZombies/title1.gif")
+            .is_some());
+        assert!(machine.virtual_fs.file("PlantsZombies/花园1.map").is_some());
+        assert!(machine.virtual_fs.paths().len() > 300);
+        assert!(
+            machine
+                .frame_pixels()
+                .iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                > 3,
+            "game screen did not render its resources"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_waits_for_timer_driven_first_screen() {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("魔鬼理发师.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        for _ in 0..8 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready);
+        assert_ne!(machine.active_screen(), 0);
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_fixed_address_game_populates_standard_runtime_services() {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("武林外传(新品).CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+
+        assert_eq!(machine.state(), MachineState::Ready);
+        let system_info = machine
+            .memory
+            .r32(machine.executable.data_address() + 0x1724);
+        assert_eq!(
+            machine.memory.r32(system_info + 0x220),
+            SERVICE_BASE + TABLE_STRIDE * 6 + 5 * 4
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_terminal_loop_halts_without_frame_errors() {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("武林外传(新品).CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        for _ in 0..400 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+
+        assert_eq!(machine.state(), MachineState::Halted);
+        assert!(
+            machine.service_calls().get(&(6, 5)).copied().unwrap_or(0) > 0,
+            "game never called the random-number service"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_removing_last_screen_halts_without_frame_errors() {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("在线书城.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        for _ in 0..400 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+
+        assert_eq!(machine.state(), MachineState::Halted);
+        assert!(
+            machine.service_calls().get(&(14, 6)).copied().unwrap_or(0) > 0,
+            "game never removed its final screen"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_login_title_reaches_menu_after_offline_http_error() {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("恶魔城登录版.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        for _ in 0..80 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready);
+        assert!(
+            machine
+                .service_calls()
+                .keys()
+                .any(|(group, index)| *group == 9 && *index == 3),
+            "game never called the network HTTP service"
+        );
+        assert_eq!(machine.network_downlink_bytes(), 0);
+        let pixels = machine.frame_pixels();
+        let mut colors = std::collections::HashSet::new();
+        for pixel in &pixels {
+            colors.insert(*pixel);
+        }
+        // The pre-mock login wait screen is a flat 6-color drawing. Reaching
+        // the title menu uses the offline completion and a rich guest palette.
+        assert!(
+            colors.len() > 32,
+            "frame still looks like the login wait screen ({} colors)",
+            colors.len()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_auto_bgm_plays_packaged_midi() {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("魔塔.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(5_000_000).unwrap();
+        machine.set_auto_bgm(true);
+        for _ in 0..3 {
+            machine.run_frame(5_000_000).unwrap();
+        }
+
+        let diagnostics = machine.audio_diagnostics();
+        assert!(
+            diagnostics.decoded_frames > 0,
+            "packaged MIDI never reached the engine via auto BGM"
+        );
+        assert!(
+            diagnostics.nonzero_samples > 0,
+            "auto BGM produced only silence"
+        );
+
+        // The guest never calls the audio manager, so auto BGM must not have
+        // given way to the game.
+        assert!(
+            !machine
+                .service_calls()
+                .keys()
+                .any(|(group, _)| *group == 18),
+            "guest unexpectedly used the audio manager"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_opens_island_help_without_error() {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("孤岛.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(5_000_000).unwrap();
+        for frame in 0..60 {
+            let key = match frame {
+                20 | 22 => Some(18),
+                24 => Some(14),
+                _ => None,
+            };
+            if let Some(key) = key {
+                machine.set_key(key, true);
+            }
+            machine.run_frame(5_000_000).unwrap();
+            if let Some(key) = key {
+                machine.set_key(key, false);
+            }
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready);
+        assert!(
+            machine
+                .frame_pixels()
+                .windows(2)
+                .any(|pixels| pixels[0] != pixels[1]),
+            "help screen remained blank"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_pointer_opens_same_island_help_screen_as_keys() {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("孤岛.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut keyed = CoolbarMachine::new(&archive).unwrap();
+        keyed.boot(5_000_000).unwrap();
+        for frame in 0..60 {
+            let key = match frame {
+                20 | 22 => Some(18),
+                24 => Some(14),
+                _ => None,
+            };
+            if let Some(key) = key {
+                keyed.set_key(key, true);
+            }
+            keyed.run_frame(5_000_000).unwrap();
+            if let Some(key) = key {
+                keyed.set_key(key, false);
+            }
+        }
+
+        let mut pointed = CoolbarMachine::new(&archive).unwrap();
+        pointed.boot(5_000_000).unwrap();
+        for frame in 0..60 {
+            if matches!(frame, 20 | 22) {
+                pointed.set_pointer(120, 243, true);
+            }
+            pointed.run_frame(5_000_000).unwrap();
+            if matches!(frame, 20 | 22) {
+                pointed.set_pointer(120, 243, false);
+            }
+        }
+
+        assert_eq!(pointed.state(), MachineState::Ready);
+        assert_eq!(pointed.frame_pixels(), keyed.frame_pixels());
+    }
+
+    /// Tap-driven menus need the firmware touch events (logic event types
+    /// 3/4/5) plus the LCD manager's point-in-rect hit test (group 4 index
+    /// 40) to react; the issue #47 games were dead to input without them.
+    /// Taps once at frame 100 and returns (final state, menu screen before
+    /// the tap, screen after the tap, LCD hit-test call count).
+    fn run_tap_scenario(game: &str, x: i32, y: i32) -> (MachineState, u32, u32, u64) {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join(game);
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        let mut menu_screen = 0;
+        for frame in 0..150 {
+            if frame == 100 {
+                menu_screen = machine.active_screen();
+                assert_ne!(menu_screen, 0, "{game} never reached its menu screen");
+            }
+            if frame == 100 {
+                machine.set_pointer(x, y, true);
+            }
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            if frame == 100 {
+                machine.set_pointer(x, y, false);
+            }
+        }
+        let hit_tests = machine.service_calls().get(&(4, 40)).copied().unwrap_or(0);
+        (
+            machine.state(),
+            menu_screen,
+            machine.active_screen(),
+            hit_tests,
+        )
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_touch_tap_opens_barber_help_screen() {
+        let (state, menu_screen, after_screen, hit_tests) =
+            run_tap_scenario("魔鬼理发师.CBE", 54, 247);
+        assert_eq!(state, MachineState::Ready);
+        assert_ne!(
+            after_screen, menu_screen,
+            "tap on the menu never switched screens"
+        );
+        assert!(
+            hit_tests > 0,
+            "barber menu never used the LCD hit-test service"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_touch_tap_switches_money_title_screen() {
+        let (state, menu_screen, after_screen, _) = run_tap_scenario("大家来数钱.CBE", 160, 200);
+        assert_eq!(state, MachineState::Ready);
+        assert_ne!(
+            after_screen, menu_screen,
+            "tap on the title screen never switched screens"
+        );
+    }
+
+    #[test]
+    fn pointer_press_holds_drag_and_release_edges() {
+        let mut pointer = PointerState::new();
+        assert!(!pointer.held && !pointer.down && !pointer.up);
+
+        pointer.set(120, 200, true);
+        assert!(pointer.held);
+        assert!(pointer.down);
+        assert!(!pointer.up);
+        assert!(!pointer.dragging());
+
+        pointer.end_frame();
+        assert!(!pointer.down);
+
+        pointer.set(140, 210, true);
+        assert!(!pointer.down);
+        assert!(pointer.dragging());
+
+        pointer.set(140, 210, false);
+        assert!(!pointer.held);
+        assert!(pointer.up);
+    }
+
+    #[test]
+    fn pointer_coordinates_are_clamped_to_the_screen() {
+        let mut pointer = PointerState::new();
+        pointer.set(-50, 500, true);
+        assert_eq!((pointer.x, pointer.y), (0, 399));
+        pointer.set(1000, -10, true);
+        assert_eq!((pointer.x, pointer.y), (239, 0));
+    }
+
+    #[test]
+    fn lcd_hit_test_service_reports_points_inside_the_rectangle() {
+        let mut machine = machine_from_minimal_archive();
+        let mut hit = |x: u32, y: u32| {
+            machine.cpu.reg_set(Mode::User, 0, x | (y << 16));
+            machine.cpu.reg_set(Mode::User, 1, 10 | (135 << 16));
+            machine.cpu.reg_set(Mode::User, 2, 105 | (283 << 16));
+            machine.handle_lcd_service(40);
+            machine.register(0)
+        };
+
+        assert_eq!(hit(54, 247), 1, "center must hit");
+        assert_eq!(hit(106, 247), 0, "past the right edge must miss");
+        assert_eq!(hit(54, 134), 0, "above the top edge must miss");
+        assert_eq!(hit(10, 135), 1, "top-left corner is inclusive");
+        assert_eq!(hit(105, 283), 1, "bottom-right corner is inclusive");
+    }
+
+    /// A minimal MIDI resource in the packaged CBE audio format: u16 type
+    /// 0x000A followed by a u24 big-endian payload length.
+    fn midi_resource_header(payload: &[u8]) -> Vec<u8> {
+        let mut data = vec![0x0A, 0x00, 0, 0, 0];
+        let length = payload.len() as u32;
+        data[2] = (length >> 16) as u8;
+        data[3] = (length >> 8) as u8;
+        data[4] = length as u8;
+        data.extend_from_slice(payload);
+        data
+    }
+
+    fn tiny_midi_payload() -> Vec<u8> {
+        let mut midi = Vec::new();
+        midi.extend_from_slice(b"MThd");
+        midi.extend_from_slice(&6u32.to_be_bytes());
+        midi.extend_from_slice(&0u16.to_be_bytes());
+        midi.extend_from_slice(&1u16.to_be_bytes());
+        midi.extend_from_slice(&48u16.to_be_bytes());
+
+        let mut track = Vec::new();
+        track.extend_from_slice(&[0x00, 0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20]);
+        track.extend_from_slice(&[0x00, 0x90, 0x3C, 0x64]);
+        track.extend_from_slice(&[0x30, 0x80, 0x3C, 0x00]);
+        track.extend_from_slice(&[0x00, 0xFF, 0x2F, 0x00]);
+
+        midi.extend_from_slice(b"MTrk");
+        midi.extend_from_slice(&(track.len() as u32).to_be_bytes());
+        midi.extend_from_slice(&track);
+        midi
+    }
+
+    #[test]
+    fn auto_bgm_midi_resource_decodes_and_restarts_when_consumed() {
+        let payload = tiny_midi_payload();
+        let resource = HostResource {
+            name: "bgm.mid".to_string(),
+            data: midi_resource_header(&payload),
+        };
+        let mut engine = crate::audio_engine::AudioEngine::new();
+        engine.play_bytes(&resource.data).unwrap();
+        let first = engine.diagnostics();
+        assert!(first.decoded_frames > 0);
+
+        // Drain every buffered frame; the engine then reports stopped with an
+        // empty queue, which is exactly the state `maybe_run_auto_bgm` treats
+        // as "previous pass consumed".
+        let frames = engine.buffered_frames();
+        let drained = engine.pull_samples(frames);
+        assert_eq!(drained.len(), frames * 2);
+        assert_eq!(engine.buffered_frames(), 0);
+        assert_eq!(engine.state(), 0);
+
+        engine.play_bytes(&resource.data).unwrap();
+        assert!(engine.buffered_frames() > 0);
+        assert_eq!(engine.state(), 1);
+    }
+
+    /// Build a machine from a fabricated structurally valid CBE file: header
+    /// markers with tiny code, data, and embedded-package segments plus an
+    /// empty resource package. No guest code exists; only machine-level
+    /// service state is exercised.
+    fn machine_from_minimal_archive() -> CoolbarMachine {
+        const SEGMENT: [u8; 4] = [0; 4]; // checksum_le(zeros) == 0
+        let mut data = vec![0u8; 196];
+        fn write_marker(data: &mut [u8], offset: usize) {
+            data[offset..offset + 8].fill(0xfe);
+        }
+        // Executable header: five 8-byte markers with big-endian fields
+        // between them.
+        write_marker(&mut data, 0);
+        data[8..12].copy_from_slice(&0x0010_0000u32.to_be_bytes());
+        write_marker(&mut data, 12);
+        data[20..24].copy_from_slice(&0x2000u32.to_be_bytes());
+        write_marker(&mut data, 24);
+        data[32..36].copy_from_slice(&0x0010_1000u32.to_be_bytes());
+        write_marker(&mut data, 36);
+        write_marker(&mut data, 48);
+        // Segment header: six markers starting at 68 with segment sizes and
+        // checksums between them. Every segment is four zero bytes, whose
+        // little-endian word checksum is 0.
+        for index in 0..6 {
+            write_marker(&mut data, 68 + index * 12);
+        }
+        data[76..80].copy_from_slice(&(SEGMENT.len() as u32).to_be_bytes());
+        data[100..104].copy_from_slice(&(SEGMENT.len() as u32).to_be_bytes());
+        data[124..128].copy_from_slice(&(SEGMENT.len() as u32).to_be_bytes());
+        // Segment locators: one 8-byte separator in front of each segment,
+        // followed by the segment payload itself.
+        write_marker(&mut data, 140);
+        data[148..152].copy_from_slice(&SEGMENT);
+        write_marker(&mut data, 152);
+        data[160..164].copy_from_slice(&SEGMENT);
+        write_marker(&mut data, 164);
+        data[172..176].copy_from_slice(&SEGMENT);
+        // Resource package: separator, zero length, then its separator.
+        write_marker(&mut data, 176);
+        write_marker(&mut data, 188);
+
+        let path = std::env::temp_dir().join(format!(
+            "coolbaremu-test-minimal-{}-{}.cbe",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, &data).unwrap();
+        let archive = CbeArchive::load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        CoolbarMachine::new(&archive).unwrap()
+    }
+
+    #[test]
+    fn disabling_auto_bgm_keeps_guest_started_audio() {
+        let mut machine = machine_from_minimal_archive();
+        // The guest queued and started its own audio during boot.
+        machine
+            .audio
+            .play_bytes(&midi_resource_header(&tiny_midi_payload()))
+            .unwrap();
+        assert_eq!(machine.audio.state(), 1);
+
+        // Frontends apply options after boot: applying a disabled option on
+        // a machine whose layer never ran must not stop guest playback.
+        machine.set_auto_bgm(false);
+        assert_eq!(machine.audio.state(), 1);
+        assert!(machine.audio.buffered_frames() > 0);
+        assert!(!machine.take_audio_samples(16).is_empty());
+    }
+
+    #[test]
+    fn disabling_auto_bgm_stops_the_layers_own_playback() {
+        let mut machine = machine_from_minimal_archive();
+        machine.set_auto_bgm(true);
+        // The layer queued its soundtrack and is playing it.
+        machine
+            .audio
+            .play_bytes(&midi_resource_header(&tiny_midi_payload()))
+            .unwrap();
+        machine.set_auto_bgm(false);
+        assert_eq!(machine.audio.state(), 0);
+        assert_eq!(machine.audio.buffered_frames(), 0);
+    }
+
+    #[test]
+    fn disabling_auto_bgm_after_guest_takeover_keeps_guest_audio() {
+        let mut machine = machine_from_minimal_archive();
+        machine.set_auto_bgm(true);
+        // The guest issued its own audio-manager call: the layer handed
+        // audio over and the guest's playback is what is queued now.
+        machine.auto_bgm_gave_way = true;
+        machine
+            .audio
+            .play_bytes(&midi_resource_header(&tiny_midi_payload()))
+            .unwrap();
+        machine.set_auto_bgm(false);
+        assert_eq!(machine.audio.state(), 1);
+        assert!(machine.audio.buffered_frames() > 0);
+    }
+
+    #[test]
+    fn play_for_game_queues_packaged_resource_and_skips_tick_restart() {
+        use crate::machine::packages::HostResource;
+        let mut machine = machine_from_minimal_archive();
+        let midi = midi_resource_header(&tiny_midi_payload());
+        machine.resources.push(HostResource {
+            name: "bgm.mid".to_owned(),
+            data: midi.clone(),
+        });
+        let pointer = machine.allocate(midi.len() as u32);
+        machine.memory.write_bytes(pointer, &midi);
+        machine.resource_data.push(pointer);
+
+        machine.play_resource_by_id(0, 0, false);
+        assert_eq!(machine.audio.state(), 1);
+        assert!(machine.audio.buffered_frames() > 0);
+        let after_first = machine.audio.diagnostics().decoded_frames;
+        assert!(after_first > 0);
+
+        // Games re-issue PlayForGame every tick; the same id must not
+        // re-decode while samples remain queued.
+        machine.play_resource_by_id(0, 0, false);
+        assert_eq!(machine.audio.diagnostics().decoded_frames, after_first);
+
+        // A different id is a new cue and is queued.
+        machine.resources.push(HostResource {
+            name: "sfx.mid".to_owned(),
+            data: midi.clone(),
+        });
+        let other = machine.allocate(midi.len() as u32);
+        machine.memory.write_bytes(other, &midi);
+        machine.resource_data.push(other);
+        machine.play_resource_by_id(1, 0, false);
+        assert!(machine.audio.diagnostics().decoded_frames > after_first);
+    }
+
+    #[test]
+    fn looping_play_for_game_restarts_after_drain() {
+        use crate::machine::packages::HostResource;
+        let mut machine = machine_from_minimal_archive();
+        let midi = midi_resource_header(&tiny_midi_payload());
+        machine.resources.push(HostResource {
+            name: "bgm.mid".to_owned(),
+            data: midi.clone(),
+        });
+        let pointer = machine.allocate(midi.len() as u32);
+        machine.memory.write_bytes(pointer, &midi);
+        machine.resource_data.push(pointer);
+
+        // PlayForGame arms the firmware BGM loop.
+        machine.play_resource_by_id(0, 0, true);
+        assert_eq!(machine.audio.state(), 1);
+        let frames = machine.audio.buffered_frames();
+        assert!(frames > 0);
+        let _ = machine.take_audio_samples(frames);
+        assert_eq!(machine.audio.buffered_frames(), 0);
+        // The next pull restarts the same cue from the armed loop source.
+        let restarted = machine.take_audio_samples(16);
+        assert!(!restarted.is_empty());
+        assert_eq!(machine.audio.state(), 1);
+        assert!(machine.audio.buffered_frames() > 0);
+    }
+
+    #[test]
+    fn play_with_data_package_uses_resource_id_like_play_for_game() {
+        use crate::machine::packages::HostResource;
+        let mut machine = machine_from_minimal_archive();
+        let midi = midi_resource_header(&tiny_midi_payload());
+        machine.resources.push(HostResource {
+            name: "game.mid".to_owned(),
+            data: midi.clone(),
+        });
+        let pointer = machine.allocate(midi.len() as u32);
+        machine.memory.write_bytes(pointer, &midi);
+        machine.resource_data.push(pointer);
+
+        // 碰嘭球 calls PlayWithDataPackage(270) which is game.mid in its
+        // sequential package id table — same ABI as PlayForGame.
+        machine.play_resource_by_id(0, 0, true);
+        assert_eq!(machine.audio.state(), 1);
+        assert!(machine.audio.buffered_frames() > 0);
+    }
+
+    #[test]
+    fn play_by_file_reads_virtual_filesystem_path() {
+        let mut machine = machine_from_minimal_archive();
+        let midi = midi_resource_header(&tiny_midi_payload());
+        assert!(machine.virtual_fs.write_file("audio/bgm.mid", midi.clone()));
+        machine.play_file_audio("audio/bgm.mid", 0);
+        assert_eq!(machine.audio.state(), 1);
+        assert!(machine.audio.buffered_frames() > 0);
+        assert!(machine.take_audio_samples(8).iter().any(|s| *s != 0));
+    }
+
+    #[test]
+    fn play_by_file_falls_back_to_packaged_basename() {
+        use crate::machine::packages::HostResource;
+        let mut machine = machine_from_minimal_archive();
+        let midi = midi_resource_header(&tiny_midi_payload());
+        machine.resources.push(HostResource {
+            name: "menu.mid".to_owned(),
+            data: midi,
+        });
+        machine.play_file_audio("C:/game/menu.mid", 0);
+        assert_eq!(machine.audio.state(), 1);
+        assert!(machine.audio.buffered_frames() > 0);
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_landscape_text_renders_at_the_latched_origin() {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("僵尸先生.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        // The installer screen draws its progress text every frame while it
+        // unpacks its data packages, so frame 120 is safely inside the
+        // text-bearing window.
+        for _ in 0..120 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+        assert_eq!(machine.state(), MachineState::Ready);
+
+        // frame_pixels presents the rotated 400x240 landscape display. The
+        // firmware text should now appear as upright, horizontally centered
+        // install progress ("安装进度/文件总数/正在解压…"). Before the fix
+        // every glyph piled up at the framebuffer origin as a single ~225
+        // pixel blob in the bottom-left corner of the presentation.
+        let width = machine.display_size().0 as usize;
+        let pixels = machine.frame_pixels();
+        let bright =
+            |pixel: u32| ((pixel >> 16) & 0xFF) + ((pixel >> 8) & 0xFF) + (pixel & 0xFF) > 600;
+        let bright_count = pixels.iter().copied().filter(|p| bright(*p)).count();
+        assert!(
+            bright_count > 600,
+            "installer progress text did not render: {bright_count} bright pixels"
+        );
+        let centered = pixels
+            .iter()
+            .enumerate()
+            .any(|(index, pixel)| bright(*pixel) && index % width > 100 && index / width < 200);
+        assert!(
+            centered,
+            "installer progress text rendered outside the centered display area"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_godwar_intro_idle_exit_halts_gracefully() {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("战争机器.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+
+        // Two Enter presses reach the background-intro screens. Idling there
+        // makes the guest load the level-0 map ("map0d.map" from a zero level
+        // counter), fail, divide by zero in its C runtime, and exit() through
+        // the ARM semihosting interface. The frontend must keep presenting the
+        // halted machine instead of closing with the old unmapped-fetch fault
+        // at the SWI vector (issue #53).
+        let mut exit_frame = None;
+        for frame in 0..400 {
+            if matches!(frame, 40 | 70) {
+                machine.set_key(14, true);
+            }
+            let result = machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT);
+            if matches!(frame, 40 | 70) {
+                machine.set_key(14, false);
+            }
+            if let Err(error) = result {
+                panic!("guest frame {frame} aborted: {error:#}");
+            }
+            if machine.state() == MachineState::Halted {
+                exit_frame = Some(frame);
+                break;
+            }
+        }
+        let exit_frame = exit_frame.expect("guest never exited during the idle intro run");
+        assert!(exit_frame >= 70, "guest exited before the intro screens");
+
+        // Halted frames stay idle and error-free.
+        for _ in 0..10 {
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        }
+        assert_eq!(machine.state(), MachineState::Halted);
+    }
+
+    /// The guest C library terminates through the Angel semihosting exit:
+    /// ARM `SWI #0x123456` with r0 = 0x18 (ReportException) and r1 = stop
+    /// reason. Issue #53: the unhandled SWI used to raise the uninstalled
+    /// exception vector at 0x8 and fault the machine, which closed the whole
+    /// standalone frontend window.
+    #[test]
+    fn arm_semihosting_exit_halts_instead_of_faulting() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w32(entry, 0xef12_3456); // SWI #0x123456
+        machine.cpu.reg_set(Mode::User, reg::PC, entry);
+        machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10); // ARM state
+        machine.cpu.reg_set(Mode::User, 0, 0x18); // ReportException
+        machine.cpu.reg_set(Mode::User, 1, 0x0002_0026); // ADP_Stopped_ApplicationExit
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(machine.state(), MachineState::Halted);
+    }
+
+    /// An unmapped fetch must carry enough context to root-cause the jump:
+    /// recent PCs, the branch that led there, and register state at branch
+    /// time (fault-time registers may already be clobbered by junk code).
+    #[test]
+    fn unmapped_fetch_error_carries_branch_diagnostics() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w16(entry, 0x4700); // Thumb bx r0
+        machine.cpu.reg_set(Mode::User, reg::PC, entry | 1);
+        machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
+        machine.cpu.reg_set(Mode::User, 0, 0xDEAD_0000); // unmapped target
+
+        let error = machine.run_until_return(1_000).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("instruction fetch from unmapped address 0xDEAD0000"),
+            "missing fault address in: {message}"
+        );
+        assert!(
+            message.contains("recent pcs:"),
+            "missing pc history in: {message}"
+        );
+        assert!(
+            message.contains(&format!(
+                "recent branches: [0x{:08X}->0xDEAD0000]",
+                machine.executable.code_address()
+            )),
+            "missing branch record in: {message}"
+        );
+        assert!(
+            message.contains(&format!("r0={:08X}", 0xDEAD_0000u32)),
+            "missing branch-time registers in: {message}"
+        );
+        assert!(
+            message.contains("unmapped data accesses:"),
+            "missing unmapped access list in: {message}"
+        );
+    }
+
+    #[test]
+    fn thumb_semihosting_exit_halts_instead_of_faulting() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w16(entry, 0xdfab); // SVC #0xAB
+        machine.cpu.reg_set(Mode::User, reg::PC, entry | 1);
+        machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
+        machine.cpu.reg_set(Mode::User, 0, 0x18);
+        machine.cpu.reg_set(Mode::User, 1, 0x0002_0026);
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(machine.state(), MachineState::Halted);
+    }
+
+    /// ARM `push {lr}` / `pop {r0}` round-trip.  The shared-template's
+    /// built-in memset prologue relies on this to keep its return address
+    /// across a routine that clobbers `lr` as a zero source.
+    #[test]
+    fn arm_push_pop_round_trips_return_address() {
+        let mut machine = machine_from_minimal_archive();
+        let sp = STACK_BASE + STACK_SIZE as u32;
+        let entry = machine.executable.code_address();
+        machine.cpu.reg_set(Mode::User, reg::SP, sp);
+        machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10); // ARM state
+                                                          // push {lr}  = STMDB sp!, {lr}
+        machine.memory.w32(entry, 0xE92D_4000);
+        machine.cpu.reg_set(Mode::User, reg::PC, entry);
+        assert!(machine.cpu.step(&mut machine.memory), "push step");
+        assert_eq!(machine.register(reg::SP), sp - 4, "push adjusts sp");
+        assert_eq!(
+            machine.memory.r32(sp - 4),
+            EXIT_ADDRESS,
+            "push stores lr on the stack"
+        );
+    }
+
+    /// Executing inside the manager region means the game calls the
+    /// application interface as code (native-dispatch convention: id in r0,
+    /// argument in r1). The fetch must be dispatched, not decoded as data —
+    /// otherwise zero-filled table space is "executed" until it walks off the
+    /// mapped region end.
+    #[test]
+    fn manager_region_fetch_dispatches_interface_call() {
+        let mut machine = machine_from_minimal_archive();
+        let argument = machine.allocate(16);
+        let parser = machine.executable.code_address() | 1;
+        machine.memory.w32(argument, parser);
+        machine.memory.w32(argument + 4, parser);
+        machine.cpu.reg_set(Mode::User, 0, 0x79E); // native app registration id
+        machine.cpu.reg_set(Mode::User, 1, argument);
+        machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+        machine.cpu.reg_set(Mode::User, reg::PC, MANAGER_BASE);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10); // ARM state
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(machine.native_app_parser, parser);
+    }
+
+    /// Fixed-ABI directory entries must expose both an init stub (+0) and a
+    /// get-table stub (+4). Bootstrap code that indexes the directory as a
+    /// dense pointer array reads the +4 word; leaving it null makes the guest
+    /// branch to 0x00000000.
+    #[test]
+    fn fixed_manager_directory_exposes_get_table_stubs() {
+        let mut machine = machine_from_minimal_archive();
+        // Promote the minimal archive to the fixed-ABI shape: big-endian
+        // image with a preferred code address and a code image larger than
+        // the raw code segment.
+        machine.executable.big_endian = true;
+        machine.executable.preferred_code_address = 0x0010_0000;
+        machine.executable.code_image_size = 0x2000;
+        machine.executable.code_size = 4;
+        machine.memory = {
+            let mut memory = MachineMemory::new(true);
+            memory.map(MANAGER_BASE, MANAGER_SIZE, false);
+            memory.map(SERVICE_BASE, SERVICE_SIZE as usize, false);
+            memory
+        };
+        machine.initialize_tables();
+        assert!(machine.uses_fixed_manager_abi());
+
+        for (index, &(offset, group, _)) in fixed_manager_specs().iter().enumerate() {
+            let init = machine.memory.r32(FIXED_MANAGER_DIRECTORY + offset);
+            assert_eq!(init, FIXED_MANAGER_INIT + index as u32 * 4);
+            let getter = machine.memory.r32(FIXED_MANAGER_DIRECTORY + offset + 4);
+            assert_eq!(
+                getter,
+                FIXED_MANAGER_GET + index as u32 * 4,
+                "entry {index}"
+            );
+
+            // Calling the getter returns the shared dense function table.
+            machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+            machine.cpu.reg_set(Mode::User, reg::PC, getter);
+            machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10); // ARM state
+            machine.run_until_return(100).unwrap();
+            assert_eq!(
+                machine.register(0),
+                MANAGER_BASE + TABLE_STRIDE * (group + 1),
+                "getter {index} returned the wrong table"
+            );
+        }
+    }
+
+    /// Unrecognised gameold ids act as object constructors: the guest reads
+    /// method pointers out of the struct it passes in r0.  Null slots must
+    /// come back as callable stubs or the next indirect call jumps to zero.
+    #[test]
+    fn gameold_unknown_id_fills_null_object_slots() {
+        let mut machine = machine_from_minimal_archive();
+        let obj = machine.allocate(0x40);
+        machine.memory.w32(obj + 16, 0xDEAD_BEEF); // pre-existing slot survives
+        machine.cpu.reg_set(Mode::User, 0, obj);
+        machine.handle_game_service(109);
+        assert_eq!(machine.register(0), obj, "constructor echoes the object");
+        assert_eq!(
+            machine.memory.r32(obj + 16),
+            0xDEAD_BEEF,
+            "populated slot is preserved"
+        );
+        assert_ne!(
+            machine.memory.r32(obj + 8),
+            0,
+            "null slot becomes a callable stub"
+        );
+    }
+
+    #[test]
+    fn net_app_entry_preserves_descriptor_and_delivers_guest_callback() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_tables();
+            let callback = machine.allocate(12);
+            let output = machine.allocate(4);
+            machine.memory.w16(callback, 0x2117); // movs r1, #23
+            machine.memory.w16(callback + 2, 0x4a01); // ldr r2, [pc, #4]
+            machine.memory.w16(callback + 4, 0x6011); // str r1, [r2]
+            machine.memory.w16(callback + 6, 0x4770); // bx lr
+            machine.memory.w32(callback + 8, output);
+            let descriptor = STACK_BASE + STACK_SIZE as u32 - 0x300;
+            machine.memory.w32(descriptor, 0x1234_5678);
+            machine.memory.w32(descriptor + 4, callback | 1);
+            let shared = MANAGER_BASE + TABLE_STRIDE * 30;
+            assert_ne!(shared, MANAGER_BASE + TABLE_STRIDE * 18);
+            for entry_path in 0..4 {
+                let table = if entry_path == 0 {
+                    machine.handle_root_service(29);
+                    machine.register(0)
+                } else if entry_path == 1 {
+                    machine.handle_manager_service(29);
+                    machine.register(0)
+                } else {
+                    let private = machine.allocate(0x100);
+                    machine.cpu.reg_set(Mode::User, 0, private);
+                    if entry_path == 2 {
+                        machine.handle_root_service(28);
+                    } else {
+                        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+                        machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+                        machine
+                            .cpu
+                            .reg_set(Mode::User, reg::PC, FIXED_MANAGER_INIT + 14 * 4);
+                        machine.run_until_return(100).unwrap();
+                    }
+                    private
+                };
+                assert_eq!(machine.memory.r32(table), machine.memory.r32(shared));
+                for method in 0..2 {
+                    machine.cpu.reg_set(Mode::User, 0, descriptor);
+                    machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+                    machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+                    machine.cpu.reg_set(
+                        Mode::User,
+                        reg::PC,
+                        machine.memory.r32(table + method * 4),
+                    );
+                    machine.run_until_return(100).unwrap();
+                    assert_eq!(machine.memory.r32(descriptor), 0x1234_5678);
+                    assert_eq!(machine.memory.r32(descriptor + 4), callback | 1);
+                    assert_eq!(machine.pending_callbacks.len(), 1);
+                    machine.memory.w32(output, 0);
+                    machine.cpu.reg_set(Mode::User, 2, output);
+                    machine.cpu.reg_set(Mode::User, reg::SP, descriptor - 0x100);
+                    machine.dispatch_pending_callbacks(100).unwrap();
+                    assert_eq!(machine.memory.r32(output), 23);
+                }
+            }
+            machine.cpu.reg_set(Mode::User, 0, 0);
+            machine.handle_net_app_service(0);
+            assert!(machine.pending_callbacks.is_empty());
+        }
+    }
+
+    #[test]
+    fn io_initializers_preserve_callable_nv_methods() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_tables();
+            for (initializer, count) in [
+                (SERVICE_BASE, 30),
+                (SERVICE_BASE + TABLE_STRIDE * 17, 24),
+                (FIXED_MANAGER_INIT, 24),
+            ] {
+                let table = machine.allocate(0x80);
+                let output = machine.allocate(4);
+                machine.memory.w32(table + count * 4, 0x1234_5678);
+                machine.cpu.reg_set(Mode::User, 0, table);
+                machine.cpu.reg_set(Mode::User, reg::PC, initializer);
+                machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+                machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+                machine.run_until_return(100).unwrap();
+
+                let first = machine.memory.r32(table);
+                let second = machine.memory.r32(table + 4);
+                assert_eq!(second - first, 0x100, "NV method-size probe");
+                assert_eq!(machine.memory.r32(table + count * 4), 0x1234_5678);
+                let shared = MANAGER_BASE + TABLE_STRIDE * 6;
+                for index in 0..24 {
+                    assert_eq!(
+                        machine.memory.r32(table + index * 4),
+                        machine.memory.r32(shared + index * 4),
+                    );
+                }
+
+                let reader = machine.memory.r32(table + 0x44) + 0x1a;
+                machine.cpu.reg_set(Mode::User, 0, 0);
+                machine.cpu.reg_set(Mode::User, 1, output);
+                machine.cpu.reg_set(Mode::User, 2, 1);
+                machine.cpu.reg_set(Mode::User, 3, output + 1);
+                machine.cpu.reg_set(Mode::User, reg::PC, reader);
+                machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+                machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30);
+                machine.run_until_return(100).unwrap();
+                assert_eq!(machine.register(0), 1);
+                assert_eq!(machine.memory.r8(output + 1), 1);
+            }
+        }
+    }
+
+    /// Billing returns follow the firmware: RemainDay only counts method 3,
+    /// SendSpecSms accepts app id 14 and defers its result callback, and
+    /// CancelSms drops exactly the pending SMS results.
+    #[test]
+    fn billing_service_defers_and_cancels_result_callbacks() {
+        let mut machine = machine_from_minimal_archive();
+        // GetRemainDay: method 3 → one remaining day, other methods → none.
+        machine.cpu.reg_set(Mode::User, 1, 3);
+        machine.handle_billing_service(1);
+        assert_eq!(machine.register(0), 1);
+        machine.cpu.reg_set(Mode::User, 1, 1);
+        machine.handle_billing_service(1);
+        assert_eq!(machine.register(0), 0);
+
+        // A Thumb `bx lr` routine stands in for the guest callbacks.
+        let stack = STACK_BASE + STACK_SIZE as u32 - 0x200;
+        let sms_cb = machine.allocate(4);
+        let pay_cb = machine.allocate(4);
+        machine.memory.w16(sms_cb, 0x4770);
+        machine.memory.w16(pay_cb, 0x4770);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        // Callback pointers arrive Thumb-tagged (low bit set).
+        machine.memory.w32(stack + 8, sms_cb | 1); // SendSpecSms callback slot
+        machine.cpu.reg_set(Mode::User, 0, 14); // app id the firmware accepts
+        machine.cpu.reg_set(Mode::User, 2, 6);
+        machine.handle_billing_service(15);
+        assert_eq!(machine.register(0), 1, "SendSpecSms reports accepted");
+
+        // Pay parks its callback in r2 and reports success through it.
+        machine.cpu.reg_set(Mode::User, 2, pay_cb | 1);
+        machine.handle_billing_service(2);
+        assert_eq!(machine.register(0), 0);
+        assert_eq!(
+            machine.pending_callbacks.len(),
+            2,
+            "sms and pay results are queued"
+        );
+
+        // CancelSms removes only the SMS result; the pay result survives.
+        machine.handle_billing_service(16);
+        assert_eq!(machine.pending_callbacks.len(), 1);
+        assert_eq!(machine.pending_callbacks[0].2, "payResult");
+
+        // Boot parks the CPU in User mode; a blank machine would still be
+        // in the reset supervisor mode whose banked LR the callback never
+        // sees.
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        let before = machine.instruction_count;
+        machine.dispatch_pending_callbacks(100_000).unwrap();
+        assert!(machine.pending_callbacks.is_empty());
+        assert!(
+            machine.instruction_count > before,
+            "the deferred callback actually executed"
+        );
+    }
+
+    #[test]
+    fn record_sections_roundtrip_little_endian_values_in_both_guest_byte_orders() {
+        fn call(machine: &mut CoolbarMachine, object: u32, method: u32, args: [u32; 2]) -> u32 {
+            machine.cpu.reg_set(Mode::User, 0, object);
+            machine.cpu.reg_set(Mode::User, 1, args[0]);
+            machine.cpu.reg_set(Mode::User, 2, args[1]);
+            machine.handle_record_service(method);
+            machine.register(0)
+        }
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let object = machine.allocate(64);
+            let path = machine.allocate(32);
+            machine.memory.write_bytes(path, b"section-save.dat\0");
+            for (register, value) in [object, path, 32, 2].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, register as u8, value);
+            }
+            machine.initialize_record();
+            assert_eq!(call(&mut machine, object, 0, [0, 0]), 0);
+            assert_eq!(call(&mut machine, object, 3, [7, 0]), 1);
+            assert_eq!(call(&mut machine, object, 3, [4, 0]), 1);
+            assert_eq!(call(&mut machine, object, 3, [1, 0]), 0);
+            call(&mut machine, object, 7, [0, 0xab]);
+            call(&mut machine, object, 8, [0, 0xcdef]);
+            call(&mut machine, object, 9, [0, 0x12345678]);
+            assert_eq!(call(&mut machine, object, 9, [0, 1]), 0);
+            assert_eq!(machine.memory.r32(object + 20), 7);
+            assert_eq!(call(&mut machine, object, 1, [0, 0]), 1);
+            call(&mut machine, object, 2, [0, 0]);
+            assert_eq!(call(&mut machine, object, 0, [0, 0]), 1);
+            assert_eq!(machine.memory.r16(object + 12), 2);
+            assert_eq!(call(&mut machine, object, 4, [0, 0]), 0xab);
+            assert_eq!(call(&mut machine, object, 5, [0, 0]), 0xcdef);
+            assert_eq!(call(&mut machine, object, 6, [0, 0]), 0x12345678);
+            machine.memory.w32(object + 20, 0);
+            assert_eq!(call(&mut machine, object, 6, [1, 0]), 0);
+            assert_eq!(call(&mut machine, object, 6, [2, 0]), 0);
+            let bytes = machine.virtual_fs.read_file("section-save.dat").unwrap();
+            assert_eq!(
+                &bytes[..11],
+                &[2, 0, 7, 0, 0xab, 0xef, 0xcd, 0x78, 0x56, 0x34, 0x12]
+            );
+            machine
+                .virtual_fs
+                .write_file("section-save.dat", vec![2, 0, 255, 255]);
+            assert_eq!(call(&mut machine, object, 0, [0, 0]), 0);
+            assert_eq!(machine.memory.r16(object + 12), 0);
+        }
+    }
+
+    #[test]
+    fn native_file_requests_create_write_reopen_and_read_in_both_byte_orders() {
+        fn request(machine: &mut CoolbarMachine, id: u32, words: [u32; 3]) -> u32 {
+            let record = machine.allocate(16);
+            for (index, value) in words.into_iter().enumerate() {
+                machine.memory.w32(record + index as u32 * 4, value);
+            }
+            machine.cpu.reg_set(Mode::User, 0, id);
+            machine.cpu.reg_set(Mode::User, 1, record);
+            machine.handle_native_dispatch_service();
+            if id == 0x41c {
+                return machine.register(0);
+            }
+            assert_eq!(machine.register(0), id);
+            let output = machine.allocate(4);
+            machine.memory.w32(output, 0xDEAD_BEEF);
+            machine.memory.w32(record, output);
+            machine.memory.w32(record + 4, id);
+            machine.memory.w32(record + 8, 4);
+            machine.cpu.reg_set(Mode::User, 0, 0x7d1);
+            machine.cpu.reg_set(Mode::User, 1, record);
+            machine.handle_native_dispatch_service();
+            machine.memory.r32(output)
+        }
+
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let path = machine.allocate(64);
+            for (index, byte) in b"native-save.dat\0".iter().enumerate() {
+                if big_endian {
+                    machine
+                        .memory
+                        .w16(path + index as u32 * 2, u16::from(*byte));
+                } else {
+                    machine.memory.w8(path + index as u32, *byte);
+                }
+            }
+            let mode = machine.allocate(8);
+            machine.memory.write_bytes(mode, b"rb\0");
+            assert_eq!(request(&mut machine, 0x41a, [2, path, mode]), u32::MAX);
+
+            machine.memory.write_bytes(mode, b"wb\0");
+            let handle = request(&mut machine, 0x41a, [2, path, mode]);
+            assert_eq!(handle, 0, "the first valid file handle is zero");
+            let buffer = machine.allocate(16);
+            machine.memory.write_bytes(buffer, b"\x01\x02\x80\xff");
+            assert_eq!(request(&mut machine, 0x41b, [buffer, 4, handle]), 4);
+            assert_eq!(request(&mut machine, 0x42a, [handle, 0, 0]), 4);
+            assert_eq!(request(&mut machine, 0x41c, [handle, 0, 0]), 0);
+            assert_eq!(request(&mut machine, 0x42a, [handle, 0, 0]), u32::MAX);
+
+            machine.memory.write_bytes(mode, b"rb\0");
+            let handle = request(&mut machine, 0x41a, [2, path, mode]);
+            machine.memory.write_bytes(buffer, &[0x55; 16]);
+            assert_eq!(request(&mut machine, 0x427, [buffer, 16, handle]), 4);
+            assert_eq!(
+                machine.memory.r32(buffer),
+                if big_endian { 0x0102_80ff } else { 0xff80_0201 }
+            );
+            assert_eq!(
+                machine.memory.r8(buffer + 4),
+                0x55,
+                "EOF leaves the buffer tail intact"
+            );
+            assert_eq!(request(&mut machine, 0x427, [buffer, 4, handle]), 0);
+            assert_eq!(
+                request(&mut machine, 0x427, [buffer, 4, u32::MAX]),
+                u32::MAX
+            );
+            assert_eq!(request(&mut machine, 0x41c, [handle, 0, 0]), 0);
+            assert_eq!(request(&mut machine, 0x41c, [handle, 0, 0]), u32::MAX);
+        }
+    }
+
+    #[test]
+    fn native_resource_directory_slots_compare_names_and_advance_string_cursors() {
+        let mut machine = machine_from_minimal_archive();
+        machine.cpu.reg_set(Mode::User, 0, 0x8f);
+        machine.cpu.reg_set(Mode::User, 1, 0);
+        machine.handle_native_dispatch_service();
+        let info = machine.register(0);
+        let left = machine.allocate(6);
+        let right = machine.allocate(6);
+        machine.memory.write_bytes(left, b"a.gif\0");
+        machine.memory.write_bytes(right, b"b.gif\0");
+        let compare = machine.memory.r32(info + 0x160);
+        machine
+            .invoke_callback(compare, left, right, 0, 100)
+            .unwrap();
+        assert_eq!(machine.register(0), 0);
+        machine
+            .invoke_callback(compare, left, left, 0, 100)
+            .unwrap();
+        assert_eq!(machine.register(0), 1);
+        let stream = machine.allocate(8);
+        let cursor = machine.allocate(4);
+        machine.memory.write_bytes(stream, b"\x05a.gifZ");
+        let reader = machine.memory.r32(info + 0x17c);
+        machine
+            .invoke_callback(reader, stream, cursor, 0, 100)
+            .unwrap();
+        assert_eq!(machine.memory.r32(cursor), 6);
+        let value = machine.register(0);
+        assert_eq!(machine.read_c_bytes(value, 16), b"a.gif");
+    }
+
+    #[test]
+    fn native_text_conversion_and_measurements_preserve_requests() {
+        fn dispatch(machine: &mut CoolbarMachine, id: u32, argument: u32) {
+            machine.cpu.reg_set(Mode::User, 0, id);
+            machine.cpu.reg_set(Mode::User, 1, argument);
+            machine.handle_native_dispatch_service();
+            assert_eq!(machine.register(0), id);
+        }
+        fn fetch(machine: &mut CoolbarMachine, id: u32) -> u16 {
+            let output = machine.allocate(4);
+            machine.memory.w16(output, 0xdead);
+            machine.memory.w16(output + 2, 0xbeef);
+            let record = machine.allocate(12);
+            machine.memory.w32(record, output);
+            machine.memory.w32(record + 4, id);
+            machine.memory.w32(record + 8, 2);
+            machine.cpu.reg_set(Mode::User, 0, 0x7d1);
+            machine.cpu.reg_set(Mode::User, 1, record);
+            machine.handle_native_dispatch_service();
+            assert_eq!(machine.memory.r16(output + 2), 0xbeef);
+            machine.memory.r16(output)
+        }
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let text = machine.allocate(16);
+            machine.memory.write_bytes(text, b"A\xd6\xd0B\0ignored");
+            let record = machine.allocate(16);
+            let destination = machine.allocate(32);
+            machine.memory.w32(record, destination);
+            machine.memory.w32(record + 4, text);
+            machine.memory.w16(record + 8, 3);
+            machine.memory.w16(record + 10, 0xa55a);
+            machine.memory.w32(record + 12, 0x1234_5678);
+            dispatch(&mut machine, 0x3f8, record);
+            assert_eq!(fetch(&mut machine, 0x3f8), 4);
+            assert_eq!(machine.memory.r16(destination), 0x41);
+            assert_eq!(machine.memory.r16(destination + 2), 0x4e2d);
+            assert_eq!(machine.memory.r16(destination + 4), 0);
+            assert_eq!(machine.read_c_bytes(text, 16), b"A\xd6\xd0B");
+            assert_eq!(machine.memory.r16(record + 8), 3);
+            assert_eq!(machine.memory.r16(record + 10), 0xa55a);
+            assert_eq!(machine.memory.r32(record + 12), 0x1234_5678);
+            machine.memory.w16(record + 8, 16);
+            dispatch(&mut machine, 0x3f8, record);
+            assert_eq!(fetch(&mut machine, 0x3f8), 6);
+            assert_eq!(machine.memory.r16(destination + 4), 0x42);
+            assert_eq!(machine.memory.r16(destination + 6), 0);
+
+            for (index, unit) in [0x41, 0x4e2d, 0x42, 0, 0x43].into_iter().enumerate() {
+                machine.memory.w16(text + index as u32 * 2, unit);
+            }
+            dispatch(&mut machine, 0x418, text);
+            assert_eq!(fetch(&mut machine, 0x418), 3);
+            assert_eq!(machine.memory.r16(text + 4), 0x42);
+            machine.memory.w32(record, text);
+            machine.memory.w16(record + 4, 4);
+            machine.memory.w8(record + 6, 1);
+            machine.memory.w32(record + 8, 2);
+            dispatch(&mut machine, 0x453, record);
+            assert_eq!(fetch(&mut machine, 0x453), 24);
+            assert_eq!(machine.memory.r32(record + 8), 2);
+            machine.memory.w16(record + 4, 16);
+            dispatch(&mut machine, 0x453, record);
+            assert_eq!(fetch(&mut machine, 0x453), 32);
+            for id in [0x3f8, 0x418, 0x453] {
+                dispatch(&mut machine, id, 0);
+                assert_eq!(fetch(&mut machine, id), 0);
+            }
+        }
+    }
+
+    /// The native interface request honours two-byte result slots: the
+    /// shared template's measure-call marshals a u16 output and reads it
+    /// back, which is what terminates the render loop instead of letting
+    /// it eat the stack. Four-byte slots keep the full-word writes.
+    #[test]
+    fn native_interface_request_writes_sized_results() {
+        let mut machine = machine_from_minimal_archive();
+        let record = machine.allocate(16);
+        let out = machine.allocate(4);
+        machine.memory.w32(out, 0xDEAD_BEEF);
+        machine.memory.w32(record, out);
+        machine.memory.w32(record + 4, 0x3f8);
+        machine.memory.w32(record + 8, 2);
+        machine.cpu.reg_set(Mode::User, 0, 0x7d1);
+        machine.cpu.reg_set(Mode::User, 1, record);
+        machine.handle_native_dispatch_service();
+        assert_eq!(
+            machine.memory.r16(out),
+            0,
+            "u16 result slot receives the measure result"
+        );
+
+        let out4 = machine.allocate(4);
+        machine.memory.w32(record, out4);
+        machine.memory.w32(record + 4, 0x8f);
+        machine.memory.w32(record + 8, 4);
+        machine.cpu.reg_set(Mode::User, 0, 0x7d1);
+        machine.cpu.reg_set(Mode::User, 1, record);
+        machine.handle_native_dispatch_service();
+        assert_ne!(
+            machine.memory.r32(out4),
+            0,
+            "system-info handle still writes a full word"
+        );
+    }
+
+    #[test]
+    fn legacy_textbox_constructor_preserves_adjacent_screen_state() {
+        let mut machine = machine_from_minimal_archive();
+        let textbox = machine.allocate(0x138);
+        machine.cpu.reg_set(Mode::User, 0, textbox);
+        machine.cpu.reg_set(Mode::User, 2, 12);
+        machine.cpu.reg_set(Mode::User, 3, 18);
+        machine.handle_game_service(71);
+        assert_eq!(machine.memory.r16(textbox + 6), 14);
+        assert_eq!(machine.memory.r16(textbox + 20), 12);
+        assert_eq!(machine.memory.r16(textbox + 22), 18);
+        for offset in (0x1c..=0x34).step_by(4) {
+            assert_ne!(machine.memory.r32(textbox + offset), 0);
+        }
+        for offset in 0x38..0x138 {
+            assert_eq!(
+                machine.memory.r8(textbox + offset),
+                0,
+                "adjacent byte {offset:x}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_object_methods_preserve_stack_and_do_not_allocate() {
+        let mut machine = machine_from_minimal_archive();
+        let object = machine.allocate(0x100);
+        let stack = machine.allocate(0x80);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        machine.memory.w32(stack + 68, 0x0f000001);
+        machine.cpu.reg_set(Mode::User, 0, object);
+        machine.handle_game_service(76);
+        let method = machine.memory.r32(object + 0x24);
+        let count = machine.heap_allocations.len();
+        machine.cpu.reg_set(Mode::User, 0, object);
+        machine.cpu.reg_set(Mode::User, 1, 700);
+        machine.handle_method_stub(method & !1);
+        assert_eq!(machine.memory.r32(stack + 68), 0x0f000001);
+        assert_eq!(machine.heap_allocations.len(), count);
+        assert_eq!(machine.register(0), 0);
+    }
+
+    #[test]
+    fn fixed_picture_library_methods_create_draw_and_release_owned_images() {
+        let mut machine = machine_from_minimal_archive();
+        machine.initialize_screen();
+        machine.executable.big_endian = true;
+        machine.executable.preferred_code_address = 0x0010_0000;
+        machine.executable.code_image_size = 0x2000;
+        machine.executable.code_size = 4;
+        let library = machine.allocate(0x54);
+        machine.cpu.reg_set(Mode::User, 0, library);
+        machine.cpu.reg_set(Mode::User, 1, 1);
+        machine.handle_game_service(75);
+        machine.cpu.reg_set(Mode::User, 0, library);
+        machine.cpu.reg_set(Mode::User, 1, 2);
+        machine.cpu.reg_set(Mode::User, 2, 1);
+        machine.handle_fixed_gameold_object_service(0);
+        assert_eq!(machine.register(0), 0);
+        assert_eq!(machine.memory.r16(library + 20), 1);
+        let table = machine.memory.r32(library + 16);
+        let image = machine.memory.r32(table);
+        let pixels = machine.memory.r32(image);
+        machine.memory.w16(pixels, 0xf800);
+        machine.cpu.reg_set(Mode::User, 0, library);
+        machine.cpu.reg_set(Mode::User, 1, 0);
+        machine.cpu.reg_set(Mode::User, 2, 10);
+        machine.cpu.reg_set(Mode::User, 3, 20);
+        machine.handle_fixed_gameold_object_service(7);
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 10) * 2),
+            0xf800
+        );
+        machine.cpu.reg_set(Mode::User, 0, library);
+        machine.handle_fixed_gameold_object_service(14);
+        assert_eq!(machine.memory.r16(library + 20), 0);
+        assert!(!machine.heap_allocations.contains_key(&pixels));
+        assert!(!machine.heap_allocations.contains_key(&image));
+    }
+
+    #[test]
+    fn window_repaint_calls_guest_painters_and_preserves_caller_registers() {
+        let mut machine = machine_from_minimal_archive();
+        machine.initialize_screen();
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        let context = machine.allocate(4);
+        let painter = machine.allocate(8);
+        for (i, word) in [0x6801, 0x3101, 0x6001, 0x4770].into_iter().enumerate() {
+            machine.memory.w16(painter + i as u32 * 2, word);
+        }
+        let parent = machine.allocate(72);
+        let child = machine.allocate(72);
+        machine.memory.w32(parent + 36, child);
+        for (window, count) in [(parent, 2), (child, 1)] {
+            let table = machine.allocate(count * 4);
+            machine.memory.w32(window + 4, count);
+            machine.memory.w32(window + 8, count);
+            machine.memory.w32(window + 12, table);
+            machine.memory.w32(window + 20, context);
+            machine.memory.w32(window + 48, painter | 1);
+            for i in 0..count {
+                let rectangle = machine.allocate(8);
+                machine.memory.w32(table + i * 4, rectangle);
+                machine.memory.w16(rectangle, 10);
+                machine.memory.w16(rectangle + 2, 20);
+                machine.memory.w16(rectangle + 4, 30);
+                machine.memory.w16(rectangle + 6, 40);
+            }
+        }
+        machine.cpu.reg_set(Mode::User, 0, parent);
+        machine.cpu.reg_set(Mode::User, 4, 0xdeadbeef);
+        machine.cpu.reg_set(Mode::User, reg::LR, 0x12345679);
+        machine.handle_fixed_gameold_region_service(4).unwrap();
+        assert_eq!(machine.memory.r32(context), 3);
+        assert_eq!(machine.memory.r32(parent + 4), 0);
+        assert_eq!(machine.memory.r32(child + 4), 0);
+        assert_eq!(machine.register(4), 0xdeadbeef);
+        assert_eq!(machine.register(reg::LR), 0x12345679);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE_STRUCT + 12), 10);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE_STRUCT + 18), 40);
+        assert_eq!(machine.oldlib_clip, [10, 20, 40, 60]);
+    }
+
+    #[test]
+    fn fixed_game_font_queries_return_metrics_instead_of_stub_addresses() {
+        let mut machine = machine_from_minimal_archive();
+        machine.executable.big_endian = true;
+        machine.executable.preferred_code_address = 0x0010_0000;
+        machine.executable.code_image_size = 0x2000;
+        machine.executable.code_size = 4;
+        for (index, expected) in [(28, 16), (29, 8), (30, 16), (31, 16)] {
+            machine
+                .cpu
+                .reg_set(Mode::User, 0, SERVICE_BASE + TABLE_STRIDE * 3 + index * 4);
+            machine.handle_game_service(index);
+            assert_eq!(machine.register(0), expected);
+        }
+    }
+
+    #[test]
+    fn fixed_game_image_services_draw_without_overwriting_image_headers() {
+        let mut machine = machine_from_minimal_archive();
+        machine.executable.big_endian = true;
+        machine.executable.preferred_code_address = 0x0010_0000;
+        machine.executable.code_image_size = 0x2000;
+        machine.executable.code_size = 4;
+        machine.initialize_screen();
+        let image = machine.allocate(12);
+        let pixels = machine.allocate(4);
+        machine.memory.w32(image, pixels);
+        machine.memory.w16(image + 4, 2);
+        machine.memory.w16(image + 6, 1);
+        machine.memory.w16(pixels, 0xf800);
+        machine.memory.w16(pixels + 2, 0x07e0);
+        machine.cpu.reg_set(Mode::User, 0, image);
+        machine.handle_game_service(3);
+        assert_eq!(machine.memory.r32(image), pixels);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE), 0xf800);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE + 2), 0x07e0);
+        for (i, value) in [1, 0, 1, 1].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, i as u8, value);
+        }
+        machine.handle_game_service(14);
+        let clip = machine.allocate(8);
+        machine.cpu.reg_set(Mode::User, 0, clip);
+        machine.handle_game_service(24);
+        assert_eq!(machine.memory.r16(clip), 1);
+        assert_eq!(machine.memory.r16(clip + 4), 1);
+        let stack = machine.allocate(12);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        machine.memory.w32(stack, 1);
+        machine.memory.w32(stack + 4, 0);
+        machine.memory.w32(stack + 8, 0);
+        machine.memory.w16(SCREEN_IMAGE, 0x1234);
+        machine.memory.w16(SCREEN_IMAGE + 2, 0x1234);
+        for (i, value) in [image, 0, 0, 2].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, i as u8, value);
+        }
+        machine.handle_game_service(1);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE), 0x1234);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE + 2), 0x07e0);
+    }
+
+    #[test]
+    fn native_boot_does_not_invoke_registered_exit_callback() {
+        let mut machine = machine_from_minimal_archive();
+        machine.executable.code_size = 64;
+        let entry = machine.executable.code_address();
+        let marker = machine.allocate(4);
+        let descriptor = machine.allocate(12);
+        machine.memory.w16(entry, 0x4770); // bx lr
+        for (offset, value) in [(16, 1), (32, 2)] {
+            let callback = entry + offset;
+            for (i, word) in [0x4801, 0x2100 | value, 0x6001, 0x4770]
+                .into_iter()
+                .enumerate()
+            {
+                machine.memory.w16(callback + i as u32 * 2, word);
+            }
+            machine.memory.w32(callback + 8, marker);
+        }
+        machine.memory.w32(descriptor, (entry + 16) | 1);
+        machine.memory.w32(descriptor + 4, (entry + 32) | 1);
+        machine.cpu.reg_set(Mode::User, 0, 0x79e);
+        machine.cpu.reg_set(Mode::User, 1, descriptor);
+        machine.handle_native_dispatch_service();
+        machine.boot(100).unwrap();
+        assert_eq!(machine.memory.r32(marker), 1, "only startup ran");
+        assert_eq!(machine.native_app_exit, (entry + 32) | 1);
+    }
+
+    #[test]
+    fn fixed_record_constructor_preserves_adjacent_resource_package() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.executable.big_endian = true;
+            let record = machine.allocate(256);
+            let package = record + 0xc4;
+            let path = machine.allocate(16);
+            machine.memory.write_bytes(path, b"record.dat\0");
+            machine.initialize_data_package(package, 1);
+            for (register, value) in [record, path, 256, 3].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, register as u8, value);
+            }
+            machine.handle_game_service(76);
+            assert_eq!(machine.memory.r32(package + 24), 0, "resident data base");
+            assert_eq!(machine.memory.r32(record), path);
+            assert_eq!(machine.memory.r32(record + 8), 256);
+            assert_eq!(machine.memory.r16(record + 14), 3);
+            assert_eq!(
+                machine.memory.r32(record + 0x24),
+                SERVICE_BASE + TABLE_STRIDE * 23 + 12
+            );
+            machine.cpu.reg_set(Mode::User, 0, record);
+            machine.cpu.reg_set(Mode::User, 1, 8);
+            machine.handle_record_service(3);
+            assert_eq!(machine.register(0), 1, "section append is functional");
+        }
+    }
+
+    #[test]
+    fn native_alloc_fetch_preserves_argument_frame_and_return_address() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        let frame = STACK_BASE + 0x100;
+        machine.memory.w32(frame, 800);
+        machine.memory.w32(frame + 8, 0x043e_3fc3);
+        machine.set_user_register(0, 0xaf);
+        machine.set_user_register(1, frame);
+        machine.handle_native_dispatch_service();
+        assert_eq!(machine.memory.r32(frame + 8), 0x043e_3fc3);
+        assert_eq!(machine.register(0), 0xaf);
+        let request = HEAP_BASE + 0x100;
+        let output = HEAP_BASE + 0x200;
+        machine.memory.w32(request, output);
+        machine.memory.w32(request + 4, 0xaf);
+        machine.memory.w32(request + 8, 4);
+        machine.set_user_register(0, 0x7d1);
+        machine.set_user_register(1, request);
+        machine.handle_native_dispatch_service();
+        let result = machine.memory.r32(output);
+        assert_ne!(result, 0);
+        assert!(machine.memory.region(result, 800).is_some());
+    }
+
+    #[test]
+    fn gameold_random_respects_signed_inclusive_range_and_varies() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.executable.preferred_code_address = 0x043e_3000;
+        machine.executable.big_endian = true;
+        machine.executable.code_image_size = machine.executable.code_size as u32 + 2;
+        let mut values = std::collections::BTreeSet::new();
+        for _ in 0..128 {
+            machine.set_user_register(0, 1);
+            machine.set_user_register(1, 9);
+            machine.handle_game_service(56);
+            let value = machine.register(0);
+            assert!((1..=9).contains(&value));
+            values.insert(value);
+        }
+        let mut signs = std::collections::BTreeSet::new();
+        for _ in 0..32 {
+            machine.set_user_register(0, i16::MIN as i32 as u32);
+            machine.set_user_register(1, i16::MAX as u32);
+            machine.handle_game_service(56);
+            let value = machine.register(0) as i32;
+            assert!((i16::MIN as i32..=i16::MAX as i32).contains(&value));
+            signs.insert(value >= 0);
+        }
+        assert_eq!(signs.len(), 2);
+        assert_eq!(values.len(), 9);
+        machine.set_user_register(0, (-7i32) as u32);
+        machine.set_user_register(1, (-7i32) as u32);
+        machine.handle_game_service(56);
+        assert_eq!(machine.register(0) as i32, -7);
+    }
+
+    #[test]
+    fn fixed_gameold_tick_advances_between_frames() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.executable.preferred_code_address = 0x043e_3000;
+        machine.executable.big_endian = true;
+        machine.executable.code_image_size = machine.executable.code_size as u32 + 2;
+        machine.frame_count = 3;
+        machine.handle_game_service(44);
+        assert_eq!(machine.register(0), 300);
+        machine.frame_count = 4;
+        machine.handle_game_service(44);
+        assert_eq!(machine.register(0), 400);
+    }
+
+    #[test]
+    fn fixed_gameold_text_rectangle_reads_stack_color_and_wraps() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.executable.preferred_code_address = 0x043e_3000;
+        machine.executable.big_endian = true;
+        machine.executable.code_image_size = machine.executable.code_size as u32 + 2;
+        machine.initialize_screen();
+        let text = HEAP_BASE + 0x100;
+        machine.memory.write_bytes(text, b"AB\0");
+        let stack = STACK_BASE + 0x100;
+        machine.set_user_register(reg::SP, stack);
+        machine.memory.w32(stack, 0xffff_fff9); // width + 15 = 8
+        machine.memory.w32(stack + 4, 32);
+        machine.memory.w32(stack + 8, 0xf800);
+        machine.set_user_register(0, 0);
+        machine.set_user_register(1, text);
+        machine.set_user_register(2, 0);
+        machine.set_user_register(3, 0);
+        machine.handle_game_service(25);
+        assert_eq!(machine.register(0), 0x0002_0008);
+        assert!(machine.frame_pixels().contains(&0xff0000));
+        let pixels = machine.frame_pixels();
+        assert!(pixels[..16 * 240].contains(&0xff0000));
+        assert!(pixels[16 * 240..32 * 240].contains(&0xff0000));
+    }
+
+    #[test]
+    fn native_dirty_rectangles_preserve_adjacent_guest_objects() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_memory_block(MEMORY_BLOCK_PTR, 128);
+            let pool = machine.allocate(12);
+            let object = machine.allocate(12);
+            let frame = machine.allocate(16);
+            machine.memory.w32(pool + 8, 0x1234_5678);
+            machine.memory.w32(object + 8, 0x89ab_cdef);
+            machine.memory.w32(frame, pool);
+            machine.memory.w32(frame + 4, MEMORY_BLOCK_PTR);
+            machine.memory.w16(frame + 8, 2);
+            machine.set_user_register(0, 0x6b);
+            machine.set_user_register(1, frame);
+            machine.handle_native_dispatch_service();
+            let entries = machine.memory.r32(pool);
+            assert_eq!(machine.memory.r32(MEMORY_BLOCK_PTR + 4), 24);
+            assert_eq!(machine.memory.r16(pool + 4), 0);
+            assert_eq!(machine.memory.r16(pool + 6), 2);
+            assert_eq!(machine.memory.r32(pool + 8), 0x1234_5678);
+            machine.memory.w32(frame, object);
+            machine.memory.w32(frame + 4, pool);
+            machine.set_user_register(0, 0x6e);
+            machine.set_user_register(1, frame);
+            machine.handle_native_dispatch_service();
+            assert_eq!(machine.memory.r32(object), pool);
+            assert_eq!(
+                machine.memory.r32(object + 4),
+                NATIVE_DIRTY_RECT_SERVICE | 1
+            );
+            assert_eq!(machine.memory.r32(object + 8), 0x89ab_cdef);
+            let stack = STACK_BASE + 128;
+            machine.set_user_register(reg::SP, stack);
+            machine.memory.w32(stack, 60);
+            for x in [43, 187, 999] {
+                machine.set_user_register(0, object);
+                machine.set_user_register(1, x);
+                machine.set_user_register(2, (-7i32) as u32);
+                machine.set_user_register(3, 10);
+                machine.handle_dirty_rectangle_service();
+            }
+            assert_eq!(machine.memory.r16(pool + 4), 2, "queue is bounded");
+            for (index, x) in [43u16, 187].into_iter().enumerate() {
+                let rectangle = machine.memory.r32(entries + index as u32 * 4);
+                for (field, value) in [x, (-7i16) as u16, 10, 60].into_iter().enumerate() {
+                    assert_eq!(machine.memory.r16(rectangle + field as u32 * 2), value);
+                }
+            }
+            machine.memory.w16(pool + 4, 0);
+            machine.memory.w32(frame, pool);
+            for (index, value) in [5, 6, 7, 8].into_iter().enumerate() {
+                machine.memory.w16(frame + 4 + index as u32 * 2, value);
+            }
+            machine.set_user_register(0, 0x6d);
+            machine.set_user_register(1, frame);
+            machine.handle_native_dispatch_service();
+            assert_eq!(machine.memory.r16(pool + 4), 1);
+            let rectangle = machine.memory.r32(entries);
+            assert_eq!(machine.memory.r16(rectangle), 5);
+            assert_eq!(machine.memory.r16(rectangle + 6), 8);
+            machine.set_user_register(0, 0x6c);
+            machine.set_user_register(1, pool);
+            machine.handle_native_dispatch_service();
+            assert_eq!(machine.memory.r32(pool), 0);
+            assert_eq!(machine.memory.r32(pool + 4), 0);
+            assert_eq!(machine.memory.r32(pool + 8), 0x1234_5678);
+        }
+    }
+
+    #[test]
+    fn extended_screen_context_survives_save_load_and_is_removed_with_screen() {
+        for context in [0, 0x1234_5678] {
+            let mut machine = machine_from_minimal_archive();
+            let screen = machine.allocate(32);
+            let default = machine.screen_call_parameter(screen);
+            machine.set_user_register(0, screen);
+            machine.set_user_register(1, context);
+            machine.handle_screen_service(5);
+            assert_eq!(machine.screen_call_parameter(screen), context);
+            let mut snapshot = vec![0; crate::save_state::SERIALIZED_SIZE];
+            crate::save_state::encode_machine(&machine, 42, &mut snapshot).unwrap();
+            let mut restored = crate::save_state::decode_machine(&snapshot, 42).unwrap();
+            assert_eq!(restored.screen_call_parameter(screen), context);
+            restored.set_user_register(0, screen);
+            restored.handle_screen_service(6);
+            assert_eq!(restored.screen_call_parameter(screen), default);
+            restored.set_user_register(0, screen);
+            restored.set_user_register(1, context);
+            restored.handle_screen_service(5);
+            restored.set_user_register(0, screen);
+            restored.handle_screen_service(4);
+            assert_eq!(restored.screen_call_parameter(screen), default);
+        }
+    }
+
+    #[test]
+    fn native_bounded_text_draws_into_the_supplied_image() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let regions = machine.memory.regions.clone();
+            machine.memory = MachineMemory::new(big_endian);
+            machine.memory.regions = regions;
+            machine.wide_images = true;
+            let pixels = machine.allocate(32 * 24 * 2);
+            let image = machine.allocate(12);
+            machine.memory.w32(image, pixels);
+            machine.memory.w32(image + 4, 32);
+            machine.memory.w32(image + 8, 24);
+            let text = machine.allocate(3);
+            machine.memory.write_bytes(text, b"AB\0");
+            let stack = machine.allocate(8);
+            machine.set_user_register(reg::SP, stack);
+            machine.memory.w32(stack, 3);
+            machine.memory.w32(stack + 4, 0xff0000);
+            for (register, value) in [image, text, 1, 2].into_iter().enumerate() {
+                machine.set_user_register(register as u8, value);
+            }
+            machine.handle_method_stub(
+                CoolbarMachine::method_stub_address(METHOD_KIND_MEMORY, 0x90) & !1,
+            );
+            let glyph = unifont::get_glyph('A').unwrap();
+            for y in 0..24 {
+                for x in 0..32 {
+                    let expected = if (2..10).contains(&x)
+                        && (3..19).contains(&y)
+                        && glyph.get_pixel((x - 2) as usize, (y - 3) as usize)
+                    {
+                        0xf800
+                    } else {
+                        0
+                    };
+                    assert_eq!(machine.memory.r16(pixels + (y * 32 + x) * 2), expected);
+                }
+            }
+            assert_eq!(machine.memory.r32(image), pixels);
+            assert_eq!(machine.memory.r32(image + 4), 32);
+            assert_eq!(machine.register(0), 0);
+        }
+    }
+
+    #[test]
+    fn native_image_blits_preserve_destination_and_transparent_pixels() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let regions = machine.memory.regions.clone();
+            machine.memory = MachineMemory::new(big_endian);
+            machine.memory.regions = regions;
+            machine.set_user_register(0, 0x8f);
+            machine.set_user_register(1, 0);
+            machine.handle_native_dispatch_service();
+            let table = machine.register(0);
+            let source_pixels = machine.allocate(8);
+            let destination_pixels = machine.allocate(32);
+            let source = machine.allocate(12);
+            let destination = machine.allocate(12);
+            for (image, pixels, width) in [
+                (source, source_pixels, 4),
+                (destination, destination_pixels, 4),
+            ] {
+                machine.memory.w32(image, pixels);
+                machine.memory.w32(image + 4, width);
+                machine
+                    .memory
+                    .w32(image + 8, if image == source { 1 } else { 4 });
+            }
+            machine.memory.w16(source_pixels, 0xf800);
+            machine.memory.w16(source_pixels + 2, 0);
+            let stack = machine.allocate(16);
+            machine.set_user_register(reg::SP, stack);
+            for (index, value) in [2, 1, 1, 2].into_iter().enumerate() {
+                machine.memory.w32(stack + index as u32 * 4, value);
+            }
+            for (slot, transparent) in [(0x80, false), (0x84, true)] {
+                for pixel in 0..16 {
+                    machine.memory.w16(destination_pixels + pixel * 2, 0x07e0);
+                }
+                for (index, value) in [destination, source, 0, 0].into_iter().enumerate() {
+                    machine.set_user_register(index as u8, value);
+                }
+                let service = machine.memory.r32(table + slot);
+                machine
+                    .invoke_callback(service, destination, source, 0, 100)
+                    .unwrap();
+                for y in 0..4 {
+                    for x in 0..4 {
+                        let expected = match (x, y) {
+                            (1, 2) => 0xf800,
+                            (2, 2) if !transparent => 0,
+                            _ => 0x07e0,
+                        };
+                        assert_eq!(
+                            machine.memory.r16(destination_pixels + (y * 4 + x) * 2),
+                            expected
+                        );
+                    }
+                }
+                assert_eq!(machine.memory.r32(destination), destination_pixels);
+            }
+        }
+    }
+
+    #[test]
+    fn native_unicode_text_honors_length_position_color_and_byte_order() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let regions = machine.memory.regions.clone();
+            machine.memory = MachineMemory::new(big_endian);
+            machine.memory.regions = regions;
+            machine.initialize_screen();
+            let text = machine.allocate(8);
+            for (index, unit) in ['A' as u16, '中' as u16, 'B' as u16, 0]
+                .into_iter()
+                .enumerate()
+            {
+                machine.memory.w16(text + index as u32 * 2, unit);
+            }
+            let request = machine.allocate(28);
+            machine.memory.w32(request, 0x1234_5678);
+            machine.memory.w16(request + 4, 7);
+            machine.memory.w16(request + 6, 9);
+            machine.memory.w32(request + 8, text);
+            machine.memory.w16(request + 12, 4);
+            machine.memory.w16(request + 14, 0xf800);
+            machine.memory.w32(request + 20, 2);
+            machine.memory.w8(request + 24, 1);
+            let original: Vec<_> = (0..28).map(|i| machine.memory.r8(request + i)).collect();
+            machine.set_user_register(0, 0x454);
+            machine.set_user_register(1, request);
+            machine.handle_native_dispatch_service();
+            let latin = unifont::get_glyph('A').unwrap();
+            let chinese = unifont::get_glyph('中').unwrap();
+            for y in 0..30 {
+                for x in 0..40 {
+                    let set = if (9..25).contains(&y) && (7..31).contains(&x) {
+                        if x < 15 {
+                            latin.get_pixel((x - 7) as usize, (y - 9) as usize)
+                        } else {
+                            chinese.get_pixel((x - 15) as usize, (y - 9) as usize)
+                        }
+                    } else {
+                        false
+                    };
+                    assert_eq!(
+                        machine.memory.r16(SCREEN_IMAGE + (y * 240 + x) * 2),
+                        if set { 0xf800 } else { 0 }
+                    );
+                }
+            }
+            assert_eq!(
+                (0..28)
+                    .map(|i| machine.memory.r8(request + i))
+                    .collect::<Vec<_>>(),
+                original
+            );
+            assert_eq!(machine.register(0), 0);
+        }
+    }
+
+    #[test]
+    fn fixed_regions_preserve_neighboring_control_fields() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let regions = machine.memory.regions.clone();
+            machine.memory = MachineMemory::new(big_endian);
+            machine.memory.regions = regions;
+            let object = machine.allocate(0x48);
+            machine.memory.w32(object + 0x40, 0x001d_0021);
+            machine.memory.w32(object + 0x44, 0x0031_001e);
+            let stack = machine.allocate(8);
+            machine.memory.w32(stack, 0x5678);
+            machine.memory.w32(stack + 4, 2);
+            machine.set_user_register(reg::SP, stack);
+            for (index, value) in [object, 0, 0x00f0_0140, 0x1234].into_iter().enumerate() {
+                machine.set_user_register(index as u8, value);
+            }
+            machine.initialize_fixed_gameold_region();
+            assert_eq!(machine.memory.r32(object + 0x40), 0x001d_0021);
+            assert_eq!(machine.memory.r32(object + 0x44), 0x0031_001e);
+            assert_eq!(machine.memory.r32(object + 4), 1);
+            assert_eq!(machine.memory.r32(object + 16), 0x1234);
+            assert_eq!(machine.memory.r32(object + 20), 0x5678);
+        }
+    }
+
+    #[test]
+    fn fixed_screen_change_passes_zero_to_the_load_callback() {
+        let mut machine = machine_from_minimal_archive();
+        machine.executable.big_endian = true;
+        machine.executable.preferred_code_address = 1;
+        machine.executable.code_image_size = machine.executable.code_size as u32 + 1;
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        let screen = machine.allocate(32);
+        let output = machine.allocate(4);
+        machine.memory.w32(output, 0xdead_beef);
+        let callback = machine.allocate(12);
+        for (index, instruction) in [0x4901, 0x6008, 0x4770, 0x46c0].into_iter().enumerate() {
+            machine.memory.w16(callback + index as u32 * 2, instruction);
+        }
+        machine.memory.w32(callback + 8, output);
+        machine.set_user_register(0, screen);
+        machine.handle_game_service(60);
+        let parameter = machine.screen_call_parameter(screen);
+        machine
+            .invoke_callback(callback | 1, parameter, 0, 0, 100)
+            .unwrap();
+        assert_eq!(machine.memory.r32(output), 0);
+    }
+
+    #[test]
+    fn legacy_rectangles_use_stack_dimensions_and_colors() {
+        for kind in [METHOD_KIND_MEMORY, METHOD_KIND_GAMEOLD] {
+            for outline in [false, true] {
+                let mut machine = machine_from_minimal_archive();
+                machine.initialize_screen();
+                let stack = machine.allocate(8);
+                machine.memory.w32(stack, 3);
+                machine.memory.w32(stack + 4, 0xf800);
+                machine.set_user_register(reg::SP, stack);
+                for (index, value) in [0xffff_ffff, 2, 3, 4, 100, 0x001f].into_iter().enumerate() {
+                    machine.set_user_register(index as u8, value);
+                }
+                let slot = if outline { 0x54 } else { 0x58 };
+                machine.handle_method_stub(CoolbarMachine::method_stub_address(kind, slot) & !1);
+                for y in 0..10 {
+                    for x in 0..10 {
+                        let inside = (2..6).contains(&x) && (3..6).contains(&y);
+                        let edge = x == 2 || x == 5 || y == 3 || y == 5;
+                        assert_eq!(
+                            machine.memory.r16(SCREEN_IMAGE + (y * 240 + x) * 2),
+                            if inside && (!outline || edge) {
+                                0xf800
+                            } else {
+                                0
+                            }
+                        );
+                    }
+                }
+                assert_eq!(machine.register(4), 100);
+                assert_eq!(machine.register(5), 0x001f);
+                assert_eq!(machine.register(0), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn fetched_gameold_table_binds_drawing_exports() {
+        let mut machine = machine_from_minimal_archive();
+        machine.initialize_screen();
+        machine.set_user_register(0, 0x8f);
+        machine.set_user_register(1, 0);
+        machine.handle_native_dispatch_service();
+        let table = machine.register(0);
+        for offset in (4..=0x20).step_by(4) {
+            assert_eq!(
+                machine.memory.r32(table + offset),
+                OLDLIB_DRAW_SERVICE + offset
+            );
+        }
+        assert_eq!(machine.memory.r32(table + 0x28), OLDLIB_DRAW_SERVICE + 0x28);
+        let pixels = machine.allocate(8);
+        for offset in (0..8).step_by(2) {
+            machine.memory.w16(pixels + offset, 0xf800);
+        }
+        let image = machine.allocate(12);
+        machine.memory.w32(image, pixels);
+        machine.memory.w32(image + 4, 2);
+        machine.memory.w32(image + 8, 2);
+        machine.set_user_register(0, image);
+        machine.handle_oldlib_draw_service(3);
+        assert_eq!(machine.frame_pixels()[0], 0xff0000);
+        assert_eq!(machine.frame_pixels()[241], 0xff0000);
+    }
+
+    #[test]
+    fn native_marshaled_allocation_writes_pointer_and_byte_status() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let output = machine.allocate(4);
+            let frame = machine.allocate(16);
+            let reused = machine.allocate(16);
+            machine.memory.write_bytes(reused, &[0xff; 16]);
+            machine.deallocate(reused);
+            machine.memory.w32(frame, output);
+            machine.memory.w32(frame + 4, 16);
+            machine.memory.write_bytes(frame + 8, &[0xaa; 4]);
+            machine.cpu.reg_set(Mode::User, 0, 0xb9);
+            machine.cpu.reg_set(Mode::User, 1, frame);
+            machine.handle_native_dispatch_service();
+            assert_eq!(machine.register(0), 0);
+            assert_eq!(machine.memory.r32(output), reused);
+            assert_eq!(machine.memory.r8(frame + 8), 1);
+            assert_eq!(machine.memory.r8(frame + 9), 0xaa);
+            assert_eq!(machine.memory.r32(reused), 0, "reused storage is cleared");
+            for size in [0, u32::MAX] {
+                machine.memory.w32(frame + 4, size);
+                machine.cpu.reg_set(Mode::User, 0, 0xb9);
+                machine.handle_native_dispatch_service();
+                assert_eq!(machine.memory.r32(output), 0);
+                assert_eq!(machine.memory.r8(frame + 8), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn fixed_ui_skin_reads_stack_dimensions_and_preserves_image_header() {
+        let mut machine = machine_from_minimal_archive();
+        machine.executable.big_endian = true;
+        machine.initialize_screen();
+        let image = machine.allocate(12);
+        let pixels = machine.allocate(24);
+        machine.memory.w32(image, pixels);
+        machine.write_image_dims(image, 3, 3);
+        for i in 0..12 {
+            machine.memory.w16(pixels + i * 2, 0xf800);
+        }
+        let stack = machine.allocate(8);
+        machine.memory.w32(stack, 5);
+        machine.memory.w32(stack + 4, 3);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        machine.cpu.reg_set(Mode::User, 4, 0);
+        machine.cpu.reg_set(Mode::User, 5, 0);
+        for (register, value) in [image, 10, 20, 5].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, register as u8, value);
+        }
+        machine.handle_game_service(5);
+        assert_eq!(machine.image_dims(image), (3, 3));
+        assert_eq!(machine.memory.r32(image), pixels);
+        for y in 20..25 {
+            for x in 10..15 {
+                assert_eq!(machine.memory.r16(SCREEN_IMAGE + (y * 240 + x) * 2), 0xf800);
+            }
+        }
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE + (25 * 240 + 10) * 2), 0);
+    }
+
+    #[test]
+    fn native_input_edges_do_not_duplicate_screen_logic() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.state = MachineState::Ready;
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        let object = machine.allocate(64);
+        let screen = object + 24;
+        let logic = machine.allocate(8);
+        for (i, word) in [0x6801, 0x3101, 0x6001, 0x4770].into_iter().enumerate() {
+            machine.memory.w16(logic + i as u32 * 2, word);
+        }
+        machine.native_app_parser = logic | 1;
+        machine.memory.w32(screen + 8, logic | 1);
+        machine.pending_screen = screen;
+        machine.set_key(18, true);
+        machine.run_frame(100).unwrap();
+        assert_eq!(machine.memory.r32(object), 1, "one key edge, one update");
+        machine.set_key(18, false);
+        machine.run_frame(100).unwrap();
+        assert_eq!(machine.memory.r32(object), 2);
+        machine.set_pointer(100, 100, true);
+        machine.run_frame(100).unwrap();
+        assert_eq!(machine.memory.r32(object), 3, "one touch edge, one update");
+    }
+
+    #[test]
+    fn native_idle_logic_sees_press_edge_once() {
+        for native in [false, true] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            machine.initialize_screen();
+            machine.state = MachineState::Ready;
+            machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+            machine
+                .cpu
+                .reg_set(Mode::User, reg::SP, STACK_BASE + STACK_SIZE as u32);
+            let object = machine.allocate(64);
+            let screen = object + 24;
+            let logic = machine.allocate(24);
+            for (i, word) in [
+                0xb510, 0x1c04, 0x2906, 0xd103, 0x2020, 0x4b02, 0x4798, 0x6020, 0xbd10, 0x46c0,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                machine.memory.w16(logic + i as u32 * 2, word);
+            }
+            machine
+                .memory
+                .w32(logic + 20, (SERVICE_BASE + TABLE_STRIDE * 3 + 11 * 4) | 1);
+            machine.memory.w32(screen + 8, logic | 1);
+            machine.pending_screen = screen;
+            machine.native_app_parser = if native { logic | 1 } else { 0 };
+            machine.set_key(5, true);
+            machine.run_frame(1000).unwrap();
+            assert_eq!(machine.memory.r32(object), u32::from(native));
+            machine.run_frame(1000).unwrap();
+            assert_eq!(
+                machine.memory.r32(object),
+                0,
+                "edge does not repeat on the next frame"
+            );
+        }
+    }
+
+    #[test]
+    fn native_invalidation_request_queues_the_guest_rectangle() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        let panel = machine.allocate(72);
+        let table = machine.allocate(4);
+        let rectangle = machine.allocate(8);
+        let queued = machine.allocate(8);
+        machine.memory.w32(panel + 8, 1);
+        machine.memory.w32(panel + 12, table);
+        machine.memory.w32(table, queued);
+        for (i, value) in [10, 20, 30, 40].into_iter().enumerate() {
+            machine.memory.w16(rectangle + i as u32 * 2, value);
+        }
+        let request = machine.allocate(12);
+        machine.memory.w32(request, panel);
+        machine.memory.w16(request + 4, 4);
+        machine.memory.w32(request + 8, rectangle);
+        machine.cpu.reg_set(Mode::User, 0, 0x9c);
+        machine.cpu.reg_set(Mode::User, 1, request);
+        machine.handle_native_dispatch_service();
+        assert_eq!(machine.memory.r32(panel + 4), 1);
+        for (i, value) in [10, 20, 30, 40].into_iter().enumerate() {
+            assert_eq!(machine.memory.r16(queued + i as u32 * 2), value);
+        }
+    }
+
+    #[test]
+    fn native_registered_screen_runs_callbacks_without_restarting_parser() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        machine.state = MachineState::Ready;
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        let object = machine.allocate(64);
+        let screen = object + 24;
+        let parser = machine.allocate(6);
+        let render = machine.allocate(8);
+        for (i, word) in [0x212a, 0x6001, 0x4770].into_iter().enumerate() {
+            machine.memory.w16(parser + i as u32 * 2, word);
+        }
+        for (i, word) in [0x6901, 0x3101, 0x6101, 0x4770].into_iter().enumerate() {
+            machine.memory.w16(render + i as u32 * 2, word);
+        }
+        machine.native_app_parser = parser | 1;
+        machine.memory.w32(screen + 12, render | 1);
+        machine.pending_screen = screen;
+        machine.run_frame(100).unwrap();
+        machine.run_frame(100).unwrap();
+        assert_eq!(machine.memory.r32(object + 16), 2);
+        assert_eq!(machine.memory.r32(0), 0, "startup parser was not reinvoked");
+    }
+
+    #[test]
+    fn native_panel_traversal_calls_guest_logic_and_paint_once() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        let context = machine.allocate(4);
+        let callback = machine.allocate(8);
+        for (i, word) in [0x6801, 0x3101, 0x6001, 0x4770].into_iter().enumerate() {
+            machine.memory.w16(callback + i as u32 * 2, word);
+        }
+        let parent = machine.allocate(72);
+        let child = machine.allocate(72);
+        machine.memory.w32(parent + 36, child);
+        machine.memory.w32(child + 32, parent);
+        for panel in [parent, child] {
+            machine.memory.w32(panel + 16, context);
+            machine.memory.w32(panel + 20, context);
+            let table = machine.allocate(4);
+            let rectangle = machine.allocate(8);
+            machine.memory.w32(panel + 4, 1);
+            machine.memory.w32(panel + 8, 1);
+            machine.memory.w32(panel + 12, table);
+            machine.memory.w32(table, rectangle);
+            machine.memory.w32(panel + 44, callback | 1);
+            machine.memory.w32(panel + 48, callback | 1);
+        }
+        machine.cpu.reg_set(Mode::User, 4, 0xdeadbeef);
+        for offset in [0x34, 0x38] {
+            machine.cpu.reg_set(Mode::User, 0, parent);
+            machine
+                .invoke_callback(
+                    CoolbarMachine::method_stub_address(METHOD_KIND_PANEL, offset),
+                    parent,
+                    0,
+                    0,
+                    1000,
+                )
+                .unwrap();
+        }
+        assert_eq!(machine.memory.r32(context), 4);
+        assert_eq!(machine.register(4), 0xdeadbeef);
+    }
+
+    #[test]
+    fn requested_screen_resources_are_loaded_before_initialization() {
+        for big_endian in [false, true] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_screen();
+            machine.state = MachineState::Ready;
+            machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+            let object = machine.allocate(64);
+            let screen = object + 24;
+            let load = machine.allocate(6);
+            let init = machine.allocate(6);
+            for (callback, words) in [
+                (load, [0x212a, 0x6101, 0x4770]), // Store the loaded resource.
+                (init, [0x6901, 0x6141, 0x4770]), // Copy the resource into initialized state.
+            ] {
+                for (i, word) in words.into_iter().enumerate() {
+                    machine.memory.w16(callback + i as u32 * 2, word);
+                }
+            }
+            machine.memory.w32(screen, init | 1);
+            machine.memory.w32(screen + 24, load | 1);
+            machine.pending_screen = screen;
+            machine.resource_load_pending = true;
+            machine.resource_load_screen = screen;
+            machine.run_frame(100).unwrap();
+            assert_eq!(machine.memory.r32(object + 20), 42);
+            assert!(!machine.resource_load_pending);
+            assert!(machine.screen_initialized);
+            machine.memory.w32(object + 16, 7);
+            machine.run_frame(100).unwrap();
+            assert_eq!(machine.memory.r32(object + 16), 7);
+        }
+    }
+
+    #[test]
+    fn paused_screen_preserves_frame_and_resumes_after_callback() {
+        let mut machine = machine_from_minimal_archive();
+        machine.initialize_screen();
+        machine.state = MachineState::Ready;
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        let object = machine.allocate(64);
+        let screen = object + 24;
+        machine.active_screen = screen;
+        machine.pending_screen = screen;
+        machine.screen_initialized = true;
+        machine.memory.w16(SCREEN_IMAGE, 0xf800);
+        machine.run_frame(100).unwrap();
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE), 0xf800);
+        assert_eq!(machine.state(), MachineState::Ready);
+        let restore = machine.allocate(4);
+        machine.memory.w16(restore, 0x60c1); // str r1, [r0, #12]
+        machine.memory.w16(restore + 2, 0x4770); // bx lr
+        let render = machine.allocate(6);
+        machine.memory.w16(render, 0x212a); // movs r1, #42
+        machine.memory.w16(render + 2, 0x6101); // str r1, [r0, #16]
+        machine.memory.w16(render + 4, 0x4770);
+        machine
+            .pending_callbacks
+            .push_back((restore | 1, vec![screen, render | 1], "test"));
+        machine.run_frame(100).unwrap();
+        assert_eq!(machine.memory.r32(object + 16), 42);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE), 0xf800);
+    }
+
+    #[test]
+    fn legacy_textbox_wraps_pages_and_releases_line_tables() {
+        let mut machine = machine_from_minimal_archive();
+        machine.initialize_screen();
+        let textbox = machine.allocate(0x38);
+        let stack = machine.allocate(8);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        machine.memory.w32(stack, 16);
+        machine.memory.w32(stack + 4, 14);
+        machine.cpu.reg_set(Mode::User, 0, textbox);
+        machine.cpu.reg_set(Mode::User, 2, 10);
+        machine.cpu.reg_set(Mode::User, 3, 20);
+        machine.handle_game_service(71);
+        assert_eq!(machine.memory.r16(textbox + 24), 16);
+        assert_eq!(machine.memory.r16(textbox + 26), 14);
+        let text = machine.allocate(8);
+        machine.memory.write_bytes(text, b"ABCD\nE\0");
+        machine.cpu.reg_set(Mode::User, 0, textbox);
+        machine.cpu.reg_set(Mode::User, 1, text);
+        machine.handle_method_stub(
+            CoolbarMachine::method_stub_address(METHOD_KIND_TEXTBOX, 0x24) & !1,
+        );
+        assert_eq!(machine.memory.r8(textbox + 16), 3);
+        assert_eq!(machine.memory.r8(textbox + 17), 1);
+        assert_eq!(machine.memory.r8(textbox + 18), 3);
+        let starts = machine.memory.r32(textbox + 8);
+        let lengths = machine.memory.r32(textbox + 12);
+        assert_eq!(machine.memory.r16(starts + 2), 2);
+        assert_eq!(machine.memory.r16(starts + 4), 5);
+        assert_eq!(machine.memory.r8(lengths), 2);
+        machine.memory.w8(textbox + 19, 1);
+        machine.cpu.reg_set(Mode::User, 0, textbox);
+        machine.cpu.reg_set(Mode::User, 1, 0xff0000);
+        machine.handle_method_stub(
+            CoolbarMachine::method_stub_address(METHOD_KIND_TEXTBOX, 0x28) & !1,
+        );
+        let mut red = 0;
+        for y in 20..36 {
+            for x in 10..26 {
+                red += usize::from(machine.memory.r16(SCREEN_IMAGE + (y * 240 + x) * 2) == 0xf800);
+            }
+        }
+        assert!(red > 0);
+        machine.cpu.reg_set(Mode::User, 0, textbox);
+        machine.handle_method_stub(
+            CoolbarMachine::method_stub_address(METHOD_KIND_TEXTBOX, 0x30) & !1,
+        );
+        assert_eq!(machine.memory.r32(textbox + 8), 0);
+        assert_eq!(machine.memory.r32(textbox + 12), 0);
+        assert!(!machine.heap_allocations.contains_key(&starts));
+        assert!(!machine.heap_allocations.contains_key(&lengths));
+    }
+
+    #[test]
+    fn legacy_lcd_clips_tiles_preserves_alpha_and_bounds_text() {
+        for big_endian in [false, true] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_screen();
+            let image = machine.allocate(12);
+            let pixels = machine.allocate(8);
+            machine.memory.w32(image, pixels);
+            machine.memory.w16(image + 4, 4);
+            machine.memory.w16(image + 6, 1);
+            for (i, value) in [0x1111, 0, 0xf800, 0x2222].into_iter().enumerate() {
+                machine.memory.w16(pixels + i as u32 * 2, value);
+            }
+            for (register, value) in [11, 20, 2, 1].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, register as u8, value);
+            }
+            machine.handle_game_lcd_service(12);
+            let stack = machine.allocate(16);
+            machine.cpu.reg_set(Mode::User, reg::SP, stack);
+            machine.memory.w32(stack, 1);
+            machine.memory.w32(stack + 4, 10);
+            machine.memory.w32(stack + 8, 20);
+            for (register, value) in [image, 0, 0, 4].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, register as u8, value);
+            }
+            machine
+                .memory
+                .w16(SCREEN_IMAGE + (20 * 240 + 11) * 2, 0xffff);
+            machine.handle_game_lcd_service(2);
+            assert_eq!(machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 10) * 2), 0);
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 11) * 2),
+                0xffff
+            );
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 12) * 2),
+                0xf800
+            );
+            assert_eq!(machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 13) * 2), 0);
+            machine.cpu.reg_set(Mode::User, 0, image);
+            machine.handle_game_lcd_service(1);
+            assert_eq!(machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 11) * 2), 0);
+            let output = machine.allocate(8);
+            machine.cpu.reg_set(Mode::User, 0, output);
+            machine.handle_game_lcd_service(21);
+            assert_eq!(machine.memory.r16(output), 11);
+            assert_eq!(machine.memory.r16(output + 4), 2);
+            let text = machine.allocate(4);
+            machine.memory.write_bytes(text, b"AB\0");
+            for (register, value) in [text, 1, 30, 40].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, register as u8, value);
+            }
+            machine.memory.w32(stack, 0xff0000);
+            machine.handle_game_lcd_service(9);
+            let mut red = 0;
+            for y in 40..56 {
+                for x in 30..46 {
+                    let value = machine.memory.r16(SCREEN_IMAGE + (y * 240 + x) * 2);
+                    if x < 38 {
+                        red += usize::from(value == 0xf800);
+                    } else {
+                        assert_eq!(value, 0, "text length limits drawing to the first glyph");
+                    }
+                }
+            }
+            assert!(red > 0);
+        }
+    }
+
+    #[test]
+    fn alternate_stream_decoder_writes_pixels_dimensions_and_preserves_caller_frame() {
+        let mut machine = machine_from_minimal_archive();
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(2, 1, image::Rgb([255, 0, 0])))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let png = png.into_inner();
+        let source = machine.allocate(png.len() as u32);
+        machine.memory.write_bytes(source, &png);
+        let output = machine.allocate(16);
+        machine.memory.w32(output + 12, 0x1234_5678);
+        machine.set_user_register(0, source);
+        machine.set_user_register(1, output);
+        // This ABI is the fixed-manager variant used by embedded applications.
+        machine.executable.preferred_code_address = 0x043e_3000;
+        machine.executable.big_endian = true;
+        machine.executable.code_image_size = machine.executable.code_size as u32 + 4;
+        machine.handle_lcd_service(50);
+        assert_eq!(machine.register(0), output);
+        assert_eq!(machine.memory.r16(output + 4), 2);
+        assert_eq!(machine.memory.r16(output + 6), 1);
+        let pixels = machine.memory.r32(output);
+        assert_eq!(machine.memory.r16(pixels), 0xf800);
+        assert_eq!(machine.memory.r16(pixels + 2), 0xf800);
+        assert_eq!(machine.memory.r32(output + 12), 0x1234_5678);
+    }
+
+    #[test]
+    fn image_stream_decodes_static_guest_buffer_with_mapped_bounds() {
+        for big_endian in [false, true] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let mut png = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+                3,
+                2,
+                image::Rgb([255, 0, 0]),
+            ))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+            let source = 0x0010_0010;
+            machine
+                .memory
+                .map(0x0010_0000, png.get_ref().len() + 16, false);
+            machine.memory.write_bytes(source, png.get_ref());
+            assert_eq!(machine.allocation_size(source), None);
+            let image = machine.create_image_from_stream(source, 0);
+            assert_ne!(image, 0);
+            assert_eq!(machine.image_dims(image), (3, 2));
+            let pixels = machine.memory.r32(image);
+            assert_eq!(machine.memory.r16(pixels), 0xf800);
+            assert_eq!(machine.create_image_from_stream(0x0020_0000, 0), 0);
+            assert_eq!(
+                machine.create_image_from_stream(source + png.get_ref().len() as u32 - 1, 0),
+                0
+            );
+            let truncated = machine.allocate(4);
+            let next = machine.allocate(png.get_ref().len() as u32);
+            machine.memory.write_bytes(truncated, &png.get_ref()[..4]);
+            machine.memory.write_bytes(next, png.get_ref());
+            assert_eq!(machine.create_image_from_stream(truncated, 0), 0);
+        }
+    }
+
+    #[test]
+    fn lazy_package_load_preserves_adjacent_picture_library() {
+        for big_endian in [false, true] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.wide_images = true;
+            let mut png = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+                2,
+                1,
+                image::Rgb([255, 0, 0]),
+            ))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+            for name in ["first.png", "second.png"] {
+                machine.resources.push(HostResource {
+                    name: name.into(),
+                    data: png.get_ref().clone(),
+                });
+            }
+            let owner = machine.allocate(0x100);
+            let package = owner + 16;
+            let library = package + 80;
+            machine.initialize_data_package(package, 0);
+            machine.memory.w32(DREAM_FACTORY_PACKAGE_SLOT, package);
+            machine.cpu.reg_set(Mode::User, 0, library);
+            machine.cpu.reg_set(Mode::User, 1, 2);
+            machine.handle_df_engine_service(3);
+            let images = machine.memory.r32(library + 16);
+            assert_ne!(images, 0);
+            for (index, name) in ["first.png", "second.png"].into_iter().enumerate() {
+                let address = machine.allocate(name.len() as u32 + 1);
+                machine.memory.write_bytes(address, name.as_bytes());
+                machine.memory.w8(address + name.len() as u32, 0);
+                machine.cpu.reg_set(Mode::User, 0, library);
+                machine.cpu.reg_set(Mode::User, 1, address);
+                machine.handle_picture_library_method(0x1c);
+                assert_eq!(machine.memory.r32(library + 16), images);
+                assert_eq!(machine.register(0), index as u32);
+                let image = machine.memory.r32(images + index as u32 * 4);
+                assert_ne!(image, 0);
+                assert_eq!(machine.image_dims(image), (2, 1));
+            }
+            assert_eq!(machine.memory.r16(package + 8), 2);
+            assert_eq!(machine.memory.r16(library + 20), 2);
+        }
+    }
+
+    #[test]
+    fn picture_library_loads_caches_draws_and_releases_images() {
+        for big_endian in [false, true] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_screen();
+            let mut png = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+                2,
+                1,
+                image::Rgb([255, 0, 0]),
+            ))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+            machine.resources.push(HostResource {
+                name: "test.png".into(),
+                data: png.into_inner(),
+            });
+            let package = machine.allocate(104);
+            machine.initialize_data_package(package, 0);
+            machine.load_main_resource_package(package);
+            let library = machine.allocate(0x54);
+            let name = machine.allocate(16);
+            machine.memory.write_bytes(name, b"test.png\0");
+            machine.cpu.reg_set(Mode::User, 0, library);
+            machine.cpu.reg_set(Mode::User, 1, 1);
+            machine.handle_method_stub(
+                CoolbarMachine::method_stub_address(METHOD_KIND_GAMEOLD, 0x12c) & !1,
+            );
+            let call = |machine: &mut CoolbarMachine, offset, argument| {
+                machine.cpu.reg_set(Mode::User, 0, library);
+                machine.cpu.reg_set(Mode::User, 1, argument);
+                machine.handle_method_stub(
+                    CoolbarMachine::method_stub_address(METHOD_KIND_PICTURE, offset) & !1,
+                );
+                machine.register(0)
+            };
+            assert_eq!(call(&mut machine, 0x1c, name), 0);
+            assert_eq!(
+                call(&mut machine, 0x1c, name),
+                0,
+                "cached image still works at capacity"
+            );
+            assert_eq!(machine.memory.r16(library + 20), 1);
+            assert_eq!(call(&mut machine, 0x20, 0), 2);
+            assert_eq!(call(&mut machine, 0x24, 0), 1);
+            assert_eq!(call(&mut machine, 0x20, u32::MAX), 0);
+            machine.cpu.reg_set(Mode::User, 2, 10);
+            machine.cpu.reg_set(Mode::User, 3, 20);
+            call(&mut machine, 0x34, 0);
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 10) * 2),
+                0xf800
+            );
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 11) * 2),
+                0xf800
+            );
+            assert_eq!(machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 12) * 2), 0);
+            let table = machine.memory.r32(library + 16);
+            let image = machine.memory.r32(table);
+            let pixels = machine.memory.r32(image);
+            call(&mut machine, 0x50, 0);
+            assert!(!machine.heap_allocations.contains_key(&pixels));
+            assert!(!machine.heap_allocations.contains_key(&image));
+            assert_eq!(machine.memory.r16(library + 20), 0);
+            assert_eq!(machine.memory.r32(library + 16), 0);
+            call(&mut machine, 0x50, 0);
+        }
+    }
+
+    /// The DF-engine service path (group 11) builds the same objects as
+    /// the gameold method-table slots: returning zero left callers with a
+    // NULL handle whose first method call jumped through a NULL thunk.
+    #[test]
+    fn df_engine_init_services_build_the_object_graph() {
+        let mut machine = machine_from_minimal_archive();
+
+        // idx 9 = initDFActor: installs the actor method table at 0x10..0x28.
+        let actor = machine.allocate(0x40);
+        machine.cpu.reg_set(Mode::User, 0, actor);
+        machine.cpu.reg_set(Mode::User, 1, 7);
+        machine.cpu.reg_set(Mode::User, 2, 9);
+        machine.handle_df_engine_service(9);
+        assert_eq!(machine.register(0), actor, "actor pointer echoed");
+        assert_ne!(
+            machine.memory.r32(actor + 0x10),
+            0,
+            "actor method slot installed"
+        );
+
+        // idx 3 = initDFPictureLibrary: installs picture methods at 0x18..0x50.
+        let lib = machine.allocate(0x60);
+        machine.cpu.reg_set(Mode::User, 0, lib);
+        machine.cpu.reg_set(Mode::User, 1, 4);
+        machine.handle_df_engine_service(3);
+        assert_ne!(
+            machine.memory.r32(lib + 0x18),
+            0,
+            "picture-library method slot installed"
+        );
+
+        // Game-LCD idx 33 = InitTextBox (F_12), same builder as gameold
+        // 0x11c: installs the textbox method table at 0x1c..0x34.
+        let box_ptr = machine.allocate(0x40);
+        machine.cpu.reg_set(Mode::User, 0, box_ptr);
+        machine.handle_game_lcd_service(33);
+        assert_eq!(machine.register(0), 14, "textbox type id");
+        assert_ne!(
+            machine.memory.r32(box_ptr + 0x1c),
+            0,
+            "textbox method slot installed"
+        );
+
+        // F_4 getters hand out persistent zero-filled map buffers instead
+        // of zero, so callers' next method load has a real target.
+        machine.handle_df_engine_service(12);
+        let render = machine.register(0);
+        assert_ne!(render, 0, "render buffer allocated");
+        machine.handle_df_engine_service(12);
+        assert_eq!(machine.register(0), render, "buffer is cached");
+        machine.handle_df_engine_service(11);
+        assert_ne!(machine.register(0), 0, "vscroll buffer allocated");
+    }
+
+    /// Per-slot method stubs must be distinguishable by address, and the
+    /// memory-manager table's memset slot must actually clear memory.
+    #[test]
+    fn method_stubs_bind_semantics_by_table_and_offset() {
+        let mut machine = machine_from_minimal_archive();
+        // Distinct addresses per slot and per table kind.
+        assert_ne!(
+            CoolbarMachine::method_stub_address(METHOD_KIND_GAMEOLD, 0x214),
+            CoolbarMachine::method_stub_address(METHOD_KIND_MEMORY, 0x214),
+            "same offset in different tables must not collide"
+        );
+        assert_ne!(
+            CoolbarMachine::method_stub_address(METHOD_KIND_MEMORY, 0x9c),
+            CoolbarMachine::method_stub_address(METHOD_KIND_MEMORY, 0xa0),
+            "different offsets must not collide"
+        );
+        // memset(ptr, val, len) through the memory table.
+        let buf = machine.allocate(16);
+        machine.memory.w32(buf, 0xFFFF_FFFF);
+        machine.cpu.reg_set(Mode::User, 0, buf);
+        machine.cpu.reg_set(Mode::User, 1, 0xAB);
+        machine.cpu.reg_set(Mode::User, 2, 8);
+        machine.handle_method_stub(
+            CoolbarMachine::method_stub_address(METHOD_KIND_MEMORY, 0x214) & !1,
+        );
+        assert_eq!(machine.register(0), buf, "memset returns the pointer");
+        assert_eq!(machine.memory.r8(buf), 0xAB, "memset fills the buffer");
+        // The same offset in the gameold table is memcpy, not memset: it
+        // must copy from r1 rather than fill with r1's byte value.
+        let src = machine.allocate(16);
+        machine.memory.write_bytes(src, b"ABCDEFGH");
+        machine.memory.w32(buf, 0);
+        machine.cpu.reg_set(Mode::User, 0, buf);
+        machine.cpu.reg_set(Mode::User, 1, src);
+        machine.cpu.reg_set(Mode::User, 2, 8);
+        machine.handle_method_stub(
+            CoolbarMachine::method_stub_address(METHOD_KIND_GAMEOLD, 0x214) & !1,
+        );
+        assert_eq!(
+            machine.memory.r32(buf),
+            u32::from_le_bytes(*b"ABCD"),
+            "gameold 0x214 copies from r1, not fills with r1"
+        );
+    }
+
+    #[test]
+    fn fixed_gameold_allocators_return_owned_zeroed_blocks() {
+        let mut machine = machine_from_minimal_archive();
+        machine.executable.big_endian = true;
+        machine.executable.preferred_code_address = 0x0100_0000;
+        machine.executable.code_image_size = machine.executable.code_size as u32 + 4;
+        assert!(machine.uses_fixed_manager_abi());
+        for (allocate, free) in [(37, 38), (39, 40)] {
+            machine.cpu.reg_set(Mode::User, 0, 0x16800);
+            machine.handle_game_service(allocate);
+            let block = machine.register(0);
+            assert!(machine.heap_allocations.contains_key(&block));
+            assert_ne!(block, 0x16800);
+            machine.memory.w32(block + 0x167fc, 0xfeed_beef);
+            machine.cpu.reg_set(Mode::User, 0, block);
+            machine.handle_game_service(free);
+            assert!(!machine.heap_allocations.contains_key(&block));
+            machine.cpu.reg_set(Mode::User, 0, 0x16800);
+            machine.handle_game_service(allocate);
+            assert_eq!(machine.register(0), block);
+            assert_eq!(machine.memory.r32(block + 0x167fc), 0);
+            machine.cpu.reg_set(Mode::User, 0, block);
+            machine.handle_game_service(free);
+        }
+    }
+
+    #[test]
+    fn native_diagnostic_callbacks_preserve_the_callers_return_address() {
+        let mut machine = machine_from_minimal_archive();
+        let frame = machine.allocate(0x100);
+        let format = machine.allocate(64);
+        machine.memory.write_bytes(format, b"codebuffer:%x,%x\0");
+        machine.memory.w32(frame + 68, EXIT_ADDRESS | 1);
+        let cursor = machine.heap_cursor;
+        machine.cpu.reg_set(Mode::User, 0, format);
+        machine.cpu.reg_set(Mode::User, 1, 0xb5);
+        machine.cpu.reg_set(Mode::User, reg::SP, frame);
+        machine.handle_native_dispatch_service();
+        assert_eq!(machine.memory.r32(frame + 68), EXIT_ADDRESS | 1);
+        assert_eq!(machine.heap_cursor, cursor);
+        assert_eq!(machine.register(0), 0);
+    }
+
+    /// SysManager slot 0x78 (GetCoolBarKernelCurrentVersion) is a
+    /// zero-argument query.  Left to the generic constructor heuristic, the
+    /// stale r1 was read as a block size and the allocated block went
+    /// through [sp + 68], clobbering a live return address on the caller's
+    /// stack (observed as a jump into the heap on the fixed-manager games).
+    #[test]
+    fn sysinfo_version_query_returns_version_without_stack_writeback() {
+        let mut machine = machine_from_minimal_archive();
+        let frame = machine.allocate(0x100);
+        machine.memory.w32(frame + 68, 0x5A5A_5A5A);
+        machine.cpu.reg_set(Mode::User, 0, 0x1234);
+        machine.cpu.reg_set(Mode::User, 1, 0x190);
+        machine.cpu.reg_set(Mode::User, 2, 0);
+        machine.cpu.reg_set(Mode::User, armv4t_emu::reg::SP, frame);
+        machine
+            .handle_method_stub(CoolbarMachine::method_stub_address(METHOD_KIND_MEMORY, 0x78) & !1);
+        assert_eq!(
+            machine.register(0),
+            42,
+            "GetCoolBarKernelCurrentVersion returns the kernel version"
+        );
+        assert_eq!(
+            machine.memory.r32(frame + 68),
+            0x5A5A_5A5A,
+            "version query must not write through [sp + 68]"
+        );
+    }
+
+    /// The gameold table copy (native dispatch sid 82) binds the v3 slot
+    /// layout: the drawing API lives in the dedicated old-lib table, the
+    /// rest maps onto the group-3 service entries with the v3 gap folded in.
+    #[test]
+    fn gameold_table_copy_binds_the_v3_slots() {
+        let mut machine = machine_from_minimal_archive();
+        let buffer = machine.allocate(0x26c);
+        machine.cpu.reg_set(Mode::User, 0, 0x52);
+        machine.cpu.reg_set(Mode::User, 1, buffer);
+        machine.handle_native_dispatch_service();
+        assert_eq!(
+            machine.memory.r32(buffer + 0x04),
+            SERVICE_BASE + TABLE_STRIDE * 3 + 0x04,
+            "DrawImageWithClip maps to the group-3 drawing slot"
+        );
+        assert_eq!(
+            machine.memory.r32(buffer + 0x38),
+            OLDLIB_DRAW_SERVICE + 0x38,
+            "slot 0x38 is SetClip here, not the group-3 name lookup"
+        );
+        assert_eq!(
+            machine.memory.r32(buffer + 0xf0),
+            SERVICE_BASE + TABLE_STRIDE * 3 + 0xf0,
+            "below the gap the v3 offset maps to the same v2 offset"
+        );
+        assert_eq!(
+            machine.memory.r32(buffer + 0x114),
+            SERVICE_BASE + TABLE_STRIDE * 3 + 0x11c,
+            "past the gap the v3 offset maps 8 bytes up"
+        );
+        assert_eq!(
+            machine.memory.r32(buffer + 0x240),
+            NATIVE_BILLING_PAYNUM,
+            "the billing slots ride at the v3 tail"
+        );
+    }
+
+    /// SetClip latches the old-lib clip rectangle and returns its bottom
+    /// edge; a blit outside the clip is dropped before it touches the
+    /// framebuffer.
+    #[test]
+    fn oldlib_set_clip_gates_blits() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        machine.cpu.reg_set(Mode::User, 0, 10);
+        machine.cpu.reg_set(Mode::User, 1, 20);
+        machine.cpu.reg_set(Mode::User, 2, 100);
+        machine.cpu.reg_set(Mode::User, 3, 50);
+        machine.handle_oldlib_draw_service(14);
+        assert_eq!(machine.register(0), 70, "SetClip returns the bottom edge");
+        assert_eq!(machine.oldlib_clip, [10, 20, 110, 70]);
+
+        // Fully outside the clip: nothing is painted.
+        let image = machine.allocate(machine.image_header_len());
+        let pixels = machine.allocate(4 * 4 * 2);
+        machine.memory.w32(image, pixels);
+        machine.write_image_dims(image, 4, 4);
+        let kind = machine.image_kind_offset();
+        machine.memory.w8(image + kind, 1);
+        machine.memory.w16(pixels, 0xf800);
+        let blit = |machine: &mut CoolbarMachine, dx: u32, dy: u32| {
+            machine.cpu.reg_set(Mode::User, 0, image);
+            machine.cpu.reg_set(Mode::User, 1, 0);
+            machine.cpu.reg_set(Mode::User, 2, 0);
+            machine.cpu.reg_set(Mode::User, 3, 4);
+            let stack = STACK_BASE + STACK_SIZE as u32 - 16;
+            machine.cpu.reg_set(Mode::User, reg::SP, stack);
+            machine.memory.w32(stack, 4);
+            machine.memory.w32(stack + 4, dx);
+            machine.memory.w32(stack + 8, dy);
+            machine.cpu.reg_set(Mode::User, 4, 0xdeadbeef);
+            machine.cpu.reg_set(Mode::User, 5, 0xdeadbeef);
+            machine.cpu.reg_set(Mode::User, 6, 0xdeadbeef);
+            machine.handle_oldlib_draw_service(1);
+        };
+        blit(&mut machine, 0, 0);
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE),
+            0,
+            "a blit outside the clip rectangle stays off the framebuffer"
+        );
+        blit(&mut machine, 16, 24);
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE + (24 * 240 + 16) * 2),
+            0xf800,
+            "a blit inside the clip lands on the framebuffer"
+        );
+    }
+
+    #[test]
+    fn native_global_block_queries_share_live_allocation_state() {
+        let mut machine = machine_from_minimal_archive();
+        machine.cpu.reg_set(Mode::User, 0, 0x8e);
+        machine.handle_native_dispatch_service();
+        assert_eq!(machine.register(0), MEMORY_BLOCK_PTR);
+        assert_eq!(
+            machine.memory.r32(MEMORY_BLOCK_PTR + 12),
+            MEMORY_BLOCK_SERVICE
+        );
+        machine.cpu.reg_set(Mode::User, 0, MEMORY_BLOCK_PTR);
+        machine.cpu.reg_set(Mode::User, 1, 5);
+        machine.handle_memory_block_service(0);
+        assert_eq!(machine.register(0), MEMORY_BLOCK_POOL);
+        let request = machine.allocate(12);
+        let output = machine.allocate(4);
+        machine.memory.w32(request, output);
+        machine.memory.w32(request + 4, 0x8e);
+        machine.memory.w32(request + 8, 4);
+        machine.cpu.reg_set(Mode::User, 0, 0x7d1);
+        machine.cpu.reg_set(Mode::User, 1, request);
+        machine.handle_native_dispatch_service();
+        assert_eq!(machine.memory.r32(output), MEMORY_BLOCK_PTR);
+        assert_eq!(machine.memory.r32(MEMORY_BLOCK_PTR + 4), 8);
+        machine.cpu.reg_set(Mode::User, 0, MEMORY_BLOCK_PTR);
+        machine.handle_memory_block_service(1);
+        assert_eq!(machine.memory.r32(MEMORY_BLOCK_PTR + 4), 0);
+    }
+
+    #[test]
+    fn fetched_native_gameold_table_uses_wide_images_and_advancing_tick() {
+        let mut machine = machine_from_minimal_archive();
+        machine.executable.big_endian = true;
+        machine.executable.code_image_size = machine.executable.code_size as u32;
+        machine.native_app_parser = machine.executable.code_address() | 1;
+        let request = machine.allocate(12);
+        let output = machine.allocate(4);
+        machine.memory.w32(request, output);
+        machine.memory.w32(request + 4, 0x8f);
+        machine.memory.w32(request + 8, 4);
+        machine.cpu.reg_set(Mode::User, 0, 0x7d1);
+        machine.cpu.reg_set(Mode::User, 1, request);
+        machine.handle_native_dispatch_service();
+        let table = machine.memory.r32(output);
+        assert!(machine.wide_images);
+        assert_eq!(machine.memory.r32(SCREEN_IMAGE_STRUCT + 4), 240);
+        assert_eq!(machine.memory.r32(table), SERVICE_BASE + TABLE_STRIDE * 3);
+        for (slot, expected) in [(28, 16), (29, 8), (30, 16)] {
+            let entry = machine.memory.r32(table + slot * 4);
+            machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+            machine.invoke_callback(entry | 1, 0, 0, 0, 100).unwrap();
+            assert_eq!(machine.register(0), expected);
+        }
+        let tick = machine.memory.r32(table + 0xb0);
+        machine.frame_count = 10;
+        machine.invoke_callback(tick | 1, 0, 0, 0, 100).unwrap();
+        let first = machine.register(0);
+        machine.frame_count += 1;
+        machine.invoke_callback(tick | 1, 0, 0, 0, 100).unwrap();
+        assert_eq!(machine.register(0) - first, 100);
+    }
+
+    #[test]
+    fn native_billing_function_spacing_reaches_deferred_sms_callback() {
+        let mut machine = machine_from_minimal_archive();
+        let table = machine.allocate(0x26c);
+        machine.cpu.reg_set(Mode::User, 0, 0x52);
+        machine.cpu.reg_set(Mode::User, 1, table);
+        machine.handle_native_dispatch_service();
+        let paynum = machine.memory.r32(table + 0x240);
+        let remain = machine.memory.r32(table + 0x244);
+        assert_eq!(remain.wrapping_sub(paynum), 3764);
+        let callback = machine.executable.code_address() | 1;
+        let stack = machine.allocate(16);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        machine.memory.w32(stack + 4, callback);
+        machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+        machine
+            .invoke_callback((remain + 1376) | 1, 0, 0, 0, 100)
+            .unwrap();
+        assert_eq!(machine.register(0), 1);
+        assert_eq!(machine.pending_callbacks.len(), 1);
+        assert_eq!(
+            machine.pending_callbacks[0],
+            (callback, vec![1], "smsResult")
+        );
+        assert_ne!(machine.state, MachineState::Halted);
+    }
+
+    #[test]
+    fn native_region_constructor_and_update_preserve_guest_state() {
+        let mut machine = machine_from_minimal_archive();
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        machine.native_app_parser = machine.executable.code_address() | 1;
+        machine.executable.code_image_size = machine.executable.code_size as u32;
+        let window = machine.allocate(72 + 32);
+        machine.memory.write_bytes(window + 72, &[0xa5; 32]);
+        let context = machine.allocate(4);
+        let callback = machine.allocate(8);
+        for (i, word) in [0x6801, 0x3101, 0x6001, 0x4770].into_iter().enumerate() {
+            machine.memory.w16(callback + i as u32 * 2, word);
+        }
+        let stack = machine.allocate(8);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        machine.memory.w32(stack, context);
+        machine.memory.w32(stack + 4, 2);
+        for (index, value) in [window, 0, 0x0014_000a, context].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, index as u8, value);
+        }
+        machine.handle_game_service(79);
+        assert_eq!(machine.memory.r32(window + 8), 2);
+        for offset in 72..104 {
+            assert_eq!(machine.memory.r8(window + offset), 0xa5);
+        }
+        machine.memory.w32(window + 44, callback | 1);
+        machine.cpu.reg_set(Mode::User, 0, window);
+        machine.handle_fixed_gameold_region_service(3).unwrap();
+        assert_eq!(machine.memory.r32(context), 1);
+    }
+
+    #[test]
+    fn picture_fill_respects_the_dirty_window_clip() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        let library = machine.allocate(84);
+        let stack = machine.allocate(8);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        machine.memory.w32(stack, 30);
+        machine.memory.w32(stack + 4, 0xf800);
+        for (index, value) in [library, 0, 0, 30].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, index as u8, value);
+        }
+        machine.oldlib_clip = [10, 20, 12, 22];
+        machine.handle_picture_library_method(0x28);
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 10) * 2),
+            0xf800
+        );
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE + (19 * 240 + 10) * 2), 0);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 12) * 2), 0);
+    }
+
+    #[test]
+    fn native_actor_constructor_preserves_adjacent_guest_state() {
+        let mut machine = machine_from_minimal_archive();
+        machine.executable.code_image_size = machine.executable.code_size as u32;
+        machine.native_app_parser = machine.executable.code_address() | 1;
+        let actor = machine.allocate(44 + 32);
+        machine.memory.write_bytes(actor + 44, &[0xa5; 32]);
+        machine.cpu.reg_set(Mode::User, 0, actor);
+        machine.cpu.reg_set(Mode::User, 1, 7);
+        machine.cpu.reg_set(Mode::User, 2, 9);
+        machine.handle_game_service(109);
+        assert_eq!(machine.memory.r16(actor), 7);
+        assert_eq!(machine.memory.r16(actor + 2), 9);
+        for offset in 44..76 {
+            assert_eq!(machine.memory.r8(actor + offset), 0xa5);
+        }
+    }
+
+    #[test]
+    fn oldlib_number_reads_stack_arguments() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        let image = machine.allocate(12);
+        let pixels = machine.allocate(24);
+        machine.memory.w32(image, pixels);
+        machine.write_image_dims(image, 10, 1);
+        machine.memory.w8(image + machine.image_kind_offset(), 1);
+        for digit in 0..10 {
+            machine
+                .memory
+                .w16(pixels + digit * 2, 0x1200 + digit as u16);
+        }
+        for (index, value) in [image, 56, 1, 1].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, index as u8, value);
+        }
+        let stack = machine.allocate(16);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        for (index, value) in [1, 20, 30, 0].into_iter().enumerate() {
+            machine.memory.w32(stack + index as u32 * 4, value);
+            machine.cpu.reg_set(Mode::User, index as u8 + 4, 0xdeadbeef);
+        }
+        machine.handle_oldlib_draw_service(4);
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE + (30 * 240 + 20) * 2),
+            0x1205
+        );
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE + (30 * 240 + 22) * 2),
+            0x1206
+        );
+    }
+
+    #[test]
+    fn oldlib_clipping_advances_the_source_crop() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        let image = machine.allocate(12);
+        let pixels = machine.allocate(32);
+        machine.memory.w32(image, pixels);
+        machine.write_image_dims(image, 4, 4);
+        machine.memory.w8(image + machine.image_kind_offset(), 1);
+        for pixel in 0..16 {
+            machine
+                .memory
+                .w16(pixels + pixel * 2, 0x1200 + pixel as u16);
+        }
+        machine.oldlib_clip = [12, 22, 14, 24];
+        for (index, value) in [image, 0, 0, 4].into_iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, index as u8, value);
+        }
+        let stack = machine.allocate(12);
+        machine.cpu.reg_set(Mode::User, reg::SP, stack);
+        for (index, value) in [4, 10, 20].into_iter().enumerate() {
+            machine.memory.w32(stack + index as u32 * 4, value);
+        }
+        machine.handle_oldlib_draw_service(1);
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE + (22 * 240 + 12) * 2),
+            0x120a
+        );
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE + (23 * 240 + 13) * 2),
+            0x120f
+        );
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE + (21 * 240 + 11) * 2), 0);
+    }
+
+    /// The v3 games read image headers with u32 width/height at +4/+8; the
+    /// screen header follows the same layout once the v3 library is built.
+    #[test]
+    fn wide_image_headers_store_u32_dimensions() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE_STRUCT + 4),
+            240,
+            "narrow default"
+        );
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE_STRUCT + 6),
+            400,
+            "narrow default"
+        );
+        machine.wide_images = true;
+        machine.write_screen_header();
+        assert_eq!(machine.memory.r32(SCREEN_IMAGE_STRUCT + 4), 240);
+        assert_eq!(machine.memory.r32(SCREEN_IMAGE_STRUCT + 8), 400);
+        let image = machine.allocate(machine.image_header_len());
+        assert_eq!(machine.image_header_len(), 16, "wide headers are 16 bytes");
+        machine.write_image_dims(image, 320, 240);
+        assert_eq!(machine.image_dims(image), (320, 240));
+    }
+
+    /// The blank-canvas slot (0x18) must accept a zero height like the
+    /// reference: the image registers with a null data pointer instead of
+    /// failing, so the guest's canvas slot is set for later scene draws.
+    #[test]
+    fn picture_library_accepts_zero_height_blank_canvas() {
+        for big_endian in [false, true] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let library = machine.allocate(0x54);
+            machine.cpu.reg_set(Mode::User, 0, library);
+            machine.cpu.reg_set(Mode::User, 1, 1);
+            machine.handle_method_stub(
+                CoolbarMachine::method_stub_address(METHOD_KIND_GAMEOLD, 0x12c) & !1,
+            );
+            machine.cpu.reg_set(Mode::User, 0, library);
+            machine.cpu.reg_set(Mode::User, 1, 188);
+            machine.cpu.reg_set(Mode::User, 2, 0);
+            machine.handle_method_stub(
+                CoolbarMachine::method_stub_address(METHOD_KIND_PICTURE, 0x18) & !1,
+            );
+            assert_ne!(
+                machine.register(0),
+                u32::MAX,
+                "zero-height blank canvas registers instead of failing"
+            );
+            assert_eq!(
+                machine.memory.r16(library + 20),
+                1,
+                "the canvas counts as a loaded image"
+            );
+            let images = machine.memory.r32(library + 16);
+            let image = machine.memory.r32(images);
+            assert_eq!(
+                machine.memory.r32(image),
+                0,
+                "zero-height canvas carries no pixel data"
+            );
+            assert_eq!(machine.memory.r16(image + 4), 188, "width recorded");
+            assert_eq!(machine.memory.r16(image + 6), 0, "height recorded");
+        }
+    }
+
+    /// Guest string encoding follows machine endianness: big-endian images
+    /// use UCS2-BE (`00 XX` per ASCII char), little-endian images use plain
+    /// single-byte strings.  The old heuristic keyed on `byte[1] != 0` and
+    /// misread every UCS2-BE path as ASCII, yielding an empty string and a
+    /// failed open.
+    #[test]
+    fn file_path_follows_machine_endianness() {
+        let mut machine = machine_from_minimal_archive();
+        let addr = machine.allocate(32);
+        // The fixture is little-endian, so paths are single-byte.
+        machine.memory.write_bytes(addr, b"./x.dat\0");
+        assert_eq!(machine.read_file_path(addr), "./x.dat");
+    }
+
+    /// The firmware open ABI carries an open-mode enum in r0 and an optional
+    /// mode string in r2.  A stale r2 pointing at code must fall back to the
+    /// enum instead of being read as an fopen string.
+    #[test]
+    fn file_open_mode_falls_back_to_enum_when_hint_is_garbage() {
+        let mut machine = machine_from_minimal_archive();
+        let junk = machine.executable.code_address(); // code bytes, not "rwa"
+        machine.cpu.reg_set(Mode::User, 0, 2); // openMode 2 == "rb"
+        machine.cpu.reg_set(Mode::User, 2, junk);
+        assert_eq!(machine.resolve_open_mode(), "rb");
+
+        // A real hint string wins over the enum.
+        let hint = machine.allocate(4);
+        machine.memory.write_bytes(hint, b"wb+\0");
+        machine.cpu.reg_set(Mode::User, 0, 0);
+        machine.cpu.reg_set(Mode::User, 2, hint);
+        assert_eq!(machine.resolve_open_mode(), "wb+");
+    }
+
+    /// gameold C-library services: games build structure fields with these
+    /// and then call through the result, so a stub that returns null or
+    /// does nothing derails the next indirect call.
+    #[test]
+    fn gameold_c_library_services_copy_and_measure_memory() {
+        let mut machine = machine_from_minimal_archive();
+        let dst = machine.allocate(32);
+        let src = machine.allocate(32);
+
+        // memset(dst, 0xAB, 8)
+        machine.memory.write_bytes(src, b"hello\0xx");
+        machine.cpu.reg_set(Mode::User, 0, dst);
+        machine.cpu.reg_set(Mode::User, 1, 0xAB);
+        machine.cpu.reg_set(Mode::User, 2, 8);
+        machine.handle_game_service(135);
+        assert_eq!(machine.register(0), dst);
+        assert_eq!(machine.memory.r8(dst), 0xAB);
+        assert_eq!(machine.memory.r8(dst + 7), 0xAB);
+
+        // memcpy(dst, src, 8)
+        machine.cpu.reg_set(Mode::User, 0, dst);
+        machine.cpu.reg_set(Mode::User, 1, src);
+        machine.cpu.reg_set(Mode::User, 2, 8);
+        machine.handle_game_service(133);
+        assert_eq!(machine.register(0), dst);
+        assert_eq!(machine.memory.r8(dst), b'h');
+
+        // strlen(src)
+        machine.cpu.reg_set(Mode::User, 0, src);
+        machine.handle_game_service(134);
+        assert_eq!(machine.register(0), 5);
+
+        // strcpy(dst, src) writes the terminator
+        machine.cpu.reg_set(Mode::User, 0, dst);
+        machine.cpu.reg_set(Mode::User, 1, src);
+        machine.handle_game_service(141);
+        assert_eq!(machine.memory.r8(dst + 5), 0);
+    }
+
+    #[test]
+    fn gameold_sprintf_writes_destination_buffer() {
+        let mut machine = machine_from_minimal_archive();
+        let dst = machine.allocate(32);
+        let format = machine.allocate(16);
+        machine.memory.write_bytes(format, b"%d\n\0");
+        machine.cpu.reg_set(Mode::User, 0, dst);
+        machine.cpu.reg_set(Mode::User, 1, format);
+        machine.cpu.reg_set(Mode::User, 2, 42);
+        machine.handle_game_service(136);
+        assert_eq!(machine.memory.r8(dst), b'4');
+        assert_eq!(machine.memory.r8(dst + 1), b'2');
+        assert_eq!(machine.memory.r8(dst + 2), b'\n');
+        assert_eq!(machine.memory.r8(dst + 3), 0);
+    }
+
+    /// Drive LCD service `index` with r0-r3 and a scratch stack holding
+    /// `stack` words, then return the screen pixel at (x, y).
+    fn lcd_rect_service_pixel(
+        machine: &mut CoolbarMachine,
+        index: u32,
+        registers: [u32; 4],
+        stack: &[u32],
+        x: u32,
+        y: u32,
+    ) -> u16 {
+        let spill = machine.allocate(16);
+        for (word, value) in stack.iter().enumerate() {
+            machine.memory.w32(spill + word as u32 * 4, *value);
+        }
+        for (number, value) in registers.iter().enumerate() {
+            machine.cpu.reg_set(Mode::User, number as u8, *value);
+        }
+        machine.cpu.reg_set(Mode::User, reg::SP, spill);
+        machine.handle_lcd_service(index);
+        machine.memory.r16(SCREEN_IMAGE + (y * 240 + x) * 2)
+    }
+
+    #[test]
+    fn packed_fill_rect_covers_its_inclusive_corners() {
+        let mut machine = machine_from_minimal_archive();
+        // vMFillRect packed form: r0 = y0<<16|x0, r1 = y1<<16|x1, r2 = color.
+        // The stack garbage must be ignored in this form.
+        let stack = [0xdead_beef, 0xdead_beef];
+        let registers = [10 | (20 << 16), 29 | (39 << 16), 0xeeb8, 0];
+        let mut pixel = |x, y| lcd_rect_service_pixel(&mut machine, 18, registers, &stack, x, y);
+        assert_eq!(pixel(10, 20), 0xeeb8);
+        assert_eq!(pixel(29, 39), 0xeeb8);
+        assert_eq!(pixel(9, 20), 0);
+        assert_eq!(pixel(30, 39), 0);
+        assert_eq!(pixel(29, 40), 0);
+    }
+
+    #[test]
+    fn packed_outline_rect_draws_only_its_border() {
+        let mut machine = machine_from_minimal_archive();
+        // vMDrawRect packed form: same registers as the fill, but only the
+        // 1-pixel border of the rectangle is painted.
+        let stack = [0xdead_beef, 0xdead_beef];
+        let registers = [5 | (5 << 16), 15 | (10 << 16), 0x0abc, 0];
+        let mut pixel = |x, y| lcd_rect_service_pixel(&mut machine, 16, registers, &stack, x, y);
+        assert_eq!(pixel(5, 5), 0x0abc);
+        assert_eq!(pixel(15, 10), 0x0abc);
+        assert_eq!(pixel(10, 5), 0x0abc);
+        assert_eq!(pixel(10, 8), 0);
+        assert_eq!(pixel(16, 10), 0);
+    }
+
+    #[test]
+    fn stack_form_fill_rect_still_draws() {
+        let mut machine = machine_from_minimal_archive();
+        // Plain form: r0 = x, r1 = y, r2 = width, [sp] = height, [sp+4] =
+        // color. Both high halves are zero, so the packed form must not win.
+        let stack = [12, 0x1234];
+        let registers = [10, 20, 30, 0];
+        let mut pixel = |x, y| lcd_rect_service_pixel(&mut machine, 18, registers, &stack, x, y);
+        assert_eq!(pixel(10, 20), 0x1234);
+        assert_eq!(pixel(39, 31), 0x1234);
+        assert_eq!(pixel(40, 31), 0);
+        assert_eq!(pixel(39, 32), 0);
+    }
+}

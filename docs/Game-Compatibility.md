@@ -341,7 +341,7 @@ and error text. Reproduce with `cbe_boot` and scripted phone keys where possible
 Do not attach copyrighted game packages to public reports.
 
 ```bash
-cargo run --release -p nicaiemu-tools --bin cbe_boot -- \
+cargo run --release -p coolbaremu-tools --bin cbe_boot -- \
   path/to/game.CBE --frames 200 --key-event 1:14 --screenshot frame.png
 ```
 

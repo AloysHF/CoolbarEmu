@@ -1,25 +1,29 @@
-# NicaiEmu — A Nicai/MStar CBE game emulator written in Rust
+# CoolbarEmu — A Coolbar/CBE game emulator written in Rust
 
 <p align="center">
-  <img src="res/logo-banner.png" alt="NicaiEmu" width="600">
+  <img src="res/logo-banner.png" alt="CoolbarEmu" width="600">
 </p>
 
 <p align="center">
-  <a href="https://aloyshf.github.io/NicaiEmu/"><img src="https://img.shields.io/badge/Website-NicaiEmu-E8553A?logo=githubpages&logoColor=white" alt="Website"></a>
-  <a href="https://github.com/AloysHF/NicaiEmu/actions/workflows/ci.yml"><img src="https://github.com/AloysHF/NicaiEmu/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://git.libretro.com/libretro/nicaiemu/-/pipelines"><img src="https://img.shields.io/gitlab/pipeline-status/nicaiemu?gitlab_url=https%3A%2F%2Fgit.libretro.com%2Flibretro&branch=master&logo=gitlab&label=Pipeline%20Status" alt="Gitlab Pipeline Status" ></a>
-  <a href="https://github.com/AloysHF/NicaiEmu/releases/latest"><img src="https://img.shields.io/github/v/release/AloysHF/NicaiEmu" alt="Release"></a>
-  <a href="https://github.com/AloysHF/NicaiEmu/releases"><img src="https://img.shields.io/github/downloads/AloysHF/NicaiEmu/total" alt="Downloads"></a>
-  <a href="https://sonarcloud.io/dashboard?id=AloysHF_NicaiEmu"><img src="https://sonarcloud.io/api/project_badges/measure?project=AloysHF_NicaiEmu&metric=alert_status" alt="Quality Gate Status"></a>
+  <a href="https://aloyshf.github.io/CoolbarEmu/"><img src="https://img.shields.io/badge/Website-CoolbarEmu-E8553A?logo=githubpages&logoColor=white" alt="Website"></a>
+  <a href="https://github.com/AloysHF/CoolbarEmu/actions/workflows/ci.yml"><img src="https://github.com/AloysHF/CoolbarEmu/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://git.libretro.com/libretro/coolbaremu/-/pipelines"><img src="https://img.shields.io/gitlab/pipeline-status/coolbaremu?gitlab_url=https%3A%2F%2Fgit.libretro.com%2Flibretro&branch=master&logo=gitlab&label=Pipeline%20Status" alt="Gitlab Pipeline Status" ></a>
+  <a href="https://github.com/AloysHF/CoolbarEmu/releases/latest"><img src="https://img.shields.io/github/v/release/AloysHF/CoolbarEmu" alt="Release"></a>
+  <a href="https://github.com/AloysHF/CoolbarEmu/releases"><img src="https://img.shields.io/github/downloads/AloysHF/CoolbarEmu/total" alt="Downloads"></a>
+  <a href="https://sonarcloud.io/dashboard?id=AloysHF_CoolbarEmu"><img src="https://sonarcloud.io/api/project_badges/measure?project=AloysHF_CoolbarEmu&metric=alert_status" alt="Quality Gate Status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-BSD%203--Clause-blue.svg" alt="License: BSD 3-Clause"></a>
   <a href="https://discord.gg/7XDdSrYD"><img src="https://img.shields.io/badge/Discord-Join%20Us-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://qm.qq.com/q/LAO7DKAWUC"><img src="https://img.shields.io/badge/QQ%E7%BE%A4-Join%20Us-12B7F5?logo=tencent-qq&logoColor=white" alt="QQ Group"></a>
 </p>
 
-NicaiEmu is a Rust emulator for ARM/Thumb CBE applications used by Nicai/MStar
-mobile phones. It loads the executable and packaged resources directly, runs
+CoolbarEmu is a Rust emulator for Coolbar/CBE applications on feature phones.
+It loads the executable and packaged resources directly, runs
 guest code through a pure-Rust ARM core, and bridges the phone services needed
 by supported games.
+
+CoolbarEmu uses the `coolbaremu` command, crates and libretro core identifiers.
+Save states use the `CBARSTAT` signature. Previous project names, save-state
+signatures and configuration keys are not supported.
 
 ## Features
 
@@ -96,10 +100,10 @@ by supported games.
 ### Standalone Mode
 
 Download the latest binary from the
-[Releases](https://github.com/AloysHF/NicaiEmu/releases) page and run:
+[Releases](https://github.com/AloysHF/CoolbarEmu/releases) page and run:
 
 ```bash
-nicaiemu path/to/game.CBE
+coolbaremu path/to/game.CBE
 ```
 
 See the [Standalone Emulator](docs/Standalone-Emulator.md) guide for
@@ -120,19 +124,19 @@ Requires [Rust](https://www.rust-lang.org/tools/install) (stable).
 ### Standalone Mode
 
 ```bash
-cargo build -p nicaiemu --release
-cargo run -p nicaiemu --release -- path/to/game.CBE
+cargo build -p coolbaremu --release
+cargo run -p coolbaremu --release -- path/to/game.CBE
 ```
 
 ### Libretro Core (for RetroArch)
 
 ```bash
-cargo build -p nicaiemu-libretro --release
+cargo build -p coolbaremu-libretro --release
 ```
 
-The binary is produced at `target/release/nicaiemu.dll`
-(`libnicaiemu.so` on Linux, `libnicaiemu.dylib` on macOS). Rename it to
-`nicaiemu_libretro.<ext>` before placing it in RetroArch's `cores/`
+The binary is produced at `target/release/coolbaremu.dll`
+(`libcoolbaremu.so` on Linux, `libcoolbaremu.dylib` on macOS). Rename it to
+`coolbaremu_libretro.<ext>` before placing it in RetroArch's `cores/`
 directory.
 
 For Android cross-compilation, see [Android Libretro Core](docs/Android-Libretro-Core.md).
@@ -142,7 +146,7 @@ For iOS, see [iOS Libretro Core](docs/iOS-Libretro-Core.md).
 
 ```
 crates/
-├── nicaiemu-core/         # Platform-independent emulator engine (library)
+├── coolbaremu-core/         # Platform-independent emulator engine (library)
 │   └── src/
 │       ├── lib.rs            # Crate root and public re-exports
 │       ├── cbe/              # CBE container parsing
@@ -152,7 +156,7 @@ crates/
 │       │   ├── map.rs        # Map resource decoder
 │       │   ├── actor.rs      # Actor resource decoder
 │       │   └── resource.rs   # Resource entry helpers
-│       ├── machine/          # Guest machine (NicaiMachine)
+│       ├── machine/          # Guest machine (CoolbarMachine)
 │       │   ├── mod.rs        # Executable parsing, boot, frame loop, input
 │       │   ├── memory.rs     # Sparse guest memory regions
 │       │   ├── packages.rs   # Guest resource package parsing
@@ -164,18 +168,18 @@ crates/
 │       ├── image_decoder.rs  # CBE GIF and firmware PNG decoding
 │       ├── save_state.rs     # Versioned, checksummed save-state codec
 │       └── runtime.rs        # Scene-level HLE (crate-internal, experimental)
-├── nicaiemu/              # Standalone binary (→ nicaiemu)
+├── coolbaremu/              # Standalone binary (→ coolbaremu)
 │   └── src/
 │       ├── main.rs           # Window loop, CLI, input, audio output
 │       └── standalone/       # Display scalers, gamepad overlay, key/gamepad mappers, window backend
-├── nicaiemu-tools/        # Archive analysis and headless diagnostics
+├── coolbaremu-tools/        # Archive analysis and headless diagnostics
 │   └── src/
 │       ├── bin/
 │       │   ├── cbe_boot.rs   # Headless boot tool
 │       │   ├── cbe_analyze.rs # Archive analysis tool
 │       │   └── cbe_disasm.rs # ARM/Thumb disassembly tool
-└── nicaiemu-libretro/     # Libretro cdylib (→ nicaiemu_libretro.{dll,so,dylib})
-    ├── nicaiemu_libretro.info   # RetroArch core metadata
+└── coolbaremu-libretro/     # Libretro cdylib (→ coolbaremu_libretro.{dll,so,dylib})
+    ├── coolbaremu_libretro.info   # RetroArch core metadata
     └── src/
         ├── lib.rs               # cdylib crate root
         └── libretro/
@@ -190,7 +194,7 @@ See [Architecture](docs/architecture.md) for implementation details.
 
 ## Controls
 
-The games expect a phone keypad and a touchscreen. NicaiEmu offers three
+The games expect a phone keypad and a touchscreen. CoolbarEmu offers three
 input modes, all supported by both the standalone app and the RetroArch
 core:
 

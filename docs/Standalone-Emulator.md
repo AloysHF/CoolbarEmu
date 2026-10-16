@@ -1,6 +1,6 @@
 # Standalone Emulator
 
-This guide covers installing and running the standalone `nicaiemu` binary,
+This guide covers installing and running the standalone `coolbaremu` binary,
 loading games, keyboard/mouse and physical gamepad controls, the debug key
 overlay, headless mode, and all command-line options.
 
@@ -15,20 +15,20 @@ overlay, headless mode, and all command-line options.
 ## Installation
 
 Download the latest standalone binary for your platform from the
-[Releases](https://github.com/AloysHF/NicaiEmu/releases) page.
+[Releases](https://github.com/AloysHF/CoolbarEmu/releases) page.
 
 You can also build it from source:
 
 ```bash
-cargo build -p nicaiemu --release
+cargo build -p coolbaremu --release
 ```
 
-The binary is produced at `target/release/nicaiemu` (`.exe` on Windows).
+The binary is produced at `target/release/coolbaremu` (`.exe` on Windows).
 
 ## Synopsis
 
 ```text
-nicaiemu [OPTIONS] <GAME_PATH>
+coolbaremu [OPTIONS] <GAME_PATH>
 ```
 
 ## Options
@@ -63,16 +63,16 @@ The standalone emulator accepts `.CBE` files:
 
 ```bash
 # Load a game directly
-nicaiemu path/to/game.CBE
+coolbaremu path/to/game.CBE
 
 # Open a 2x window (480×800 for portrait, 800×480 for landscape)
-nicaiemu path/to/game.CBE --scale 2
+coolbaremu path/to/game.CBE --scale 2
 
 # Run fullscreen with the xbrz pixel-art scaler
-nicaiemu path/to/game.CBE --fullscreen --filter xbrz
+coolbaremu path/to/game.CBE --fullscreen --filter xbrz
 
 # List resources in the archive
-nicaiemu path/to/game.CBE --list
+coolbaremu path/to/game.CBE --list
 ```
 
 ## Default Key Mappings
@@ -105,10 +105,10 @@ The `--remap` option rebinds a guest key to any host key using
 
 ```bash
 # Confirm with Space instead of Enter/F
-nicaiemu path/to/game.CBE --remap enter:space
+coolbaremu path/to/game.CBE --remap enter:space
 
 # Put the dpad on WASD and confirm on Space
-nicaiemu path/to/game.CBE --remap up:w --remap down:s --remap left:a --remap right:d --remap enter:space
+coolbaremu path/to/game.CBE --remap up:w --remap down:s --remap left:a --remap right:d --remap enter:space
 ```
 
 ## Physical Gamepads
@@ -147,10 +147,10 @@ sends nothing (the star key is L2 alone).
 
 ```bash
 # Keyboard only
-nicaiemu path/to/game.CBE --no-gamepad
+coolbaremu path/to/game.CBE --no-gamepad
 
 # Visualize the merged keyboard + gamepad mask
-nicaiemu path/to/game.CBE --show-gamepad
+coolbaremu path/to/game.CBE --show-gamepad
 ```
 
 ## Virtual Gamepad Overlay
@@ -175,10 +175,10 @@ processing:
 
 ```bash
 # Run 120 frames silently and exit
-nicaiemu path/to/game.CBE --headless --frames 120
+coolbaremu path/to/game.CBE --headless --frames 120
 
 # Older-style screenshot-only headless run
-nicaiemu path/to/game.CBE --screenshot /dev/null --screenshot-frames 120
+coolbaremu path/to/game.CBE --screenshot /dev/null --screenshot-frames 120
 ```
 
 Save states use format version 3. Version-1 and version-2 states from older builds are rejected
@@ -281,7 +281,7 @@ Capture a PNG screenshot after a number of frames, then exit:
 
 ```bash
 # Take a screenshot after 120 frames
-nicaiemu path/to/game.CBE --screenshot screenshot.png --screenshot-frames 120
+coolbaremu path/to/game.CBE --screenshot screenshot.png --screenshot-frames 120
 ```
 
 This is used by the batch screenshot script (`scripts/batch-screenshots.ps1`)
@@ -295,10 +295,10 @@ event uses `FRAME:PHONE_KEY` syntax. A held range uses
 `START_FRAME:END_FRAME:PHONE_KEY`, with the end frame excluded.
 
 ```bash
-cargo run --release -p nicaiemu-tools --bin cbe_boot -- \
+cargo run --release -p coolbaremu-tools --bin cbe_boot -- \
   path/to/game.CBE --frames 120 --key-event 1:14 --screenshot frame.png
 
-cargo run --release -p nicaiemu-tools --bin cbe_boot -- \
+cargo run --release -p coolbaremu-tools --bin cbe_boot -- \
   path/to/game.CBE --frames 120 --key-hold 30:60:16 --screenshot held.png
 ```
 
@@ -313,7 +313,7 @@ To capture every CBE application in the local validation directory, run:
 pwsh scripts/batch-screenshots.ps1
 ```
 
-The script builds the standalone `nicaiemu` executable, runs each application
+The script builds the standalone `coolbaremu` executable, runs each application
 with default or application-specific capture timing, and writes PNG captures
 to `docs/images`. Headless capture keeps the last guest-rendered frame if a
 later callback stops. Blank frames and applications that stop before drawing
@@ -324,29 +324,29 @@ are reported as failures. Use `-Frames`, `-Binary`, `-GameDirectory`, or
 
 ```bash
 # Basic usage
-nicaiemu path/to/game.CBE
+coolbaremu path/to/game.CBE
 
 # 2x integer window scale
-nicaiemu path/to/game.CBE --scale 2
+coolbaremu path/to/game.CBE --scale 2
 
 # Fullscreen with the xbrz filter and gamepad overlay
-nicaiemu path/to/game.CBE --fullscreen --filter xbrz --show-gamepad
+coolbaremu path/to/game.CBE --fullscreen --filter xbrz --show-gamepad
 
 # Take a screenshot and exit
-nicaiemu path/to/game.CBE --screenshot shot.png --screenshot-frames 120
+coolbaremu path/to/game.CBE --screenshot shot.png --screenshot-frames 120
 
 # Run and write a save state when the window closes
-nicaiemu path/to/game.CBE --save-state game.sav
+coolbaremu path/to/game.CBE --save-state game.sav
 
 # Resume from a save state
-nicaiemu path/to/game.CBE --load-state game.sav
+coolbaremu path/to/game.CBE --load-state game.sav
 
 # List archive contents
-nicaiemu path/to/game.CBE --list
+coolbaremu path/to/game.CBE --list
 
 # Run 120 frames without a window
-nicaiemu path/to/game.CBE --headless --frames 120
+coolbaremu path/to/game.CBE --headless --frames 120
 
 # Verbose logging
-nicaiemu path/to/game.CBE --verbose
+coolbaremu path/to/game.CBE --verbose
 ```

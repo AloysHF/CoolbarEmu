@@ -1,6 +1,6 @@
 # Android Libretro Core
 
-The NicaiEmu libretro core runs on Android, so it can be used by most
+The CoolbarEmu libretro core runs on Android, so it can be used by most
 Android RetroArch-based frontends.
 
 ## Install in RetroArch on Android
@@ -11,8 +11,8 @@ The easiest way is to download the core directly from RetroArch's built-in Onlin
 
 1. Open RetroArch
 2. Go to **Main Menu → Online Updater → Core Downloader**
-3. Find and select **Nicai/MStar CBE (NicaiEmu)**, wait for the download to complete
-4. Go back to **Main Menu → Load Core** — the NicaiEmu core should appear
+3. Find and select **Coolbar/CBE (CoolbarEmu)**, wait for the download to complete
+4. Go back to **Main Menu → Load Core** — the CoolbarEmu core should appear
 
 To update an installed core:
 
@@ -23,15 +23,15 @@ To update an installed core:
 
 If the Online Updater is not available, you can install the core manually:
 
-1. **Download** `nicaiemu-android-libretro.tar.gz` from the
-   [Releases](https://github.com/AloysHF/NicaiEmu/releases) page. It
-   contains per-ABI `nicaiemu_libretro_android.so` files for `arm64-v8a`,
+1. **Download** `coolbaremu-android-libretro.tar.gz` from the
+   [Releases](https://github.com/AloysHF/CoolbarEmu/releases) page. It
+   contains per-ABI `coolbaremu_libretro_android.so` files for `arm64-v8a`,
    `armeabi-v7a`, `x86` and `x86_64`.
-2. **Install the core**: copy the `nicaiemu_libretro_android.so` matching
+2. **Install the core**: copy the `coolbaremu_libretro_android.so` matching
    your device's ABI (most modern devices are `arm64-v8a`) into RetroArch's
    `cores/` directory (typically
    `/storage/emulated/0/RetroArch/cores/` or the app's internal `cores/` path),
-   and copy `nicaiemu_libretro.info` into RetroArch's `info/` directory.
+   and copy `coolbaremu_libretro.info` into RetroArch's `info/` directory.
 3. **Load** the core and content the same way as on desktop.
 
 ## Building the Android core locally
@@ -46,8 +46,8 @@ export ANDROID_NDK_HOME=/path/to/android-ndk
 
 # Build all four ABIs (artifacts land in target/<triple>/release/)
 cargo ndk -t arm64-v8a -t armeabi-v7a -t x86 -t x86_64 --platform 21 \
-  build -p nicaiemu-libretro --release
+  build -p coolbaremu-libretro --release
 ```
 
-Each ABI produces `libnicaiemu.so`; rename it to
-`nicaiemu_libretro_android.so` when installing into RetroArch on Android.
+Each ABI produces `libcoolbaremu.so`; rename it to
+`coolbaremu_libretro_android.so` when installing into RetroArch on Android.

@@ -81,13 +81,13 @@ capacity at 8, ID/image arrays at 12/16, count at 20, and release marker at 22.
 Release frees the owned allocations and clears these fields; unknown image
 indices and exhausted capacities do not allocate fallback objects.
 
-NicaiEmu executes native CBE applications instead of replacing their game logic with a scene preview. The core is platform-independent and exposes a framebuffer plus phone-key input to frontends.
+CoolbarEmu executes native CBE applications instead of replacing their game logic with a scene preview. The core is platform-independent and exposes a framebuffer plus phone-key input to frontends.
 
 ## Boot flow
 
 1. `CbeArchive` scans flat, grouped, and nested resource-package sections and records resource names and ranges.
 2. `CbeExecutable` validates the executable header, segment bounds, checksums, and guest byte order.
-3. `NicaiMachine` maps code, initialized data, stack, heap, manager tables, and service trampolines into the guest address space.
+3. `CoolbarMachine` maps code, initialized data, stack, heap, manager tables, and service trampolines into the guest address space.
 4. The ARM/Thumb interpreter runs the application initializer and entry point, including interworking branches and compiler-generated PC-relative jump tables.
 5. Applications that contain an installer can extract their named resource packages into the sandboxed guest filesystem before launching the installed entry point.
    The network application manager retains entry descriptors and dispatches

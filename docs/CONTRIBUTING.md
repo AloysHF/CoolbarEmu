@@ -31,7 +31,7 @@
 
 ## Getting Started
 
-Check the [open issues](https://github.com/AloysHF/NicaiEmu/issues) for
+Check the [open issues](https://github.com/AloysHF/CoolbarEmu/issues) for
 tasks labeled `good first issue` or `help wanted`. If you have questions, feel
 free to open a discussion issue.
 

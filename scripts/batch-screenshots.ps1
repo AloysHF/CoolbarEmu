@@ -16,7 +16,7 @@
     Default: 100000000.
 
 .PARAMETER Binary
-    Path to the nicaiemu executable. Default: the release build output.
+    Path to the coolbaremu executable. Default: the release build output.
 
 .PARAMETER GameDirectory
     Directory searched recursively for CBE files.
@@ -52,15 +52,15 @@ if (-not (Test-Path -LiteralPath $GameDirectory -PathType Container)) {
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
 if (-not $Binary) {
-    $Binary = Join-Path $repoRoot "target\release\nicaiemu.exe"
+    $Binary = Join-Path $repoRoot "target\release\coolbaremu.exe"
     if ($env:OS -ne "Windows_NT") {
-        $Binary = Join-Path $repoRoot "target/release/nicaiemu"
+        $Binary = Join-Path $repoRoot "target/release/coolbaremu"
     }
 
     Write-Host "Building the latest release binary..." -ForegroundColor Yellow
     try {
         Push-Location $repoRoot
-        cargo build --release -p nicaiemu --bin nicaiemu
+        cargo build --release -p coolbaremu --bin coolbaremu
         if ($LASTEXITCODE -ne 0) {
             throw "Release build failed with exit code $LASTEXITCODE."
         }
@@ -70,7 +70,7 @@ if (-not $Binary) {
 }
 
 if (-not (Test-Path -LiteralPath $Binary -PathType Leaf)) {
-    Write-Error "nicaiemu binary not found: $Binary"
+    Write-Error "coolbaremu binary not found: $Binary"
     exit 1
 }
 
