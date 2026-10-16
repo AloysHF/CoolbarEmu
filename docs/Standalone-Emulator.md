@@ -310,7 +310,7 @@ service filters such as `CBE_TRACE=4:24,6:3`. Tracing is disabled by default.
 To capture every CBE application in the local validation directory, run:
 
 ```powershell
-pwsh scripts/batch-screenshots.ps1
+pwsh scripts/batch-screenshots.ps1 -GameDirectory path/to/games
 ```
 
 The script builds the standalone `coolbaremu` executable, runs each application

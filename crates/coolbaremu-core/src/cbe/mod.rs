@@ -1,6 +1,6 @@
 //! CBE Format Module
 //!
-//! This module provides parsing and handling for the CBE (Cool Bar Engine) game format.
+//! This module provides parsing and handling for the Coolbar/CBE application format.
 //! CBE files are container archives used by Coolbar mobile phones.
 
 pub mod actor;

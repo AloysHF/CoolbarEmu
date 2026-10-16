@@ -5,9 +5,9 @@
 The local validation corpus contains 245 distinct CBE files in three groups: A (123), B
 (74), and C (48). Group identifiers distinguish archive variants, including
 applications with the same name. Game files are supplied separately and are not
-included in this repository. Local files are organized under
-`tmp/nicai_game/A`, `tmp/nicai_game/B`, and `tmp/nicai_game/C`; table filenames
-are relative to `tmp/nicai_game`. Byte-identical archives are retained once,
+included in this repository. Table filenames use group-relative paths such as
+`A/`, `B/`, and `C/`. These collection groups do not identify handset models.
+Byte-identical archives are retained once,
 with group priority B, then C, then A; differently encoded variants remain separate.
 
 The tables below record the current core's 200-frame idle execution and captured

@@ -74,19 +74,15 @@ Pushing the tag triggers `.github/workflows/release.yml`, which:
    - `*-libretro.*` (one per platform)
 5. Click **Publish release**
 
-### 6. Sync `.info` file to upstream libretro-super
+### 6. Sync upstream libretro metadata and builds
 
-RetroArch's **Online Updater > Core Downloader** reads the `.info` file from the
-upstream [libretro-super](https://github.com/libretro/libretro-super) repository
-(`dist/info/coolbaremu_libretro.info`), not from this repo. If the `.info` file
-was changed in this release (version, metadata, supported extensions, etc.), a
-PR must be submitted to sync the changes upstream.
-
-1. Fork [libretro/libretro-super](https://github.com/libretro/libretro-super)
-2. Copy `crates/coolbaremu-libretro/coolbaremu_libretro.info` from this repo
-   to `dist/info/coolbaremu_libretro.info` in the fork
-3. Submit a PR to `libretro/libretro-super` — reference the CoolbarEmu release
-   tag and list the changed fields in the PR description
+Core metadata is maintained in
+[libretro-core-info](https://github.com/libretro/libretro-core-info).
+Submit the current `crates/coolbaremu-libretro/coolbaremu_libretro.info` there.
+For the project rename, coordinate removal of the old core entry and addition
+of the new one with the buildbot, GitLab mirror and documentation maintainers.
+Updating this repository alone does not publish the new Core Downloader entry.
+See the [migration guide](Project-Migration.md#external-services).
 
 ## Troubleshooting
 

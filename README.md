@@ -1,4 +1,4 @@
-# CoolbarEmu — A Coolbar/CBE game emulator written in Rust
+# CoolbarEmu — A Coolbar/CBE application emulator written in Rust
 
 <p align="center">
   <img src="res/logo-banner.png" alt="CoolbarEmu" width="600">
@@ -23,7 +23,9 @@ by supported games.
 
 CoolbarEmu uses the `coolbaremu` command, crates and libretro core identifiers.
 Save states use the `CBARSTAT` signature. Previous project names, save-state
-signatures and configuration keys are not supported.
+signatures and configuration keys are not supported. See the
+[project migration guide](docs/Project-Migration.md) for identifiers and external
+service updates.
 
 ## Features
 

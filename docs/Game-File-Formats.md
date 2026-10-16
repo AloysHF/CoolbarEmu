@@ -1,4 +1,4 @@
-# Game File Format — CBE (Cool Bar Engine)
+# Coolbar/CBE Application Format
 
 Coolbar games use the **CBE** container format. This document describes the
 file structure, section layout, and resource types.

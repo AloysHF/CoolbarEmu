@@ -6,7 +6,7 @@
 
   var REPO = "https://raw.githubusercontent.com/AloysHF/CoolbarEmu/master";
 
-  // All portrait (240x400) screenshots under docs/images/, featured first.
+  // Selected portrait screenshots from corpus group B, featured first.
   var PORTRAIT = [
     "魔塔",
     "孤岛",
@@ -67,7 +67,7 @@
     "Google地图",
   ];
 
-  // All landscape (400x240) screenshots under docs/images/, featured first.
+  // Selected landscape screenshots from corpus group B, featured first.
   var LANDSCAPE = [
     "暴力摩托",
     "捕鱼猎人",
@@ -104,15 +104,15 @@
       zh: "让尘封的<span class=\"accent\">手机游戏</span><br>在现代设备上重生",
       en: "Bring forgotten <span class=\"accent\">phone games</span><br>back to life on modern devices",
     },
-    "about.title": { zh: "什么是 Nicai / MStar 游戏？", en: "What are Nicai / MStar games?" },
+    "about.title": { zh: "什么是酷吧 / CBE 应用？", en: "What are Coolbar / CBE applications?" },
     "about.p1": {
-      zh: "Nicai（尼采）是 MStar 时代功能手机的游戏平台。游戏以 <strong>.CBE</strong> 容器打包，内含 ARM/Thumb 可执行代码与场景、地图、图片、音频等资源，通过厂商固件服务与硬件交互。这类游戏一度只能在特定手机上运行。",
-      en: "Nicai was the game platform on MStar feature phones. Games ship as <strong>.CBE</strong> containers holding ARM/Thumb code plus scene, map, image, and audio resources, talking to the hardware through vendor firmware services. They once ran only on specific handsets.",
+      zh: "酷吧（Coolbar）是功能手机上的应用平台。<strong>.CBE</strong> 文件封装 ARM/Thumb 可执行代码与场景、地图、图片、音频等资源，通过固件服务运行。不同设备和 SDK 分支的格式、字节序与屏幕规格存在差异；支持范围以兼容性记录为准。",
+      en: "Coolbar is an application platform for feature phones. <strong>.CBE</strong> files package ARM/Thumb executable code with scene, map, image, and audio resources and use firmware services. Formats, byte order, and displays vary across devices and SDK branches; consult the compatibility records for tested support.",
     },
-    "stats.games": { zh: "语料验证", en: "Games Verified" },
-    "stats.gamesSub": { zh: "启动帧 100% 出图", en: "100% boot-frame output" },
+    "stats.games": { zh: "样本捕获", en: "Applications Captured" },
+    "stats.gamesSub": { zh: "详见兼容性记录", en: "See compatibility notes" },
     "stats.display": { zh: "原生分辨率", en: "Native Display" },
-    "stats.displaySub": { zh: "WQVGA 竖屏", en: "WQVGA portrait" },
+    "stats.displaySub": { zh: "多种 LCD 尺寸", en: "Multiple LCD sizes" },
     "stats.frontends": { zh: "运行前端", en: "Frontends" },
     "stats.frontendsSub": { zh: "Standalone + RetroArch", en: "Standalone + RetroArch" },
     "stats.audio": { zh: "音频通路", en: "Audio Formats" },
@@ -150,7 +150,7 @@
       en: "RGB888 output, RetroPad mapping, pointer/touch input, audio, and save states, ready to use.",
     },
     "gallery.title": { zh: "游戏画廊", en: "Game Gallery" },
-    "gallery.sub": { zh: "74 款本地语料 · 每帧都由客机真实渲染", en: "74 local titles · every frame rendered by the guest" },
+    "gallery.sub": { zh: "精选样本画面 · 完整 245 文件记录见兼容性文档", en: "Selected captures · 245 files documented in the compatibility records" },
     "gallery.portrait": { zh: "竖版", en: "Portrait" },
     "gallery.landscape": { zh: "横版", en: "Landscape" },
     "gallery.more": { zh: "完整列表见 Game Compatibility 文档", en: "See the Game Compatibility doc for the full list" },
@@ -260,7 +260,7 @@
   }
 
   function imageUrl(name) {
-    return REPO + "/docs/images/" + encodeURIComponent(name) + ".png";
+    return REPO + "/docs/images/B/" + encodeURIComponent(name) + ".png";
   }
 
   function setupHeroShot() {

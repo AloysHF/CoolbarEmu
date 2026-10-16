@@ -5,23 +5,12 @@ Android RetroArch-based frontends.
 
 ## Install in RetroArch on Android
 
-### Via Online Updater (Recommended)
+### Manual installation
 
-The easiest way is to download the core directly from RetroArch's built-in Online Updater:
-
-1. Open RetroArch
-2. Go to **Main Menu → Online Updater → Core Downloader**
-3. Find and select **Coolbar/CBE (CoolbarEmu)**, wait for the download to complete
-4. Go back to **Main Menu → Load Core** — the CoolbarEmu core should appear
-
-To update an installed core:
-
-1. Open RetroArch
-2. Go to **Main Menu → Online Updater → Update Installed Cores**
-
-### Manual Installation (Alternative)
-
-If the Online Updater is not available, you can install the core manually:
+The renamed core requires coordinated upstream buildbot and core-info updates.
+Until those updates are published, install a CoolbarEmu release manually;
+availability under the new name in Core Downloader is not assumed. See the
+[migration guide](Project-Migration.md#external-services).
 
 1. **Download** `coolbaremu-android-libretro.tar.gz` from the
    [Releases](https://github.com/AloysHF/CoolbarEmu/releases) page. It

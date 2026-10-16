@@ -1,6 +1,6 @@
 //! CBE Archive Parser
 //!
-//! Loads and parses CBE (Cool Bar Engine) game archives.
+//! Loads and parses Coolbar/CBE application archives.
 //! CBE files are container archives containing game resources.
 //!
 //! Format structure (from reverse engineering):

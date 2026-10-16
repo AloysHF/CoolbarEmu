@@ -31,16 +31,14 @@ param(
     [ValidateRange(1, [uint64]::MaxValue)]
     [uint64]$InstructionLimit = 100000000,
     [string]$Binary = "",
-    [string]$GameDirectory = "",
+    [Parameter(Mandatory)]
+    [string]$GameDirectory,
     [string]$OutputDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
-if (-not $GameDirectory) {
-    $GameDirectory = Join-Path $repoRoot "tmp\nicai_game"
-}
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $repoRoot "docs\images"
 }
@@ -124,7 +122,7 @@ foreach ($game in $games) {
     }
     $frameLabel = if ($captureFrames -eq 1) { "1 frame" } else { "$captureFrames frames" }
     $imageDirectory = $OutputDirectory
-    $corpusRoot = Join-Path $repoRoot "tmp\nicai_game"
+    $corpusRoot = (Resolve-Path -LiteralPath $GameDirectory).Path.TrimEnd([char[]]"\/")
     $group = ""
     if ($game.FullName.StartsWith($corpusRoot + "\", [StringComparison]::OrdinalIgnoreCase)) {
         $relativeGamePath = $game.FullName.Substring($corpusRoot.Length + 1)

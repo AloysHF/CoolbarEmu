@@ -1,6 +1,6 @@
 //! CBE File Analyzer
 //!
-//! Analyzes CBE (Cool Bar Engine) game archives and displays detailed information.
+//! Analyzes Coolbar/CBE application archives and displays detailed information.
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -10,7 +10,7 @@ use std::path::PathBuf;
 /// CBE File Analyzer
 #[derive(Parser)]
 #[command(name = "cbe-analyze")]
-#[command(about = "Analyze CBE (Cool Bar Engine) game archives")]
+#[command(about = "Analyze Coolbar/CBE application archives")]
 struct Cli {
     /// Path to the CBE file to analyze
     file: PathBuf,
