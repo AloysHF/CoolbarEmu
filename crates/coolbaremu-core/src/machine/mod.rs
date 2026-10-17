@@ -3892,6 +3892,43 @@ mod tests {
     }
 
     #[test]
+    fn accepted_billing_sms_delivers_local_success_to_the_guest() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30);
+            let stack = machine.allocate(16);
+            let marker = machine.allocate(4);
+            let callback = machine.allocate(12);
+            for (index, instruction) in [0x4901, 0x6008, 0x4770, 0x46c0].into_iter().enumerate() {
+                machine.memory.w16(callback + index as u32 * 2, instruction);
+            }
+            machine.memory.w32(callback + 8, marker);
+            machine.memory.w32(stack + 8, callback | 1);
+            machine.cpu.reg_set(Mode::User, reg::SP, stack);
+            machine.cpu.reg_set(Mode::User, 0, 13);
+            machine.handle_billing_service(15);
+            assert_eq!(machine.register(0), 0);
+            assert!(machine.pending_callbacks.is_empty());
+            machine.cpu.reg_set(Mode::User, 0, 14);
+            machine.handle_billing_service(15);
+            assert_eq!(machine.register(0), 1);
+            assert_eq!(machine.memory.r32(marker), 0);
+            machine.dispatch_pending_callbacks(100).unwrap();
+            assert_eq!(machine.memory.r32(marker), 1);
+            assert!(machine.pending_callbacks.is_empty());
+            machine.memory.w32(marker, 0);
+            machine.cpu.reg_set(Mode::User, 0, 14);
+            machine.handle_billing_service(15);
+            machine.handle_billing_service(16);
+            machine.dispatch_pending_callbacks(100).unwrap();
+            assert_eq!(machine.memory.r32(marker), 0);
+        }
+    }
+
+    #[test]
     fn record_sections_roundtrip_little_endian_values_in_both_guest_byte_orders() {
         fn call(machine: &mut CoolbarMachine, object: u32, method: u32, args: [u32; 2]) -> u32 {
             machine.cpu.reg_set(Mode::User, 0, object);

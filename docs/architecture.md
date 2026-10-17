@@ -90,6 +90,10 @@ The v3 billing entries retain the address differences used by guest wrappers:
 remaining-days is 3764 bytes after pay-count, and the SMS entry is another 1376
 bytes later. These entries use existing offline billing semantics and defer the
 local SMS result callback from the sixth argument. No external SMS is sent.
+The fixed-manager SMS entry accepts its existing app ID 14 and reads the callback
+from the seventh argument. Accepted requests defer the same local success value
+(`1`) as the native entry; rejected requests do not queue a callback, and cancel
+removes pending SMS results.
 
 The legacy GameManagerOld text-box constructor (index 71) uses the same bounded
 initializer as the direct text-box method path. Its methods end at offset
@@ -102,6 +106,10 @@ RGB565 blitter. The constructor stores its scanline at offset 0, target at 4,
 capacity at 8, ID/image arrays at 12/16, count at 20, and release marker at 22.
 Release frees the owned allocations and clears these fields; unknown image
 indices and exhausted capacities do not allocate fallback objects.
+The picture-library number method at `+0x44` draws signed decimal glyphs from a
+selected image to the library's current target. Its stacked arguments provide
+cell height, position and alignment; zero, negative values and clipped output
+use the same transparent blitter as the library's other drawing methods.
 
 CoolbarEmu executes native CBE applications instead of replacing their game logic with a scene preview. The core is platform-independent and exposes a framebuffer plus phone-key input to frontends.
 
