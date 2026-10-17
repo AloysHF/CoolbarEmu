@@ -45,7 +45,7 @@ signatures and configuration keys are not supported.
   screens without the retired payment server; no real charge or SMS is performed
 - **Login fields** — basic numeric account/password controls with focus,
   password masking and save-state preservation; online authentication is not implemented
-- **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction with format-specific RGB565 palette byte order
+- **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction with format-specific RGB565 palette byte order; picture-library numeric glyphs support HUD counters and selected drawing targets
 - **Text rendering** — GBK and guest-endian UCS-2 strings, clipped and wrapped
   text, and offscreen drawing with an embedded Unicode bitmap font
 - **Screen composition** — resource initialization, stacked backgrounds and

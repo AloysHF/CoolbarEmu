@@ -102,6 +102,10 @@ RGB565 blitter. The constructor stores its scanline at offset 0, target at 4,
 capacity at 8, ID/image arrays at 12/16, count at 20, and release marker at 22.
 Release frees the owned allocations and clears these fields; unknown image
 indices and exhausted capacities do not allocate fallback objects.
+The picture-library number method at `+0x44` draws signed decimal glyphs from a
+selected image to the library's current target. Its stacked arguments provide
+cell height, position and alignment; zero, negative values and clipped output
+use the same transparent blitter as the library's other drawing methods.
 
 CoolbarEmu executes native CBE applications instead of replacing their game logic with a scene preview. The core is platform-independent and exposes a framebuffer plus phone-key input to frontends.
 

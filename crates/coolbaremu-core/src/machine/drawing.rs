@@ -911,6 +911,39 @@ impl CoolbarMachine {
                 }
                 self.set_result(0);
             }
+            0x44 => {
+                let index = argument & 0xffff;
+                let number = (self.register(2) as i32).to_string();
+                let width = signed_coord(self.register(3));
+                let height = signed_coord(self.argument(4));
+                let x = signed_coord(self.argument(5));
+                let y = signed_coord(self.argument(6));
+                let alignment = self.argument(7);
+                if index < count && width > 0 && height > 0 {
+                    let image = self.memory.r32(images + index * 4);
+                    let total = number.len() as i32 * width;
+                    let left = match alignment {
+                        1 => x - total / 2,
+                        2 => x - total,
+                        _ => x,
+                    };
+                    for (position, digit) in number.bytes().enumerate() {
+                        let glyph = if digit == b'-' { 10 } else { digit - b'0' };
+                        self.blit_image(
+                            target,
+                            image,
+                            i32::from(glyph) * width,
+                            0,
+                            width,
+                            height,
+                            left + position as i32 * width,
+                            y,
+                            true,
+                        );
+                    }
+                }
+                self.set_result(0);
+            }
             0x4c => {
                 self.memory.w32(library + 4, argument);
                 let width = if argument == 0 {
@@ -2229,6 +2262,95 @@ mod tests {
 mod rendering_tests {
     use super::*;
     use armv4t_emu::Mode;
+
+    #[test]
+    fn picture_library_numbers_use_stack_geometry_and_selected_target() {
+        for big_endian in [false, true] {
+            for wide in [false, true] {
+                let mut machine = CoolbarMachine::new_blank_for_tests();
+                let mut memory = super::super::memory::MachineMemory::new(big_endian);
+                memory.regions = std::mem::take(&mut machine.memory.regions);
+                machine.memory = memory;
+                machine.wide_images = wide;
+                machine.initialize_screen();
+                let library = machine.allocate(0x54);
+                let images = machine.allocate(4);
+                let image = machine.allocate(32);
+                let glyphs = machine.allocate(96);
+                machine.memory.w32(image, glyphs);
+                machine.write_image_dims(image, 22, 2);
+                for row in 0..2 {
+                    for glyph in 0..11 {
+                        machine
+                            .memory
+                            .w16(glyphs + (row * 24 + glyph * 2) * 2, 0x1200 + glyph as u16);
+                    }
+                }
+                let target = machine.allocate(32);
+                let pixels = machine.allocate(640);
+                machine.memory.w32(target, pixels);
+                machine.write_image_dims(target, 80, 4);
+                machine.memory.w32(library + 4, target);
+                machine.memory.w16(library + 8, 1);
+                machine.memory.w32(library + 16, images);
+                machine.memory.w16(library + 20, 1);
+                machine.memory.w32(images, image);
+                let stack = machine.allocate(20);
+                machine.cpu.reg_set(Mode::User, reg::SP, stack);
+                for (number, alignment, x) in [
+                    (0i32, 0, 40),
+                    (12, 1, 40),
+                    (-12, 2, 40),
+                    (i32::MIN, 0, 40),
+                    (12, 0, -1),
+                ] {
+                    for pixel in 0..320 {
+                        machine.memory.w16(pixels + pixel * 2, 0x7bef);
+                    }
+                    for (index, value) in [library, 0, number as u32, 2].into_iter().enumerate() {
+                        machine.cpu.reg_set(Mode::User, index as u8, value);
+                    }
+                    for (index, value) in [2, x as u32, 1, alignment, 0xdeadbeef]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        machine.memory.w32(stack + index as u32 * 4, value);
+                    }
+                    for register in 4..8 {
+                        machine.cpu.reg_set(Mode::User, register, 0xdeadbeef);
+                    }
+                    machine.handle_fixed_gameold_object_service(11);
+                    let text = number.to_string();
+                    let total = text.len() as i32 * 2;
+                    let left = x - match alignment {
+                        1 => total / 2,
+                        2 => total,
+                        _ => 0,
+                    };
+                    let mut expected = vec![0x7bef; 320];
+                    for (index, digit) in text.bytes().enumerate() {
+                        let column = left + index as i32 * 2;
+                        if (0..80).contains(&column) {
+                            let glyph = if digit == b'-' { 10 } else { digit - b'0' };
+                            for row in 1..3 {
+                                expected[row * 80 + column as usize] = 0x1200 + u16::from(glyph);
+                            }
+                        }
+                    }
+                    let actual: Vec<_> = (0..320)
+                        .map(|pixel| machine.memory.r16(pixels + pixel * 2))
+                        .collect();
+                    assert_eq!(
+                        actual, expected,
+                        "number={number} alignment={alignment} wide={wide} big_endian={big_endian}"
+                    );
+                    assert_eq!(machine.memory.r16(SCREEN_IMAGE), 0);
+                    assert_eq!(machine.memory.r16(library + 20), 1);
+                    assert_eq!(machine.register(reg::SP), stack);
+                }
+            }
+        }
+    }
 
     #[test]
     fn closing_an_overlay_resumes_without_repeating_initialization() {
