@@ -45,6 +45,9 @@ pub(crate) struct NetEvent {
     /// Legacy screenless gate retained for existing serialized event queues.
     /// New HTTP requests deliver errors even when a loading screen exists.
     pub(crate) screenless_only: bool,
+    /// Skip continuation waits after an unavailable channel or HTTP POST.
+    #[serde(default)]
+    pub(crate) expedite_timers: bool,
 }
 
 impl CoolbarMachine {
@@ -96,7 +99,17 @@ impl CoolbarMachine {
         if connect_id_out != 0 {
             self.memory.w32(connect_id_out, connect_id);
         }
-        self.queue_net_event(NET_EVENT_CHANNEL_ERROR, 0, 0, 0, callback, 0, 1, false);
+        self.queue_net_event(
+            NET_EVENT_CHANNEL_ERROR,
+            0,
+            0,
+            0,
+            callback,
+            0,
+            1,
+            false,
+            true,
+        );
         self.set_result(0);
     }
 
@@ -148,8 +161,27 @@ impl CoolbarMachine {
         if out != 0 {
             self.memory.w32(out, self.next_net_connect_id);
         }
+        if let Some(response) = super::offline_payment::consumption_receipt(&self.net_last_http_url)
+        {
+            if self.net_events.len() > MAX_NET_EVENTS - 2 {
+                self.set_result(0);
+                return;
+            }
+            let pointer = self.allocate(response.len() as u32);
+            if pointer == 0 {
+                self.set_result(0);
+                return;
+            }
+            self.memory.write_bytes(pointer, &response);
+            let length = response.len() as u32;
+            self.net_downlink_bytes = self.net_downlink_bytes.saturating_add(length as u64);
+            self.queue_net_event(0, pointer, length, length, callback, 0, 1, false, false);
+            self.queue_net_event(1, 0, 0, 0, callback, 0, 2, false, false);
+            self.set_result(1);
+            return;
+        }
         // An unavailable server must not produce a fabricated application payload.
-        self.queue_net_event(NETREQUEST_ERROR, 0, 0, 0, callback, 0, 1, false);
+        self.queue_net_event(NETREQUEST_ERROR, 0, 0, 0, callback, 0, 1, false, false);
         self.set_result(1);
     }
 
@@ -187,7 +219,7 @@ impl CoolbarMachine {
             self.memory.w32(out, self.next_net_connect_id);
         }
         // Loading screens still need the completion to enter their offline path.
-        self.queue_net_event(NETREQUEST_ERROR, 0, 0, 0, callback, 0, 3, false);
+        self.queue_net_event(NETREQUEST_ERROR, 0, 0, 0, callback, 0, 3, false, true);
         self.set_result(1);
     }
 
@@ -225,6 +257,7 @@ impl CoolbarMachine {
         context: u32,
         delay_frames: u32,
         screenless_only: bool,
+        expedite_timers: bool,
     ) {
         if self.net_events.len() >= MAX_NET_EVENTS || callback == 0 {
             return;
@@ -238,6 +271,7 @@ impl CoolbarMachine {
             context,
             delay_frames,
             screenless_only,
+            expedite_timers,
         });
     }
 
@@ -273,14 +307,21 @@ impl CoolbarMachine {
         }
         // Firmware callback ABI: r0/r1/r2 carry the payload view and r3 is
         // the event type. Context stays associated with the channel table.
-        self.invoke_callback_with_r3(
+        let previous = self.dispatching_offline_error;
+        self.dispatching_offline_error = event.expedite_timers;
+        if event.expedite_timers {
+            self.offline_request_screen = Some(self.active_screen);
+        }
+        let result = self.invoke_callback_with_r3(
             event.callback,
             event.r0,
             event.r1,
             event.r2,
             event.event_type,
             instruction_limit,
-        )
+        );
+        self.dispatching_offline_error = previous;
+        result
     }
 
     fn read_guest_cstring(&mut self, pointer: u32, max_len: usize) -> String {

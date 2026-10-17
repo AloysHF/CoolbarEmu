@@ -1,6 +1,6 @@
 # Architecture
 
-Offline HTTP GET uses `(url, callback, handle_out)`: the third argument receives
+Ordinary offline HTTP GET uses `(url, callback, handle_out)`: the third argument receives
 a unique request handle. The deferred callback receives `(0, 0, 0, 9)` rather than
 a fabricated application data packet. GET errors reach active screens as well as
 screenless callers. Raw channel attempts deliver `(0, 0, 0, 6)` with a false
@@ -8,9 +8,31 @@ synchronous result instead of claiming a live connection. `SendData` takes the
 channel handle, length and payload pointer in that order and returns false
 offline; it retains bounded diagnostic bytes without fabricating server data.
 HTTP POST uses `(url, length, body, callback, handle_out)` and delivers the same
-offline error after its existing three-tick delay, including to loading screens.
+offline error after its three-tick queue delay, including to loading screens.
+Servers are assumed unavailable: timer callbacks registered during channel/POST error
+delivery, or by the waiting screen immediately afterward, are remembered as
+offline continuations. Only the first subsequent timer can consume that screen
+association. New timers using those same
+callbacks on loader screens in the original executable's data image expire on
+the next timer dispatch, including subsequent update stages
+scheduled by screen logic. Other timer callbacks, existing timers and GET
+error handling retain their requested delays; the guest clock keeps
+its normal pace. Heap-owned embedded application screens keep normal timeouts
+even when they reuse the loader's network wrappers. The error-delivery scope resets even on callback failure.
+The callback registry is transient and adds no serialized state fields.
 An accepted request is not a completed update: suppressing that callback leaves
 embedded applications waiting at their startup prompt.
+
+The legacy payment service has a local consumption backend for its version 4.2
+`/vm/cl` endpoint on the recognized service hosts. Only validated `consume`
+requests receive an emulated receipt; login, recharge, other actions, unknown
+hosts and unsupported versions retain offline errors. The receipt contains an
+accepted/completed result, no nested payment data, byte-length-prefixed GBK text,
+zero remote wallet/ticket balances and one local consumption. Delivery uses a
+data callback `(payload, length, length, 0)` followed by completion `(0, 0, 0, 1)`.
+The guest payment module parses and acknowledges the receipt itself before
+returning to the game. This matches local billing simulation elsewhere in the
+core and makes no network request, real payment or carrier SMS.
 
 An empty registered resource package is populated from the already parsed main
 archive when a known resource is requested. Both guest package tables and host

@@ -36,9 +36,13 @@ signatures and configuration keys are not supported.
   packed-rectangle collision detection
 - **Guest filesystem** — sandboxed in-memory files used by CBE installers and
   file-backed resource packages
-- **Offline startup** — HTTP errors reach loading screens so supported embedded
-  applications can enter their local menus; online content and paid gameplay
+- **Offline startup** — servers are treated as unavailable: continuation timers
+  used after offline channel/HTTP POST errors advance without retry waits so supported
+  applications can enter local menus; online content and paid gameplay
   remain subject to the limitations in [Game Compatibility](docs/Game-Compatibility.md)
+- **Local billing simulation** — supported legacy point-play consumption requests
+  receive a local receipt, allowing 1943 V101 to enter its selection and battle
+  screens without the retired payment server; no real charge or SMS is performed
 - **Login fields** — basic numeric account/password controls with focus,
   password masking and save-state preservation; online authentication is not implemented
 - **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction with format-specific RGB565 palette byte order
