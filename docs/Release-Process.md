@@ -15,12 +15,16 @@ Version numbers must be updated in **two files**:
 
 | File | Field | Current |
 |------|-------|---------|
-| `Cargo.toml` (workspace root) | `[workspace.package] version` | `"0.1.0"` |
-| `crates/coolbaremu-libretro/coolbaremu_libretro.info` | `display_version` | `"0.1.0"` |
+| `Cargo.toml` (workspace root) | `[workspace.package] version` | `"0.2.0"` |
+| `crates/coolbaremu-libretro/coolbaremu_libretro.info` | `display_version` | `"0.2.0"` |
 
 Both values must match. The `.info` file is copied directly into the
 release artifacts — RetroArch reads `display_version` to display the core
 version to users.
+
+Run `cargo check --workspace` after editing the versions to regenerate the
+workspace package versions in the local `Cargo.lock`. This repository ignores
+`Cargo.lock`; do not force-add it for a release.
 
 ```bash
 # Example: bumping to 0.2.0
@@ -35,7 +39,7 @@ sed -i 's/^display_version = "0.1.0"/display_version = "0.2.0"/' \
 ### 2. Commit the version bump
 
 ```bash
-git add Cargo.toml Cargo.lock crates/coolbaremu-libretro/coolbaremu_libretro.info
+git add Cargo.toml crates/coolbaremu-libretro/coolbaremu_libretro.info docs/Release-Process.md
 git commit -m "chore: bump version to 0.2.0"
 git push origin master
 ```
@@ -53,9 +57,11 @@ git push origin v0.2.0
 
 Pushing the tag triggers `.github/workflows/release.yml`, which:
 
-1. **Builds standalone binaries** for Linux, macOS (x86_64 + aarch64), and Windows
-2. **Builds libretro cores** for the same platforms, renaming the cdylib to
-   `coolbaremu_libretro.<ext>` and bundling `coolbaremu_libretro.info`
+1. **Builds standalone binaries** for Linux and macOS (x86_64 + aarch64), and
+   Windows (x86_64)
+2. **Builds libretro cores** for the same platforms, plus Linux and Windows
+   i686, Android, iOS, and webOS, using the platform-specific core filenames
+   and bundling `coolbaremu_libretro.info`
 3. **Creates a draft GitHub Release** with:
    - Auto-generated release notes (PRs and commits since the previous tag)
    - A download table for standalone and libretro artifacts
@@ -66,12 +72,22 @@ Pushing the tag triggers `.github/workflows/release.yml`, which:
 1. Go to [Releases](https://github.com/AloysHF/CoolbarEmu/releases)
 2. Find the draft release created by CI
 3. Review the auto-generated changelog — edit if needed
-4. Verify all expected artifacts are attached:
+4. Verify all 15 expected artifacts are attached:
    - `coolbaremu-linux-x86_64.tar.gz`
+   - `coolbaremu-linux-aarch64.tar.gz`
    - `coolbaremu-macos-x86_64.tar.gz`
    - `coolbaremu-macos-aarch64.tar.gz`
    - `coolbaremu-windows-x86_64.zip`
-   - `*-libretro.*` (one per platform)
+   - `coolbaremu-linux-x86_64-libretro.tar.gz`
+   - `coolbaremu-linux-aarch64-libretro.tar.gz`
+   - `coolbaremu-linux-i686-libretro.tar.gz`
+   - `coolbaremu-macos-x86_64-libretro.tar.gz`
+   - `coolbaremu-macos-aarch64-libretro.tar.gz`
+   - `coolbaremu-windows-x86_64-libretro.zip`
+   - `coolbaremu-windows-i686-libretro.zip`
+   - `coolbaremu-android-libretro.tar.gz`
+   - `coolbaremu-ios-libretro.tar.gz`
+   - `coolbaremu-webos-libretro.tar.gz`
 5. Click **Publish release**
 
 ### 6. Sync upstream libretro metadata and builds

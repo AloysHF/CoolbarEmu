@@ -13,7 +13,7 @@ members = [
 default-members = ["crates/coolbaremu-libretro"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "A Coolbar/CBE game emulator written in Rust"
 license = "BSD-3-Clause"
