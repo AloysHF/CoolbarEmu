@@ -42,7 +42,8 @@ signatures and configuration keys are not supported.
   remain subject to the limitations in [Game Compatibility](docs/Game-Compatibility.md)
 - **Local billing simulation** — supported legacy point-play consumption requests
   receive a local receipt, allowing 1943 V101 to enter its selection and battle
-  screens without the retired payment server; no real charge or SMS is performed
+  screens without the retired payment server; accepted legacy SMS billing requests
+  receive deferred local success, allowing Sheep V10 to enter play without a real charge or SMS
 - **Login fields** — basic numeric account/password controls with focus,
   password masking and save-state preservation; online authentication is not implemented
 - **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction with format-specific RGB565 palette byte order; picture-library numeric glyphs support HUD counters and selected drawing targets

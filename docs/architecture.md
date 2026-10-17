@@ -90,6 +90,10 @@ The v3 billing entries retain the address differences used by guest wrappers:
 remaining-days is 3764 bytes after pay-count, and the SMS entry is another 1376
 bytes later. These entries use existing offline billing semantics and defer the
 local SMS result callback from the sixth argument. No external SMS is sent.
+The fixed-manager SMS entry accepts its existing app ID 14 and reads the callback
+from the seventh argument. Accepted requests defer the same local success value
+(`1`) as the native entry; rejected requests do not queue a callback, and cancel
+removes pending SMS results.
 
 The legacy GameManagerOld text-box constructor (index 71) uses the same bounded
 initializer as the direct text-box method path. Its methods end at offset
