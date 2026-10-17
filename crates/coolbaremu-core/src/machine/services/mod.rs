@@ -8,6 +8,7 @@ mod download;
 mod game;
 mod memory;
 pub(crate) mod network;
+mod offline_payment;
 mod record;
 mod scene;
 mod screen;

@@ -818,6 +818,12 @@ pub struct CoolbarMachine {
     pub(crate) net_last_uplink: Vec<u8>,
     #[serde(skip, default)]
     pub(crate) net_last_http_url: String,
+    #[serde(skip, default)]
+    pub(crate) dispatching_offline_error: bool,
+    #[serde(skip, default)]
+    pub(crate) offline_timer_callbacks: std::collections::BTreeSet<u32>,
+    #[serde(skip, default)]
+    pub(crate) offline_request_screen: Option<u32>,
     /// Deterministic LCG state for the guest `rand` service. Skipped in
     /// save-states so the codec layout stays stable.
     #[serde(skip, default = "default_rand_state")]
@@ -1007,6 +1013,9 @@ impl CoolbarMachine {
             net_downlink_bytes: 0,
             net_last_uplink: Vec::new(),
             net_last_http_url: String::new(),
+            dispatching_offline_error: false,
+            offline_timer_callbacks: std::collections::BTreeSet::new(),
+            offline_request_screen: None,
             rand_state: default_rand_state(),
         };
         machine.initialize_tables();
@@ -1996,6 +2005,9 @@ impl CoolbarMachine {
             net_downlink_bytes: 0,
             net_last_uplink: Vec::new(),
             net_last_http_url: String::new(),
+            dispatching_offline_error: false,
+            offline_timer_callbacks: std::collections::BTreeSet::new(),
+            offline_request_screen: None,
             rand_state: default_rand_state(),
         }
     }
@@ -2100,6 +2112,68 @@ mod tests {
     }
 
     #[test]
+    fn local_consumption_get_delivers_a_complete_receipt_in_firmware_order() {
+        for big_endian in [false, true] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30);
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let url = HEAP_BASE + 0x100;
+            let output = HEAP_BASE + 0x200;
+            let callback = HEAP_BASE + 0x1000;
+            machine.memory.w16(callback, 0x4770);
+            machine.memory.write_bytes(
+                url,
+                b"http://vmt.51coolbar.com/vm/cl?ac=consume&data=000077D8encoded&pVer=4&Subver=2\0",
+            );
+            machine.set_user_register(0, url);
+            machine.set_user_register(1, callback | 1);
+            machine.set_user_register(2, output);
+            machine.handle_network_service(3);
+            assert_eq!(machine.register(0), 1);
+            assert_ne!(machine.memory.r32(output), 0);
+            assert_eq!(machine.net_events.len(), 2);
+            let payload = machine.net_events[0].r0;
+            let length = machine.net_events[0].r1;
+            assert_eq!(machine.net_events[0].r2, length);
+            assert_eq!(machine.net_events[0].event_type, 0);
+            assert_eq!(machine.net_events[1].event_type, 1);
+            assert_eq!(machine.net_downlink_bytes, length as u64);
+            let bytes: Vec<_> = (0..length)
+                .map(|i| machine.memory.r8(payload + i))
+                .collect();
+            assert_eq!(&bytes[..4], &[1, 1, 0, 0]);
+            let message_end = 5 + bytes[4] as usize;
+            assert_eq!(bytes.len(), message_end + 10);
+            assert_eq!(&bytes[message_end..message_end + 8], &[0; 8]);
+            assert_eq!(&bytes[message_end + 8..], &[0, 1]);
+            machine.dispatch_network_events(10_000).unwrap();
+            machine.dispatch_network_events(10_000).unwrap();
+            assert_eq!(machine.register(3), 0);
+            assert_eq!(
+                (
+                    machine.register(0),
+                    machine.register(1),
+                    machine.register(2)
+                ),
+                (payload, length, length)
+            );
+            machine.dispatch_network_events(10_000).unwrap();
+            assert_eq!(machine.register(3), 1);
+            assert_eq!(
+                (
+                    machine.register(0),
+                    machine.register(1),
+                    machine.register(2)
+                ),
+                (0, 0, 0)
+            );
+            assert!(machine.net_events.is_empty());
+        }
+    }
+
+    #[test]
     fn network_close_deactivates_channel() {
         let mut machine = CoolbarMachine::new_blank_for_tests();
         machine.set_user_register(2, 0x0100_3001);
@@ -2174,13 +2248,158 @@ mod tests {
         assert!(machine.net_events.is_empty());
     }
 
+    #[test]
+    fn offline_post_error_accelerates_its_continuation_timer_only() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.executable.preferred_code_address = ROM_BASE;
+        machine.executable.preferred_data_address = HEAP_BASE;
+        machine.executable.data_image_size = 0x2000;
+        machine.active_screen = HEAP_BASE;
+        let stub = HEAP_BASE + 0x1000;
+        let next = HEAP_BASE + 0x1100;
+        let continuation = SERVICE_BASE + 0x8000;
+        machine.memory.w16(continuation, 0x4770);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30);
+        // Tail-call StartTimer(3000, continuation, 7) from the HTTP callback.
+        for (offset, instruction) in [0x4802, 0x4903, 0x2207, 0x4b03, 0x4718, 0x46c0]
+            .into_iter()
+            .enumerate()
+        {
+            machine.memory.w16(stub + offset as u32 * 2, instruction);
+        }
+        machine.memory.w32(stub + 12, 3000);
+        machine.memory.w32(stub + 16, continuation | 1);
+        machine
+            .memory
+            .w32(stub + 20, SERVICE_BASE + 7 * TABLE_STRIDE);
+        for offset in 0..24 {
+            let byte = machine.memory.r8(stub + offset);
+            machine.memory.w8(next + offset, byte);
+        }
+        machine.memory.w32(stub + 16, next | 1);
+        machine.memory.w32(next + 16, next | 1);
+
+        machine.set_user_register(0, 3000);
+        machine.set_user_register(1, continuation | 1);
+        machine.handle_timer_service(0);
+        machine.set_user_register(3, stub | 1);
+        machine.handle_network_service(4);
+        for _ in 0..4 {
+            machine.dispatch_network_events(10_000).unwrap();
+        }
+        assert!(machine.net_events.is_empty());
+        assert_eq!(machine.timers[0].remaining_frames, 30);
+        assert_eq!(machine.timers[1].remaining_frames, 1);
+        assert_eq!(machine.timers[1].context, 7);
+        assert!(!machine.dispatching_offline_error);
+        machine.dispatch_timers(10_000).unwrap();
+        assert!(machine.timers[1].active);
+        assert_eq!(machine.timers[1].remaining_frames, 1);
+        machine.set_user_register(0, TIMER_BASE_ID + 1);
+        machine.handle_timer_service(1);
+        assert!(!machine.timers[1].active);
+        assert_eq!(machine.timers[0].remaining_frames, 29);
+
+        machine.set_user_register(0, 3000);
+        machine.set_user_register(1, continuation | 1);
+        machine.handle_timer_service(0);
+        assert_eq!(machine.timers[1].remaining_frames, 30);
+
+        // GET failure dialogs must keep their normal timeout behavior.
+        machine.memory.w32(stub + 16, continuation | 1);
+        machine.set_user_register(1, stub | 1);
+        machine.set_user_register(2, 0);
+        machine.handle_network_service(3);
+        machine.dispatch_network_events(10_000).unwrap();
+        machine.dispatch_network_events(10_000).unwrap();
+        assert_eq!(machine.timers[2].remaining_frames, 30);
+
+        // The embedded application's heap-owned UI retains normal timeouts.
+        machine.active_screen = HEAP_BASE + 0x3000;
+        machine.set_user_register(0, 3000);
+        machine.set_user_register(1, next | 1);
+        machine.handle_timer_service(0);
+        assert_eq!(machine.timers[3].remaining_frames, 30);
+
+        machine.queue_net_event(9, 0, 0, 0, 1, 0, 0, false, true);
+        assert!(machine.dispatch_network_events(10_000).is_err());
+        assert!(!machine.dispatching_offline_error);
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_offline_post_startup_skips_update_delay() {
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        for name in [
+            "1943命运之决战V101.CBE",
+            "三国志V101.CBE",
+            "傲气雄鹰V101.CBE",
+            "陆小凤传奇V101.CBE",
+            "毒蛇行动V101.CBE",
+            "僵尸先生V101.CBE",
+            "联网五子棋(新版)V101.CBE",
+        ] {
+            let archive =
+                CbeArchive::load(&std::path::PathBuf::from(&game_dir).join(name)).unwrap();
+            let mut machine = CoolbarMachine::new(&archive).unwrap();
+            machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            let update_screen = machine.active_screen;
+            for _ in 1..10 {
+                machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            }
+            assert_eq!(machine.state(), MachineState::Ready, "{name}");
+            assert!(
+                [0, 4].iter().any(|index| machine
+                    .service_calls()
+                    .get(&(9, *index))
+                    .copied()
+                    .unwrap_or(0)
+                    > 0),
+                "{name}"
+            );
+            assert_ne!(
+                machine.active_screen, update_screen,
+                "{name}: {:?}",
+                machine.timers
+            );
+            assert_eq!(machine.network_downlink_bytes(), 0);
+        }
+    }
+
+    #[test]
+    fn offline_post_continuation_can_be_scheduled_by_screen_logic() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.executable.preferred_code_address = ROM_BASE;
+        machine.executable.preferred_data_address = HEAP_BASE;
+        machine.executable.data_image_size = 0x2000;
+        let stub = SERVICE_BASE + 0x8000;
+        machine.memory.w16(stub, 0x4770);
+        machine.active_screen = HEAP_BASE;
+        machine.set_user_register(3, stub | 1);
+        machine.handle_network_service(4);
+        for _ in 0..4 {
+            machine.dispatch_network_events(10_000).unwrap();
+        }
+        assert!(!machine.dispatching_offline_error);
+        machine.set_user_register(0, 3000);
+        machine.set_user_register(1, stub | 1);
+        machine.handle_timer_service(0);
+        assert_eq!(machine.timers[0].remaining_frames, 1);
+        assert!(machine.offline_request_screen.is_none());
+        machine.set_user_register(0, 3000);
+        machine.set_user_register(1, (stub + 2) | 1);
+        machine.handle_timer_service(0);
+        assert_eq!(machine.timers[1].remaining_frames, 30);
+    }
+
     /// A screenless frame waits while network completions are in flight;
     /// the callback they deliver is what registers the first screen.  The
     /// bail only returns once the queue is empty.
     #[test]
     fn screenless_frame_waits_for_pending_network_events() {
         let mut machine = CoolbarMachine::new_blank_for_tests();
-        machine.queue_net_event(0, 0, 0, 0, (SERVICE_BASE + 0x8000) | 1, 0, 1, false);
+        machine.queue_net_event(0, 0, 0, 0, (SERVICE_BASE + 0x8000) | 1, 0, 1, false, false);
         machine.run_frame(10_000).unwrap();
         machine.dispatch_network_events(10_000).unwrap();
         machine.dispatch_network_events(10_000).unwrap();

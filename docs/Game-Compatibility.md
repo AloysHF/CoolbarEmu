@@ -40,8 +40,14 @@ selection/back navigation, plus IM login rendering and field-focus navigation.
 Fish Classic title/menu and help navigation are also checked.
 Zombie Master (recommended variant) title/menu, touch selection, help text and
 return navigation are checked with its supplied companion resources.
-1943 V101, War Chess V101 and Flying Eagle V101 reach their local menus after
-offline update completion; their paid gameplay is still unavailable.
+1943 V101 reaches aircraft/equipment selection and battle through local point-play
+billing simulation. War Chess V101 displays the same local receipt; its battle
+path remains unverified. Flying Eagle V101 still reports payment failure.
+In 1943, acknowledge the receipt with the right soft key (`E`), then use the
+left soft key (`Q`) to open equipment and confirm the sortie.
+Servers are treated as unavailable. Continuation timers used after offline channel
+or HTTP POST errors advance without retry waits to avoid prolonged startup update
+prompts. Normal game timers and GET error handling retain their pace.
 Variant-specific coverage is listed below.
 Fifteen embedded-program variants restore normal title/menu rendering and basic
 selection through 2,000-frame input checks. Active but blank/loading variants
@@ -63,12 +69,12 @@ not provide the original server's content or a real carrier payment service.
 
 | # | Application / file | Display | Screenshot | Network | Execution | Coverage / limitation |
 | ---: | --- | --- | --- | --- | --- | --- |
-| 1 | `A/1943命运之决战V101.CBE` | 240×320 | <img src="images/A/1943命运之决战V101.png" width="120" alt="1943命运之决战V101 idle frame"> | Offline menu; paid play unavailable | Ready | Offline title/menu, help, fee prompt, network-error panel and return navigation checked; paid gameplay remains blocked by offline billing |
+| 1 | `A/1943命运之决战V101.CBE` | 240×320 | <img src="images/A/1943命运之决战V101.png" width="120" alt="1943命运之决战V101 idle frame"> | Local billing simulation | Ready | Local point-play receipt, aircraft/equipment selection, battle start, directional movement, firing and retry flow checked; full campaign and audio unverified |
 | 2 | `A/三国大富翁(新品).CBE` | 240×320 | <img src="images/A/三国大富翁(新品).png" width="120" alt="三国大富翁(新品) idle frame"> | Not assessed | Ready | Title/menu, help text, scrolling and back navigation checked for 2,000 frames; complete gameplay unverified |
 | 3 | `A/三国大富翁V10.CBE` | 240×320 | <img src="images/A/三国大富翁V10.png" width="120" alt="三国大富翁V10 idle frame"> | Not assessed | Ready | Image palette colors checked; interaction/gameplay unverified |
 | 4 | `A/三国志(新品)V10.CBE` | 240×320 | <img src="images/A/三国志(新品)V10.png" width="120" alt="三国志(新品)V10 idle frame"> | Not assessed | Ready | Menu, introduction and purchase-failure recovery checked; paid battle unverified |
 | 5 | `A/三国志@火.CBE` | 240×320 | <img src="images/A/三国志@火.png" width="120" alt="三国志@火 idle frame"> | Not assessed | Ready | Loading message renders; basic startup incomplete |
-| 6 | `A/三国志V101.CBE` | 240×320 | <img src="images/A/三国志V101.png" width="120" alt="三国志V101 idle frame"> | Offline menu; paid play unavailable | Ready | Offline title/menu, help and game introduction checked; starting play reaches an offline network-error panel; paid gameplay unverified |
+| 6 | `A/三国志V101.CBE` | 240×320 | <img src="images/A/三国志V101.png" width="120" alt="三国志V101 idle frame"> | Local receipt; battle unverified | Ready | Title/menu, help and game introduction checked; local point-play receipt renders; battle unverified |
 | 7 | `A/俄罗斯方块(免费).CBE` | 240×320 | <img src="images/A/俄罗斯方块(免费).png" width="120" alt="俄罗斯方块(免费) idle frame"> | Not assessed | Ready | Title/menu rendering and basic selection checked for 2,000 frames; complete gameplay unverified |
 | 8 | `A/傲气雄鹰V101.CBE` | 240×320 | <img src="images/A/傲气雄鹰V101.png" width="120" alt="傲气雄鹰V101 idle frame"> | Offline menu; paid play unavailable | Ready | Offline title/menu, help, fee prompt, payment failure and return navigation checked; paid gameplay remains blocked by offline billing |
 | 9 | `A/僵尸先生(强推).CBE` | 320×240 | <img src="images/A/僵尸先生(强推).png" width="120" alt="僵尸先生(强推) idle frame"> | No known requirement | Ready | Title/menu, touch selection, help text and return verified for 2,000 frames with supplied companion resources; CBE-only installation and complete gameplay unverified |
@@ -104,7 +110,7 @@ not provide the original server's content or a real carrier payment service.
 | 39 | `A/封神演义V10.CBE` | 240×320 | <img src="images/A/封神演义V10.png" width="120" alt="封神演义V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 40 | `A/封神演义V101.CBE` | 240×320 | <img src="images/A/封神演义V101.png" width="120" alt="封神演义V101 idle frame"> | Not assessed | Ready | Offline continuation frame captured; interaction/gameplay unverified |
 | 41 | `A/小酷V10.CBE` | 240×320 | <img src="images/A/小酷V10.png" width="120" alt="小酷V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
-| 42 | `A/小酷V101.CBE` | 240×320 | <img src="images/A/小酷V101.png" width="120" alt="小酷V101 idle frame"> | Required | Ready | Offline startup advances past update prompt; waiting screen, timeout popup and dismissal checked without guest fault; message text and usable online content still missing |
+| 42 | `A/小酷V101.CBE` | 240×320 | <img src="images/A/小酷V101.png" width="120" alt="小酷V101 idle frame"> | Required | Ready | Offline startup advances past update prompt; waiting screen, timeout popup and single dismissal checked; subsequent Back can fault, and message text and usable online content are missing |
 | 43 | `A/小酷书城(免费看书)V101.CBE` | 240×320 | <img src="images/A/小酷书城(免费看书)V101.png" width="120" alt="小酷书城(免费看书)V101 idle frame"> | Not assessed | Ready | Offline continuation frame captured; interaction/gameplay unverified |
 | 44 | `A/小酷农场(火爆上线)V10.CBE` | 240×320 | <img src="images/A/小酷农场(火爆上线)V10.png" width="120" alt="小酷农场(火爆上线)V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 45 | `A/小酷音乐(强推)V101.CBE` | 240×320 | <img src="images/A/小酷音乐(强推)V101.png" width="120" alt="小酷音乐(强推)V101 idle frame"> | Not assessed | Halted | Guest stops after offline continuation; usable startup and online content unverified |

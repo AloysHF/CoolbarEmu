@@ -16,7 +16,20 @@ impl CoolbarMachine {
                     self.set_result(0);
                     return;
                 }
-                let frames = delay_ms.saturating_add(TIMER_FRAME_MS - 1) / TIMER_FRAME_MS;
+                // Defunct servers cannot recover during an offline retry delay.
+                let offline_continuation =
+                    self.offline_request_screen.take() == Some(self.active_screen);
+                if self.dispatching_offline_error || offline_continuation {
+                    self.offline_timer_callbacks.insert(callback);
+                }
+                let data_start = self.executable.data_address();
+                let data_end = data_start.saturating_add(self.executable.data_image_size);
+                let loader_screen = (data_start..data_end).contains(&self.active_screen);
+                let frames = if loader_screen && self.offline_timer_callbacks.contains(&callback) {
+                    1
+                } else {
+                    delay_ms.saturating_add(TIMER_FRAME_MS - 1) / TIMER_FRAME_MS
+                };
                 let handle = self.timers.iter().position(|timer| !timer.active);
                 match handle {
                     Some(slot) => {
