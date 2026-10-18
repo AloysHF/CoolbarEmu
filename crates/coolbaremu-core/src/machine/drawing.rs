@@ -746,6 +746,27 @@ impl CoolbarMachine {
         self.set_result(0);
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn blit_picture_library_image(
+        &mut self,
+        target: u32,
+        image: u32,
+        sx: i32,
+        sy: i32,
+        width: i32,
+        height: i32,
+        x: i32,
+        y: i32,
+        alpha: bool,
+    ) {
+        if self.uses_fixed_manager_abi() && target == SCREEN_IMAGE_STRUCT {
+            // Fixed-manager callers crop glyph strips through the LCD descriptor.
+            self.legacy_clipped_blit(target, image, sx, sy, width, height, x, y, alpha);
+        } else {
+            self.blit_image(target, image, sx, sy, width, height, x, y, alpha);
+        }
+    }
+
     pub(crate) fn handle_picture_library_method(&mut self, offset: u32) {
         let library = self.register(0);
         let argument = self.register(1);
@@ -897,7 +918,7 @@ impl CoolbarMachine {
                             signed_coord(self.memory.r32(stack + 12)),
                         )
                     };
-                    self.blit_image(
+                    self.blit_picture_library_image(
                         target,
                         image,
                         sx,
@@ -929,7 +950,7 @@ impl CoolbarMachine {
                     };
                     for (position, digit) in number.bytes().enumerate() {
                         let glyph = if digit == b'-' { 10 } else { digit - b'0' };
-                        self.blit_image(
+                        self.blit_picture_library_image(
                             target,
                             image,
                             i32::from(glyph) * width,
@@ -2262,6 +2283,138 @@ mod tests {
 mod rendering_tests {
     use super::*;
     use armv4t_emu::Mode;
+
+    #[test]
+    fn fixed_picture_library_blits_respect_the_lcd_clip() {
+        for wide in [false, true] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            let mut memory = super::super::memory::MachineMemory::new(true);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.executable.big_endian = true;
+            machine.executable.preferred_code_address = 0x043e_0000;
+            machine.executable.code_image_size = machine.executable.code_size as u32 + 4;
+            machine.wide_images = wide;
+            machine.initialize_screen();
+            let library = machine.allocate(0x54);
+            let images = machine.allocate(4);
+            let image = machine.allocate(32);
+            let pixels = machine.allocate(64);
+            machine.memory.w32(image, pixels);
+            machine.write_image_dims(image, 6, 4);
+            for y in 0..4 {
+                for x in 0..6 {
+                    let color = if (x, y) == (2, 1) {
+                        0
+                    } else {
+                        0x100 + y * 6 + x
+                    };
+                    machine.memory.w16(pixels + (y * 8 + x) * 2, color as u16);
+                }
+            }
+            machine.memory.w16(library + 8, 1);
+            machine.memory.w32(library + 16, images);
+            machine.memory.w16(library + 20, 1);
+            machine.memory.w32(images, image);
+            let stack = machine.allocate(24);
+            machine.cpu.reg_set(Mode::User, reg::SP, stack);
+            for offset in [0x30, 0x34, 0x38, 0x3c, 0x40] {
+                let (cx, cy, x, y) = if offset == 0x30 {
+                    (1, 1, 0, 0)
+                } else {
+                    (10, 20, 9, 19)
+                };
+                for (r, value) in [cx, cy, 2, 2].into_iter().enumerate() {
+                    machine.cpu.reg_set(Mode::User, r as u8, value);
+                }
+                machine.handle_game_service(14);
+                for y in 0..26 {
+                    for x in 0..18 {
+                        machine.memory.w16(SCREEN_IMAGE + (y * 240 + x) * 2, 0x5a5a);
+                    }
+                }
+                for (r, value) in [library, 0, x, y].into_iter().enumerate() {
+                    machine.cpu.reg_set(Mode::User, r as u8, value);
+                }
+                for (i, value) in [1, 0, 4, 3].into_iter().enumerate() {
+                    machine.memory.w32(stack + i as u32 * 4, value);
+                }
+                machine.handle_fixed_gameold_object_service((offset - 0x18) / 4);
+                for y in 0..26 {
+                    for x in 0..18 {
+                        let mut expected = 0x5a5a;
+                        if (cx..cx + 2).contains(&x) && (cy..cy + 2).contains(&y) {
+                            let sx = x - cx + 1 + u32::from(offset >= 0x3c);
+                            let sy = y - cy + 1;
+                            let color = machine.memory.r16(pixels + (sy * 8 + sx) * 2);
+                            if color != 0 || !matches!(offset, 0x38 | 0x40) {
+                                expected = color;
+                            }
+                        }
+                        assert_eq!(
+                            machine.memory.r16(SCREEN_IMAGE + (y * 240 + x) * 2),
+                            expected,
+                            "wide={wide} offset={offset:x} pixel={x},{y}"
+                        );
+                    }
+                }
+            }
+            for (r, value) in [11, 20, 1, 1].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, r as u8, value);
+            }
+            machine.handle_game_service(14);
+            for (r, value) in [library, 0, 25, 1].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, r as u8, value);
+            }
+            for (i, value) in [1, 10, 20, 0].into_iter().enumerate() {
+                machine.memory.w32(stack + i as u32 * 4, value);
+            }
+            machine.handle_fixed_gameold_object_service(11);
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 11) * 2),
+                0x105
+            );
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 10) * 2),
+                0x5a5a
+            );
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 12) * 2),
+                0x5a5a
+            );
+
+            for (r, value) in [10, 20, 0, 2].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, r as u8, value);
+            }
+            machine.handle_game_service(14);
+            for (r, value) in [library, 0, 9, 19].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, r as u8, value);
+            }
+            machine.handle_fixed_gameold_object_service(7);
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 11) * 2),
+                0x105
+            );
+
+            let target = machine.allocate(32);
+            let target_pixels = machine.allocate(64);
+            machine.memory.w32(target, target_pixels);
+            machine.write_image_dims(target, 6, 4);
+            machine.memory.w32(library + 4, target);
+            for (r, value) in [library, 0, 0, 0].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, r as u8, value);
+            }
+            machine.handle_fixed_gameold_object_service(7);
+            for y in 0..4 {
+                for x in 0..6 {
+                    assert_eq!(
+                        machine.memory.r16(target_pixels + (y * 8 + x) * 2),
+                        machine.memory.r16(pixels + (y * 8 + x) * 2)
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn picture_library_numbers_use_stack_geometry_and_selected_target() {

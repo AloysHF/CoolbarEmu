@@ -193,6 +193,11 @@ methods do not establish support for the object's unimplemented behavior.
 Fixed-address picture-library services share the legacy picture implementation
 for load/cache, image sizes, drawing targets and owned-resource release. The
 constructor initializes the default target and ownership marker explicitly.
+Screen-target image and number blits also honor the fixed GameLCD clip stored
+in the screen descriptor. Guests can draw a complete glyph strip through a
+single-cell destination clip; source offsets advance with the clipped destination.
+Opaque, alpha and cropped variants share this behavior. Offscreen targets retain
+their own image bounds and do not inherit the LCD clip.
 
 Fixed legacy window repaint clips each dirty rectangle, invokes its guest
 paint callback synchronously with the configured context, and visits child
