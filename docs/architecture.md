@@ -244,10 +244,12 @@ and fullscreen presentation.
 Image resources are reconstructed from the CBE GIF variant or firmware PNG
 representation, decoded, and copied into guest image objects. Custom GIF
 palettes use big-endian RGB565; firmware PNG palettes use little-endian RGB565
-while PNG chunk lengths remain big-endian. Decoded RGB565 colors are preserved
-even for transparent pixels. A separate transparency mask is stored after the
-pixel data in the same heap allocation, with a host tag; opaque blits copy
-original colors and alpha blits consult the mask. Guest-created images without
+while PNG chunk lengths remain big-endian. Firmware-wrapped PNG images expose
+fully transparent pixels as RGB565 zero so guest transforms that copy only pixel
+words retain color-key transparency. Other decoded streams preserve their RGB
+components for opaque drawing. A separate transparency mask follows the pixel
+data in the same allocation, with a host tag; alpha blits consult it to preserve
+opaque black pixels. Guest-created images without
 this metadata retain zero-color transparency. The mask is part of guest-memory
 save states, so no serialized field layout change is required.
 
@@ -272,6 +274,11 @@ Clipped strings honor their pixel width; rectangle strings wrap and return their
 occupied line count and width. Scalar and packed LCD line APIs include both
 endpoints and clip pixels to the active surface. Missing firmware text returns
 a valid empty string; built-in phone UI strings are not supplied.
+
+The stdio `VmGetRand` service advances the existing deterministic 15-bit LCG
+stream. It does not return the CPU instruction counter; repeated requests must
+vary even without advancing guest instructions, including rejection-sampling
+loops that generate a new deck when restarting a game.
 
 ## Headless execution
 

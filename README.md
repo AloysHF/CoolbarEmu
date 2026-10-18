@@ -31,7 +31,7 @@ signatures and configuration keys are not supported.
   resource lookup, image decoding
 - **ARM/Thumb CPU emulation** — little- and big-endian execution, interworking branches
 - **Service bridge** — firmware-style API for memory, resources, display,
-  input, text, little-endian game-data reads, DF panel invalidation,
+  input, text, stateful stdio random numbers, little-endian game-data reads, DF panel invalidation,
   fixed-point game math, and
   packed-rectangle collision detection
 - **Guest filesystem** — sandboxed in-memory files used by CBE installers and
@@ -47,7 +47,8 @@ signatures and configuration keys are not supported.
 - **Login fields** — basic numeric account/password controls with focus,
   password masking and save-state preservation; online authentication is not implemented
 - **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction
-  and format-specific palette byte order; picture-library numeric glyphs support HUD
+  and format-specific palette byte order; firmware PNG transparency survives guest
+  RGB565 image transforms; picture-library numeric glyphs support HUD
   counters and selected targets, with LCD clipping for fixed-manager sprite-sheet digits
 - **Text rendering** — GBK and guest-endian UCS-2 strings, clipped and wrapped
   text, and offscreen glyph-cache drawing with an embedded Unicode bitmap font

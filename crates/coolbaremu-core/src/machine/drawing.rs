@@ -1392,6 +1392,7 @@ impl CoolbarMachine {
     }
 
     fn create_image_from_bytes(&mut self, resource: &[u8], name: &str, output: u32) -> u32 {
+        let native_png = resource.first() == Some(&3);
         let encoded = image_payload(resource);
         let decoded = match image_decoder::decode_image(encoded) {
             Ok(decoded) => decoded,
@@ -1429,7 +1430,7 @@ impl CoolbarMachine {
         }
         let pitch = decoded.width.next_multiple_of(4);
         let pixel_count = pitch.saturating_mul(decoded.height);
-        // Keep alpha in the allocation tail so opaque blits retain palette colors.
+        // Keep alpha in the allocation tail to preserve opaque black pixels.
         // The guest-memory tail also survives save-state restoration.
         let pixels = self.allocate(pixel_count.saturating_mul(3).saturating_add(8));
         if pixels == 0 {
@@ -1445,7 +1446,12 @@ impl CoolbarMachine {
                 let green = decoded.data[offset + 1] as u16;
                 let blue = decoded.data[offset + 2] as u16;
                 let alpha = decoded.data[offset + 3];
-                let color = ((red & 0xf8) << 8) | ((green & 0xfc) << 3) | (blue >> 3);
+                // Guest PNG transforms copy RGB565 pixels without the host mask.
+                let color = if native_png && alpha == 0 {
+                    0
+                } else {
+                    ((red & 0xf8) << 8) | ((green & 0xfc) << 3) | (blue >> 3)
+                };
                 self.memory.w16(pixels + (y * pitch + x) * 2, color);
                 self.memory.w8(mask + y * pitch + x, u8::from(alpha < 128));
             }
@@ -2290,6 +2296,55 @@ mod tests {
                 restored.fill_screen_rect(0, 0, 2, 1, 0x07e0);
                 restored.blit_image(SCREEN_IMAGE_STRUCT, image, 0, 0, 3, 1, -1, 0, true);
                 assert_eq!(&restored.frame_pixels()[..2], &[0x000000, 0xff0000]);
+            }
+        }
+    }
+
+    #[test]
+    fn firmware_png_transparency_survives_guest_rgb565_copies() {
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(
+                &[255, 255, 255, 0, 255, 0, 0, 255, 0, 255, 0, 255],
+                3,
+                1,
+                image::ExtendedColorType::Rgba8,
+            )
+            .unwrap();
+        let mut resource = vec![3];
+        resource.extend_from_slice(&(png.len() as u32).to_be_bytes());
+        resource.extend_from_slice(&3u16.to_be_bytes());
+        resource.extend_from_slice(&1u16.to_be_bytes());
+        resource.extend_from_slice(&png);
+        for wide in [false, true] {
+            for big_endian in [false, true] {
+                let mut machine = CoolbarMachine::new_blank_for_tests();
+                machine.wide_images = wide;
+                let mut memory = super::super::memory::MachineMemory::new(big_endian);
+                memory.regions = std::mem::take(&mut machine.memory.regions);
+                machine.memory = memory;
+                machine.initialize_screen();
+                let source = machine.create_image_from_bytes(&resource, "firmware PNG", 0);
+                let source_pixels = machine.memory.r32(source);
+                assert_eq!(machine.memory.r16(source_pixels), 0);
+                let mut state = vec![0; crate::save_state::SERIALIZED_SIZE];
+                crate::save_state::encode_machine(&machine, 123, &mut state).unwrap();
+                let mut restored = crate::save_state::decode_machine(&state, 123).unwrap();
+                let mirrored = restored.allocate(24);
+                let pixels = restored.allocate(8);
+                restored.memory.w32(mirrored, pixels);
+                restored.write_image_dims(mirrored, 3, 1);
+                // Native transforms copy only RGB565 words, not host mask metadata.
+                for x in 0..3 {
+                    let color = restored.memory.r16(source_pixels + (2 - x) * 2);
+                    restored.memory.w16(pixels + x * 2, color);
+                }
+                restored.fill_screen_rect(0, 0, 3, 1, 0x001f);
+                restored.blit_image(SCREEN_IMAGE_STRUCT, mirrored, 0, 0, 3, 1, 0, 0, true);
+                assert_eq!(
+                    &restored.frame_pixels()[..3],
+                    &[0x00ff00, 0xff0000, 0x0000ff]
+                );
             }
         }
     }
