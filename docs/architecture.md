@@ -263,8 +263,10 @@ screen to 32-bit RGB for `minifb`. Text is decoded as GBK or guest-endian UCS-2 
 embedded Unicode font, so the core does not depend on host fonts. Text
 coordinates live in the presented display space: for rotated games the glyphs
 are mapped from the presented display back into the active LCD surface pixel
-by pixel, and games that submit `DrawText` with zero coordinates inherit the
-pen origin latched from the preceding `GetScreenImage` call.
+by pixel. `DrawText` honors valid target images and their local coordinates,
+including `(0, 0)` in an offscreen glyph cache. Only context-only callers with
+no valid image use the pen origin latched from `GetScreenImage`; stale register
+values must not redirect cached glyphs to the screen.
 String APIs support explicit offscreen images and the raw LCD buffer alias.
 Clipped strings honor their pixel width; rectangle strings wrap and return their
 occupied line count and width. Scalar and packed LCD line APIs include both

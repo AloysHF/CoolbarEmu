@@ -1031,8 +1031,8 @@ impl CoolbarMachine {
     // / r2 (y) and issues DrawText with zero coordinates. The measured origins
     // match the guest's intended layout exactly (僵尸先生 centers its installer
     // text on the 400-wide display and advances by the measured glyph width),
-    // so index 1 latches the origin and index 10 falls back to it when its own
-    // coordinates are zero.
+    // so index 1 latches the origin. Index 10 uses it only for context-only
+    // callers without a valid target image; glyph caches retain local coordinates.
     pub(crate) fn handle_lcd_service(&mut self, index: u32) {
         match index {
             0 => self.set_result(SCREEN_IMAGE_STRUCT),
@@ -1072,12 +1072,28 @@ impl CoolbarMachine {
                 let string = self.register(1);
                 let raw_x = signed_coord(self.register(2));
                 let raw_y = signed_coord(self.register(3));
-                // Games that position text through the GetScreenImage latch
-                // submit DrawText with zero coordinates; only fall back to the
-                // latched origin in that case so explicit coordinates keep
-                // their previous meaning.
+                let target = self.register(0);
+                let valid_target = if matches!(target, 0 | SCREEN_IMAGE | SCREEN_IMAGE_STRUCT) {
+                    true
+                } else {
+                    let (width, height) = self.image_dims(target);
+                    let pixels = self.memory.r32(target);
+                    width > 0
+                        && height > 0
+                        && width <= 4096
+                        && height <= 4096
+                        && self
+                            .memory
+                            .region(
+                                pixels,
+                                (((width as u32 + 3) & !3) * height as u32 * 2) as usize,
+                            )
+                            .is_some()
+                };
+                // Valid image targets use local coordinates, including (0, 0).
+                // Only legacy context-only callers need the screen-origin fallback.
                 let uses_latched_origin =
-                    raw_x == 0 && raw_y == 0 && self.latched_text_origin != (0, 0);
+                    !valid_target && raw_x == 0 && raw_y == 0 && self.latched_text_origin != (0, 0);
                 let (x, y) = if uses_latched_origin {
                     self.latched_text_origin
                 } else {
@@ -2681,6 +2697,44 @@ mod rendering_tests {
         }
         machine.handle_lcd_service(10);
         assert!(machine.frame_pixels().contains(&0xff0000));
+    }
+
+    #[test]
+    fn lcd_text_uses_valid_offscreen_images_instead_of_a_stale_screen_origin() {
+        for wide in [false, true] {
+            for big_endian in [false, true] {
+                let mut machine = CoolbarMachine::new_blank_for_tests();
+                machine.wide_images = wide;
+                let mut memory = super::super::memory::MachineMemory::new(big_endian);
+                memory.regions = std::mem::take(&mut machine.memory.regions);
+                machine.memory = memory;
+                machine.initialize_screen();
+                let image = machine.allocate(24);
+                let pixels = machine.allocate(16 * 16 * 2);
+                machine.memory.w32(image, pixels);
+                machine.write_image_dims(image, 16, 16);
+                let text = machine.allocate(4);
+                machine.memory.write_bytes(text, b"A\0");
+                let stack = super::super::STACK_BASE + 0x100;
+                machine.cpu.reg_set(Mode::User, reg::SP, stack);
+                machine.memory.w16(stack, 0xf800);
+                machine.latched_text_origin = (3312, 100);
+                for (i, value) in [image, text, 0, 0].into_iter().enumerate() {
+                    machine.cpu.reg_set(Mode::User, i as u8, value);
+                }
+                machine.handle_lcd_service(10);
+                assert!(machine.frame_pixels().iter().all(|&pixel| pixel == 0));
+                let colors: Vec<u16> = (0..16 * 16)
+                    .map(|i| machine.memory.r16(pixels + i * 2))
+                    .collect();
+                assert!(
+                    colors.contains(&0xf800),
+                    "The glyph must be drawn into its cache image"
+                );
+                machine.blit_image(SCREEN_IMAGE_STRUCT, image, 0, 0, 16, 16, 20, 30, true);
+                assert!(machine.frame_pixels().contains(&0xff0000));
+            }
+        }
     }
 
     #[test]

@@ -12,7 +12,10 @@ with group priority B, then C, then A; differently encoded variants remain separ
 
 The tables below record the current core's 200-frame idle execution and captured
 RGB565 frame. Each callback permits 100,000,000 instructions; each file has a
-90-second wall-clock limit. An execution result is not a gameplay rating.
+90-second wall-clock protection by default. Three slow startup captures use a
+180-second external limit: `B/僵尸先生.CBE`, `B/激情砖块.CBE`, and
+`B/疯狂企鹅大冒险.CBE`; callback and instruction budgets are unchanged.
+An execution result is not a gameplay rating.
 `Ready` means the machine remains active; `Halted` means guest execution stopped.
 The current CoolbarEmu captures contain 243 `Ready` and two `Halted` results,
 with no execution failures or timeouts across the 245 files.
@@ -211,7 +214,7 @@ not provide the original server's content or a real carrier payment service.
 | 11 | `B/吸血鬼猎人.CBE` | 400×240 | <img src="images/B/吸血鬼猎人.png" width="120" alt="吸血鬼猎人 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 12 | `B/在线书城.CBE` | 240×400 | <img src="images/B/在线书城.png" width="120" alt="在线书城 offline error prompt"> | Required | Halted | Offline failure prompt and normal timed exit verified; scrolling/font differences remain, online reading unverified |
 | 13 | `B/在线音乐.CBE` | 240×400 | <img src="images/B/在线音乐.png" width="120" alt="在线音乐 idle frame"> | Required | Ready | Search controls, toolbars and add prompt render; prompt scrolls with current font metrics; online operation unverified |
-| 14 | `B/士兵突袭.CBE` | 400×240 | <img src="images/B/士兵突袭.png" width="120" alt="士兵突袭 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
+| 14 | `B/士兵突袭.CBE` | 400×240 | <img src="images/B/士兵突袭.png" width="120" alt="士兵突袭 idle frame"> | No known requirement | Ready | Offscreen glyph-cache text restored; left/right movement, jumping/climbing and exit-dialog cancellation checked through 820 frames; [gameplay](images/B/士兵突袭-gameplay.png), [dialog](images/B/士兵突袭-dialog.png). Weapon switching, kills and full campaign unverified |
 | 15 | `B/大家来数钱.CBE` | 240×400 | <img src="images/B/大家来数钱.png" width="120" alt="大家来数钱 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 16 | `B/天气精灵.CBE` | 240×400 | <img src="images/B/天气精灵.png" width="120" alt="天气精灵 idle frame"> | Required | Ready | Idle frame captured; interaction/gameplay unverified |
 | 17 | `B/孤岛.CBE` | 240×400 | <img src="images/B/孤岛.png" width="120" alt="孤岛 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |

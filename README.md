@@ -50,7 +50,7 @@ signatures and configuration keys are not supported.
   and format-specific palette byte order; picture-library numeric glyphs support HUD
   counters and selected targets, with LCD clipping for fixed-manager sprite-sheet digits
 - **Text rendering** — GBK and guest-endian UCS-2 strings, clipped and wrapped
-  text, and offscreen drawing with an embedded Unicode bitmap font
+  text, and offscreen glyph-cache drawing with an embedded Unicode bitmap font
 - **Screen composition** — resource initialization, stacked backgrounds and
   modal overlays, event propagation, and resuming screens without reinitialization
 - **Application LCD dimensions** — startup screen clips, clears, and background layout resolve
