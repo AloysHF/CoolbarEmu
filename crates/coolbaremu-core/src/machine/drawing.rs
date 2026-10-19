@@ -1168,17 +1168,13 @@ impl CoolbarMachine {
                 }
                 self.set_result(1);
             }
-            17 => {
-                self.draw_rect(true, true);
-                self.set_result(1);
-            }
             18 => {
                 if !self.draw_packed_screen_rect(false) {
                     self.draw_rect(false, false);
                 }
                 self.set_result(1);
             }
-            19 => {
+            17 | 19 => {
                 let x = signed_coord(self.register(0));
                 let y = signed_coord(self.register(1));
                 let width = signed_coord(self.register(2));
@@ -1191,9 +1187,19 @@ impl CoolbarMachine {
                     && (1 - extent..=extent).contains(&height)
                 {
                     let color = self.memory.r32(self.register(reg::SP)) as u16;
-                    self.fill_screen_rect(x, y, width, height, color);
+                    self.paint_rect(
+                        x,
+                        y,
+                        width,
+                        height,
+                        color,
+                        index == 17,
+                        self.display_surface.width as i32,
+                        self.display_surface.height as i32,
+                        SCREEN_IMAGE,
+                    );
                 } else {
-                    self.draw_rect(true, false);
+                    self.draw_rect(true, index == 17);
                 }
                 self.set_result(1);
             }
@@ -2953,6 +2959,67 @@ mod alpha_storage_tests {
         machine.memory = memory;
         machine.initialize_screen();
         machine
+    }
+
+    #[test]
+    fn scalar_lcd_rectangles_preserve_outline_bounds_and_image_destination() {
+        for wide in [false, true] {
+            for big_endian in [false, true] {
+                for index in [17, 19] {
+                    let mut machine = image_machine(wide, big_endian);
+                    let stack = super::super::STACK_BASE + 0x100;
+                    machine.set_user_register(reg::SP, stack);
+                    machine.memory.w32(stack, 0xf800);
+                    machine.memory.w32(stack + 4, 0x07e0);
+                    for (i, value) in [5, 60, 10, 10].into_iter().enumerate() {
+                        machine.set_user_register(i as u8, value);
+                    }
+                    machine.handle_lcd_service(index);
+                    for y in 0..320 {
+                        for x in 0..240 {
+                            let inside = (5..15).contains(&x) && (60..70).contains(&y);
+                            let edge = x == 5 || x == 14 || y == 60 || y == 69;
+                            let expected = if inside && (index == 19 || edge) {
+                                0xf800
+                            } else {
+                                0
+                            };
+                            assert_eq!(
+                                machine.memory.r16(SCREEN_IMAGE + (y * 240 + x) * 2),
+                                expected,
+                                "scalar rectangle must stay within its screen bounds"
+                            );
+                        }
+                    }
+                    let image = machine.allocate(machine.image_header_len());
+                    let pixels = machine.allocate(8 * 8 * 2);
+                    machine.memory.w32(image, pixels);
+                    machine.write_image_dims(image, 8, 8);
+                    machine.memory.w32(stack, 4);
+                    machine.memory.w32(stack + 4, 0x001f);
+                    for (i, value) in [image, 1, 2, 4].into_iter().enumerate() {
+                        machine.set_user_register(i as u8, value);
+                    }
+                    machine.handle_lcd_service(index);
+                    for y in 0..8 {
+                        for x in 0..8 {
+                            let inside = (1..5).contains(&x) && (2..6).contains(&y);
+                            let edge = x == 1 || x == 4 || y == 2 || y == 5;
+                            let expected = if inside && (index == 19 || edge) {
+                                0x001f
+                            } else {
+                                0
+                            };
+                            assert_eq!(machine.memory.r16(pixels + (y * 8 + x) * 2), expected);
+                        }
+                    }
+                    assert_eq!(
+                        machine.memory.r16(SCREEN_IMAGE + (60 * 240 + 5) * 2),
+                        0xf800
+                    );
+                }
+            }
+        }
     }
 
     #[test]

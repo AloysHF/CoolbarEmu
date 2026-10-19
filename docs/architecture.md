@@ -275,7 +275,9 @@ values must not redirect cached glyphs to the screen.
 String APIs support explicit offscreen images and the raw LCD buffer alias.
 Clipped strings honor their pixel width; rectangle strings wrap and return their
 occupied line count and width. Scalar and packed LCD line APIs include both
-endpoints and clip pixels to the active surface. Missing firmware text returns
+endpoints and clip pixels to the active surface. Scalar outline/fill rectangle
+services accept screen coordinates with a stack color; explicit image destinations
+retain their separate geometry and color arguments. Missing firmware text returns
 a valid empty string; built-in phone UI strings are not supplied.
 
 The stdio `VmGetRand` service advances the existing deterministic 15-bit LCG

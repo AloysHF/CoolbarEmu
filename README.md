@@ -51,6 +51,7 @@ signatures and configuration keys are not supported.
   firmware PNG transparency survives guest
   RGB565 image transforms; picture-library numeric glyphs support HUD
   counters and selected targets, with LCD clipping for fixed-manager sprite-sheet digits
+  and scalar screen/image rectangle outlines
 - **Text rendering** — GBK and guest-endian UCS-2 strings, clipped and wrapped
   text, and offscreen glyph-cache drawing with an embedded Unicode bitmap font
 - **Screen composition** — resource initialization, stacked backgrounds and
