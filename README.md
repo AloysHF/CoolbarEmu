@@ -47,7 +47,8 @@ signatures and configuration keys are not supported.
 - **Login fields** — basic numeric account/password controls with focus,
   password masking and save-state preservation; online authentication is not implemented
 - **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction
-  and format-specific palette byte order; firmware PNG transparency survives guest
+  and format-specific palette byte order with compact persistent transparency masks;
+  firmware PNG transparency survives guest
   RGB565 image transforms; picture-library numeric glyphs support HUD
   counters and selected targets, with LCD clipping for fixed-manager sprite-sheet digits
 - **Text rendering** — GBK and guest-endian UCS-2 strings, clipped and wrapped
