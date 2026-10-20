@@ -1513,7 +1513,9 @@ impl CoolbarMachine {
 
         // Registered native screens poll input once in the idle callback.
         // Sending an extra edge callback makes event-agnostic logic act twice.
+        let mut delivered_input = false;
         if let Some(event) = key_event.filter(|_| self.native_app_parser == 0) {
+            delivered_input = true;
             self.memory.w32(KEY_EVENT_ARG, 1u32 << event.key);
             self.dispatch_screen_logic(
                 screen,
@@ -1545,6 +1547,7 @@ impl CoolbarMachine {
                 None
             };
             if let Some(touch_type) = touch_type {
+                delivered_input = true;
                 let packed = (self.pointer.x as u32) | ((self.pointer.y as u32) << 16);
                 self.memory.w32(TOUCH_EVENT_ARG, packed);
                 self.dispatch_screen_logic(screen, touch_type, TOUCH_EVENT_ARG, instruction_limit)?;
@@ -1557,7 +1560,10 @@ impl CoolbarMachine {
                 }
             }
         }
-        self.dispatch_screen_logic(screen, 6, 0, instruction_limit)?;
+        // Idle is an alternative event; sending it after input erases guest edge caches.
+        if !delivered_input {
+            self.dispatch_screen_logic(screen, 6, 0, instruction_limit)?;
+        }
         if self.finish_screen_callback_frame() {
             return Ok(());
         }
@@ -4979,6 +4985,51 @@ mod tests {
             }
         }
         assert_eq!(machine.memory.r16(SCREEN_IMAGE + (25 * 240 + 10) * 2), 0);
+    }
+
+    #[test]
+    fn screen_input_edges_survive_until_render() {
+        for big_endian in [false, true] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_screen();
+            machine.state = MachineState::Ready;
+            machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+            let object = machine.allocate(64);
+            let screen = object + 24;
+            let logic = machine.allocate(10);
+            let render = machine.allocate(10);
+            for (callback, words) in [
+                (logic, [0x6001, 0x6843, 0x3301, 0x6043, 0x4770]),
+                (render, [0x6801, 0x6081, 0x6842, 0x60c2, 0x4770]),
+            ] {
+                for (i, word) in words.into_iter().enumerate() {
+                    machine.memory.w16(callback + i as u32 * 2, word);
+                }
+            }
+            machine.memory.w32(screen + 8, logic | 1);
+            machine.memory.w32(screen + 12, render | 1);
+            machine.pending_screen = screen;
+            for (frame, event) in [0, 1, 3, 5, 4, 6].into_iter().enumerate() {
+                match frame {
+                    0 => machine.set_key(14, true),
+                    1 => machine.set_key(14, false),
+                    2 => machine.set_pointer(30, 40, true),
+                    3 => machine.set_pointer(50, 40, true),
+                    4 => machine.set_pointer(50, 40, false),
+                    _ => {}
+                }
+                machine.run_frame(100).unwrap();
+                assert_eq!(
+                    machine.memory.r32(object + 8),
+                    event,
+                    "render must observe the input event rather than a subsequent idle"
+                );
+                assert_eq!(machine.memory.r32(object + 12), frame as u32 + 1);
+            }
+        }
     }
 
     #[test]

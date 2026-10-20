@@ -248,7 +248,7 @@ not provide the original server's content or a real carrier payment service.
 | 45 | `B/法老祖玛2.CBE` | 400×240 | <img src="images/B/法老祖玛2.png" width="120" alt="法老祖玛2 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 46 | `B/涂鸦跳跃.CBE` | 240×352 | <img src="images/B/涂鸦跳跃.png" width="120" alt="涂鸦跳跃 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 47 | `B/消息盒子.CBE` | 240×400 | <img src="images/B/消息盒子.png" width="120" alt="消息盒子 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
-| 48 | `B/激情砖块.CBE` | 240×400 | <img src="images/B/激情砖块.png" width="120" alt="激情砖块 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
+| 48 | `B/激情砖块.CBE` | 240×400 | <img src="images/B/激情砖块.png" width="120" alt="激情砖块 idle frame"> | No known requirement | Ready | Touch Game → map → level 1 and dismiss the loading/story prompts; drag the paddle left/right. Ball motion, pause/continue, retry and return to map verified. [Play](images/B/激情砖块-gameplay.png), [pause](images/B/激情砖块-pause.png). Full levels, boss, shop and audio unverified |
 | 49 | `B/火辣美女视频.CBE` | 240×400 | <img src="images/B/火辣美女视频.png" width="120" alt="火辣美女视频 idle frame"> | Required | Ready | Idle frame captured; interaction/gameplay unverified |
 | 50 | `B/炫酷音乐彩铃.CBE` | 240×400 | <img src="images/B/炫酷音乐彩铃.png" width="120" alt="炫酷音乐彩铃 idle frame"> | Required | Ready | Idle frame captured; interaction/gameplay unverified |
 | 51 | `B/热辣美图.CBE` | 240×400 | <img src="images/B/热辣美图.png" width="120" alt="热辣美图 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |

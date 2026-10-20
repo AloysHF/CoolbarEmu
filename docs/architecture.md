@@ -124,6 +124,9 @@ CoolbarEmu executes native CBE applications instead of replacing their game logi
    startup callbacks independently of the manager initialization directory.
 6. Each 100ms guest tick dispatches logic from the top screen downward until an
    event is consumed, then renders stacked screens from bottom to top.
+   Input frames deliver one key or touch event instead of an additional idle
+   event, preserving guest-owned input edges until rendering. Registered native
+   parsers continue polling input once through their idle callback.
 
 
 Pending resource callbacks bound to a new screen run before its initialization,

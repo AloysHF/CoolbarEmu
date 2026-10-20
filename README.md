@@ -98,7 +98,7 @@ signatures and configuration keys are not supported.
   is a planned follow-up)
 - **Touch input** — the guest touchscreen responds to mouse clicks in the
   standalone frontend and to pointer devices (mouse or touchscreen) in
-  RetroArch
+  RetroArch, including menus that consume touch edges while drawing
 - **Libretro integration** — playable libretro core with RGB888 video output,
   RetroPad input, content loading, save states, reset, and memory exposure
   (core options cover volume, touch input, auto BGM, screen orientation, and
