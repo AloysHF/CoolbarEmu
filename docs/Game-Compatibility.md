@@ -281,7 +281,7 @@ not provide the original server's content or a real carrier payment service.
 | # | Application / file | Display | Screenshot | Network | Execution | Coverage / limitation |
 | ---: | --- | --- | --- | --- | --- | --- |
 | 1 | `C/Almanac.CBE` | 176×220 | <img src="images/C/Almanac.png" width="120" alt="Almanac idle frame"> | Not assessed | Ready | Offline error panel renders; interaction and online content unverified |
-| 2 | `C/Apotheosize.CBE` | 176×220 | <img src="images/C/Apotheosize.png" width="120" alt="Apotheosize idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 2 | `C/Apotheosize.CBE` | 176×220 | <img src="images/C/Apotheosize.png" width="120" alt="Apotheosize idle frame"> <img src="images/C/Apotheosize-gameplay.png" width="120" alt="Apotheosize palace movement"> <img src="images/C/Apotheosize-menu.png" width="120" alt="Apotheosize system menu"> | Not assessed | Ready | Little-endian string lengths restore new-game XSE loading; opening dialogue, palace movement, menus and save confirmation checked; combat, later maps and full campaign unverified |
 | 3 | `C/BombMan.CBE` | 176×220 | <img src="images/C/BombMan.png" width="120" alt="BombMan idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
 | 4 | `C/Bowling.CBE` | 176×220 | <img src="images/C/Bowling.png" width="120" alt="Bowling idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
 | 5 | `C/brick.CBE` | 176×220 | <img src="images/C/brick.png" width="120" alt="brick idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |

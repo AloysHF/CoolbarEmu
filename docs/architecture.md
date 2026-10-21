@@ -164,6 +164,11 @@ Native applications receive guest-callable tables whose entries lead to emulator
 - screen transitions and resource notifications;
 - a bounded subset of C-style formatted strings.
 
+Stream integers and 32-bit string lengths use little-endian encoding independently
+of the guest CPU's byte order. The cursor stored in guest memory retains native
+byte order and advances past the prefix and payload, so a big-endian application
+can read the following field without losing its position in an XSE stream.
+
 Unsupported service entries currently return a neutral value. Service usage counters and opt-in tracing make missing behavior observable during compatibility work.
 
 The shared I/O table and all I/O initializer entry points use the same method
