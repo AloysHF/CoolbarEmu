@@ -406,8 +406,10 @@ impl CoolbarMachine {
                 let buffer = self.register(0);
                 let cursor = self.register(1);
                 let offset = self.memory.r32(cursor);
-                self.memory
-                    .w16(buffer.wrapping_add(offset), self.register(2) as u16);
+                self.memory.write_bytes(
+                    buffer.wrapping_add(offset),
+                    &(self.register(2) as u16).to_le_bytes(),
+                );
                 self.memory.w32(cursor, offset.wrapping_add(2));
                 self.set_result(offset.wrapping_add(2));
             }
@@ -416,7 +418,7 @@ impl CoolbarMachine {
                 let cursor = self.register(1);
                 let offset = self.memory.r32(cursor);
                 self.memory
-                    .w32(buffer.wrapping_add(offset), self.register(2));
+                    .write_bytes(buffer.wrapping_add(offset), &self.register(2).to_le_bytes());
                 self.memory.w32(cursor, offset.wrapping_add(4));
                 self.set_result(offset.wrapping_add(4));
             }
@@ -1952,8 +1954,10 @@ impl CoolbarMachine {
                 let buffer = self.register(0);
                 let cursor = self.register(1);
                 let offset = self.memory.r32(cursor);
-                self.memory
-                    .w16(buffer.wrapping_add(offset), self.register(2) as u16);
+                self.memory.write_bytes(
+                    buffer.wrapping_add(offset),
+                    &(self.register(2) as u16).to_le_bytes(),
+                );
                 self.memory.w32(cursor, offset.wrapping_add(2));
                 self.set_result(offset.wrapping_add(2));
             }
@@ -1962,7 +1966,7 @@ impl CoolbarMachine {
                 let cursor = self.register(1);
                 let offset = self.memory.r32(cursor);
                 self.memory
-                    .w32(buffer.wrapping_add(offset), self.register(2));
+                    .write_bytes(buffer.wrapping_add(offset), &self.register(2).to_le_bytes());
                 self.memory.w32(cursor, offset.wrapping_add(4));
                 self.set_result(offset.wrapping_add(4));
             }
@@ -2105,6 +2109,55 @@ mod tests {
             memory.map(0x1000, 4, false);
             memory.load(0x1000, &[0x78, 0x56, 0x34, 0x12]).unwrap();
             assert_eq!(read_little_endian_int(&mut memory, 0x1000), 0x1234_5678);
+        }
+    }
+
+    #[test]
+    fn game_stream_writes_round_trip_in_both_guest_byte_orders() {
+        use crate::machine::CoolbarMachine;
+        use armv4t_emu::Memory;
+
+        for big_endian in [false, true] {
+            for game_util in [false, true] {
+                let mut machine = CoolbarMachine::new_blank_for_tests();
+                let mut memory = MachineMemory::new(big_endian);
+                memory.regions = std::mem::take(&mut machine.memory.regions);
+                machine.memory = memory;
+                let buffer = machine.allocate(16);
+                let cursor = machine.allocate(4);
+                machine.memory.write_bytes(buffer, &[0xa5; 16]);
+                machine.memory.w32(cursor, 3);
+                for (index, value, expected_offset) in [(95, 0x1234_8003, 5), (96, 3, 9)] {
+                    machine.set_user_register(0, buffer);
+                    machine.set_user_register(1, cursor);
+                    machine.set_user_register(2, value);
+                    if game_util {
+                        machine.handle_game_util_service(index - 72);
+                    } else {
+                        machine.handle_game_service(index);
+                    }
+                    assert_eq!(machine.register(0), expected_offset);
+                    assert_eq!(machine.memory.r32(cursor), expected_offset);
+                }
+                let encoded: Vec<u8> = (0..10).map(|i| machine.memory.r8(buffer + i)).collect();
+                assert_eq!(
+                    encoded,
+                    [0xa5, 0xa5, 0xa5, 3, 0x80, 3, 0, 0, 0, 0xa5],
+                    "stream integers must be serialized little-endian"
+                );
+                machine.memory.w32(cursor, 3);
+                for (index, expected) in [(91, 0xffff_8003), (92, 3)] {
+                    machine.set_user_register(0, buffer);
+                    machine.set_user_register(1, cursor);
+                    if game_util {
+                        machine.handle_game_util_service(index - 72);
+                    } else {
+                        machine.handle_game_service(index);
+                    }
+                    assert_eq!(machine.register(0), expected);
+                }
+                assert_eq!(machine.memory.r32(cursor), 9);
+            }
         }
     }
 

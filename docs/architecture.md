@@ -165,7 +165,10 @@ Native applications receive guest-callable tables whose entries lead to emulator
 - a bounded subset of C-style formatted strings.
 
 Stream integers and 32-bit string lengths use little-endian encoding independently
-of the guest CPU's byte order. The cursor stored in guest memory retains native
+of the guest CPU's byte order. Both stream-manager layouts write 16- and 32-bit
+values in that same encoding, preserving adjacent bytes and allowing a big-endian
+guest to read back its saved counters without byte-swapping their values.
+The cursor stored in guest memory retains native
 byte order and advances past the prefix and payload, so a big-endian application
 can read the following field without losing its position in an XSE stream.
 

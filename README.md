@@ -31,7 +31,8 @@ signatures and configuration keys are not supported.
   resource lookup, image decoding
 - **ARM/Thumb CPU emulation** — little- and big-endian execution, interworking branches
 - **Service bridge** — firmware-style API for memory, resources, display,
-  input, text, stateful stdio random numbers, little-endian game-data and string-length reads, DF panel invalidation,
+  input, text, stateful stdio random numbers, little-endian game-data reads/writes
+  and string-length reads, DF panel invalidation,
   fixed-point game math, and
   packed-rectangle collision detection
 - **Guest filesystem** — sandboxed in-memory files used by CBE installers and
