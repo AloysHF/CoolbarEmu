@@ -1100,7 +1100,7 @@ impl CoolbarMachine {
                 } else {
                     (raw_x, raw_y)
                 };
-                let color = self.memory.r16(self.register(reg::SP));
+                let color = self.argument(4) as u16;
                 if service_trace_enabled(4, 10) {
                     let bytes = self.read_c_bytes(string, 256);
                     let (text, _, _) = GBK.decode(&bytes);
@@ -2770,7 +2770,7 @@ mod rendering_tests {
         machine.memory.write_bytes(text, b"A\0");
         let stack = super::super::STACK_BASE + 0x100;
         machine.cpu.reg_set(Mode::User, reg::SP, stack);
-        machine.memory.w16(stack, 0xf800);
+        machine.memory.w32(stack, 0xf800);
         for (i, value) in [SCREEN_IMAGE, text, 10, 20].into_iter().enumerate() {
             machine.cpu.reg_set(Mode::User, i as u8, value);
         }
@@ -2804,7 +2804,7 @@ mod rendering_tests {
                 machine.memory.write_bytes(text, b"A\0");
                 let stack = super::super::STACK_BASE + 0x100;
                 machine.cpu.reg_set(Mode::User, reg::SP, stack);
-                machine.memory.w16(stack, 0xf800);
+                machine.memory.w32(stack, 0xf800);
                 machine.latched_text_origin = (3312, 100);
                 for (i, value) in [image, text, 0, 0].into_iter().enumerate() {
                     machine.cpu.reg_set(Mode::User, i as u8, value);
@@ -2816,7 +2816,7 @@ mod rendering_tests {
                     .collect();
                 assert!(
                     colors.contains(&0xf800),
-                    "The glyph must be drawn into its cache image"
+                    "The glyph must use the promoted stack color in either guest byte order"
                 );
                 machine.blit_image(SCREEN_IMAGE_STRUCT, image, 0, 0, 16, 16, 20, 30, true);
                 assert!(machine.frame_pixels().contains(&0xff0000));

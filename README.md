@@ -54,7 +54,8 @@ signatures and configuration keys are not supported.
   counters and selected targets, with LCD clipping for fixed-manager sprite-sheet digits
   and scalar screen/image rectangle outlines
 - **Text rendering** — GBK and guest-endian UCS-2 strings, clipped and wrapped
-  text, and offscreen glyph-cache drawing with an embedded Unicode bitmap font
+  text, promoted RGB565 stack colors in either guest byte order, and offscreen
+  glyph-cache drawing with an embedded Unicode bitmap font
 - **Screen composition** — resource initialization, stacked backgrounds and
   modal overlays, event propagation, and resuming screens without reinitialization
 - **Application LCD dimensions** — startup screen clips, clears, and background layout resolve

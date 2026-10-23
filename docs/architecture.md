@@ -284,6 +284,9 @@ including `(0, 0)` in an offscreen glyph cache. Only context-only callers with
 no valid image use the pen origin latched from `GetScreenImage`; stale register
 values must not redirect cached glyphs to the screen.
 String APIs support explicit offscreen images and the raw LCD buffer alias.
+`DrawText` reads its RGB565 color from the low 16 bits of the full fifth ABI
+argument word. On big-endian guests the leading halfword contains padding,
+rather than the color.
 Clipped strings honor their pixel width; rectangle strings wrap and return their
 occupied line count and width. Scalar and packed LCD line APIs include both
 endpoints and clip pixels to the active surface. Scalar outline/fill rectangle
