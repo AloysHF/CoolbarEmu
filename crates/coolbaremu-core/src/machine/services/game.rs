@@ -1302,6 +1302,17 @@ impl CoolbarMachine {
             (METHOD_KIND_MEMORY, 0x78) => {
                 self.set_result(42);
             }
+            // GameManagerOld slot 0x164 — a scalar getter, not an object
+            // method.  048 恶魔城(新品) stores the result straight into a
+            // loop bound (`0x043E8C14: str r0, [sp,#8]`) and then counts up
+            // to it.  The generic pointer-shaped fallback hands back a heap
+            // block, so the guest counted to 0x050C2908 (~84 million) and
+            // burned its whole instruction budget inside the loop.  The
+            // slot's contract is a count, so an unimplemented one is zero
+            // elements — the same answer the reference's `h_unimpl` gives.
+            (METHOD_KIND_MEMORY, 0x164) => {
+                self.set_result(0);
+            }
             // MEMORY_BLOCK bump allocator installed by initMemoryBlock.
             // MB_Malloc(blk, n): 4-byte-aligned carve-out from the backing
             // store, zero-filled like the firmware.

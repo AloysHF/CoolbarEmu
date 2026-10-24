@@ -5765,6 +5765,27 @@ mod tests {
         );
     }
 
+    /// A slot whose result the guest treats as a count has to hand back a
+    /// scalar.  048 恶魔城(新品) stores the 0x164 result straight into a loop
+    /// bound and counts up to it, so the generic pointer-shaped fallback —
+    /// a freshly allocated heap block — meant counting to the block's
+    /// address and burning the whole instruction budget inside the loop.
+    #[test]
+    fn method_stub_count_slot_returns_scalar_not_heap_block() {
+        let mut machine = machine_from_minimal_archive();
+        let obj = machine.allocate(0x40);
+        machine.cpu.reg_set(Mode::User, 0, obj);
+        machine.cpu.reg_set(Mode::User, 1, obj);
+        machine.handle_method_stub(
+            CoolbarMachine::method_stub_address(METHOD_KIND_MEMORY, 0x164) & !1,
+        );
+        assert_eq!(
+            machine.register(0),
+            0,
+            "an unimplemented count slot must be zero elements, not a heap block"
+        );
+    }
+
     #[test]
     fn fixed_gameold_allocators_return_owned_zeroed_blocks() {
         let mut machine = machine_from_minimal_archive();
