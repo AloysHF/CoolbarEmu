@@ -3696,6 +3696,59 @@ mod tests {
         );
     }
 
+    /// A method slot holding guest payload — a resource record, a length
+    /// word, leftover heap bytes — branches to data rather than code, which
+    /// faults on the fetch.  Games that ship such tables (049, 070) call them
+    /// through a `bx Rm` thunk, so the slot must be judged by whether it
+    /// addresses anything at all: unreachable means the method has no
+    /// implementation to run and the call returns zero to its caller.
+    #[test]
+    fn indirect_branch_through_payload_slot_returns_to_caller() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w16(entry, 0x4718); // Thumb bx r3
+        machine.memory.w16(entry + 2, 0xe7fe); // terminal self-branch
+        machine.cpu.reg_set(Mode::User, reg::PC, entry | 1);
+        machine.cpu.reg_set(Mode::User, reg::LR, (entry + 2) | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
+        machine.cpu.reg_set(Mode::User, 3, 0x0003_0003); // payload, not code
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(
+            machine.state(),
+            MachineState::Halted,
+            "a payload slot must resume at LR instead of faulting"
+        );
+    }
+
+    /// The host sentinel windows are unmapped by design, so the
+    /// "addresses nothing" test must not claim them: `bx` to the exit
+    /// sentinel is the guest's "return to host", not an unimplemented
+    /// method, and resuming at LR there would trap the game in its caller.
+    #[test]
+    fn indirect_branch_to_exit_sentinel_still_returns_to_host() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w16(entry, 0x4700); // Thumb bx r0
+        machine.memory.w16(entry + 2, 0xe7fe); // terminal self-branch
+        machine.cpu.reg_set(Mode::User, reg::PC, entry | 1);
+        machine.cpu.reg_set(Mode::User, reg::LR, (entry + 2) | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
+        machine.cpu.reg_set(Mode::User, 0, EXIT_ADDRESS | 1); // exit sentinel
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(
+            machine.register(reg::PC),
+            EXIT_ADDRESS,
+            "the exit sentinel must end the run, not resume at LR"
+        );
+        assert_ne!(
+            machine.state(),
+            MachineState::Halted,
+            "the exit sentinel must not be mistaken for a dead method slot"
+        );
+    }
+
     /// Fixed-ABI directory entries must expose both an init stub (+0) and a
     /// get-table stub (+4). Bootstrap code that indexes the directory as a
     /// dense pointer array reads the +4 word; leaving it null makes the guest

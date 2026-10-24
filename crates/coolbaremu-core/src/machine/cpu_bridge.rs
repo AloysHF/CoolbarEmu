@@ -64,25 +64,50 @@ impl CoolbarMachine {
                 self.state = super::MachineState::Halted;
                 return Ok(());
             }
-            // A null indirect branch (e.g. `bx r3` with r3 == 0) is how the
-            // DF-engine vtable dispatch invokes a method slot that the guest
-            // never populated.  Branching to address 0 would fault, so treat
-            // it as an unimplemented method: resume at the caller's return
-            // address (LR is still the caller's because `bx` does not relink)
-            // with a zero result.  This mirrors the host-side
-            // fill_zero_method_slots handling for allocated objects, but also
-            // covers guest-managed objects whose method tables the host cannot
-            // pre-fill at construction time.
+            // An indirect branch through an unpopulated method slot (e.g.
+            // `bx r3` with r3 == 0) is how the DF-engine vtable dispatch
+            // invokes a method the guest never implemented.  Branching to
+            // address 0 would fault, so treat it as an unimplemented method:
+            // resume at the caller's return address (LR is still the caller's
+            // because `bx` does not relink) with a zero result.  This mirrors
+            // the host-side fill_zero_method_slots handling for allocated
+            // objects, but also covers guest-managed objects whose method
+            // tables the host cannot pre-fill at construction time.
+            //
+            // A zero slot is only the cleanest case of the same thing: some
+            // games ship tables whose slot holds guest payload — a resource
+            // record, a length word, leftover heap bytes — instead of a
+            // function pointer.  Those values are non-zero, so the zero-slot
+            // rule misses them and the dispatch faults on a fetch from the
+            // payload address.  Judging the slot by whether it addresses
+            // mapped memory catches both cases without guessing at the table
+            // layout: anything unreachable is a call with no implementation
+            // to run.
             if self.cpu.thumb_mode() {
                 let insn = self.memory.r16(pc);
                 if insn & 0xff87 == 0x4700 {
                     let rm = ((insn >> 3) & 0x0f) as u8;
-                    if rm < 13 && self.register(rm) == 0 {
-                        let lr = self.register(reg::LR) & !1;
-                        if lr != 0 && self.memory.region(lr, 2).is_some() {
-                            self.set_result(0);
-                            self.cpu.reg_set(Mode::User, reg::PC, lr);
-                            continue;
+                    if rm < 13 {
+                        let slot = self.register(rm);
+                        let aligned = slot & !1;
+                        // The host's own sentinel windows are unmapped by
+                        // design: a fetch there is intercepted as a host
+                        // call, not as a jump into nowhere.  Only values
+                        // that address nothing at all are dead slots.
+                        let host_window = (EXIT_ADDRESS..EXIT_ADDRESS + EXIT_REGION_SIZE)
+                            .contains(&aligned)
+                            || (MANAGER_BASE..MANAGER_BASE + MANAGER_SIZE as u32)
+                                .contains(&aligned)
+                            || (SERVICE_BASE..SERVICE_BASE + SERVICE_SIZE).contains(&aligned);
+                        let unresolved =
+                            slot == 0 || (!host_window && self.memory.region(aligned, 2).is_none());
+                        if unresolved {
+                            let lr = self.register(reg::LR) & !1;
+                            if lr != 0 && self.memory.region(lr, 2).is_some() {
+                                self.set_result(0);
+                                self.cpu.reg_set(Mode::User, reg::PC, lr);
+                                continue;
+                            }
                         }
                     }
                 }
