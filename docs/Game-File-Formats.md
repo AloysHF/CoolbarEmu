@@ -93,8 +93,11 @@ Custom GIF resources store palette entries as big-endian RGB565. Firmware PNG
 resources use the `89 50 4E 47 47 41 4D 45` signature and little-endian RGB565
 palette entries; their PNG chunk lengths remain big-endian. A firmware `PLTE`
 chunk declares the RGB888 length but stores two bytes per palette entry.
-Palette colors and transparency are decoded separately: opaque drawing copies
-the original color, while alpha drawing skips pixels marked transparent.
+Palette colors and transparency are decoded separately. In type-3 firmware PNG
+wrappers, fully transparent pixels are exposed as RGB565 zero because guest
+image transforms copy pixel words without the host transparency mask. Other
+streams retain their RGB components for opaque drawing; alpha drawing uses the
+separate mask, including for opaque black pixels.
 
 - **Pixel format**: RGB565 (16-bit, 5-6-5 bit layout)
 - **Resolution**: Active LCD dimensions; supported portrait modes are 176×220,

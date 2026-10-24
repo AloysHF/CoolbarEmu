@@ -90,6 +90,10 @@ The v3 billing entries retain the address differences used by guest wrappers:
 remaining-days is 3764 bytes after pay-count, and the SMS entry is another 1376
 bytes later. These entries use existing offline billing semantics and defer the
 local SMS result callback from the sixth argument. No external SMS is sent.
+The fixed-manager SMS entry accepts its existing app ID 14 and reads the callback
+from the seventh argument. Accepted requests defer the same local success value
+(`1`) as the native entry; rejected requests do not queue a callback, and cancel
+removes pending SMS results.
 
 The legacy GameManagerOld text-box constructor (index 71) uses the same bounded
 initializer as the direct text-box method path. Its methods end at offset
@@ -102,6 +106,10 @@ RGB565 blitter. The constructor stores its scanline at offset 0, target at 4,
 capacity at 8, ID/image arrays at 12/16, count at 20, and release marker at 22.
 Release frees the owned allocations and clears these fields; unknown image
 indices and exhausted capacities do not allocate fallback objects.
+The picture-library number method at `+0x44` draws signed decimal glyphs from a
+selected image to the library's current target. Its stacked arguments provide
+cell height, position and alignment; zero, negative values and clipped output
+use the same transparent blitter as the library's other drawing methods.
 
 CoolbarEmu executes native CBE applications instead of replacing their game logic with a scene preview. The core is platform-independent and exposes a framebuffer plus phone-key input to frontends.
 
@@ -116,6 +124,9 @@ CoolbarEmu executes native CBE applications instead of replacing their game logi
    startup callbacks independently of the manager initialization directory.
 6. Each 100ms guest tick dispatches logic from the top screen downward until an
    event is consumed, then renders stacked screens from bottom to top.
+   Input frames deliver one key or touch event instead of an additional idle
+   event, preserving guest-owned input edges until rendering. Registered native
+   parsers continue polling input once through their idle callback.
 
 
 Pending resource callbacks bound to a new screen run before its initialization,
@@ -153,6 +164,14 @@ Native applications receive guest-callable tables whose entries lead to emulator
 - screen transitions and resource notifications;
 - a bounded subset of C-style formatted strings.
 
+Stream integers and 32-bit string lengths use little-endian encoding independently
+of the guest CPU's byte order. Both stream-manager layouts write 16- and 32-bit
+values in that same encoding, preserving adjacent bytes and allowing a big-endian
+guest to read back its saved counters without byte-swapping their values.
+The cursor stored in guest memory retains native
+byte order and advances past the prefix and payload, so a big-endian application
+can read the following field without losing its position in an XSE stream.
+
 Unsupported service entries currently return a neutral value. Service usage counters and opt-in tracing make missing behavior observable during compatibility work.
 
 The shared I/O table and all I/O initializer entry points use the same method
@@ -185,6 +204,11 @@ methods do not establish support for the object's unimplemented behavior.
 Fixed-address picture-library services share the legacy picture implementation
 for load/cache, image sizes, drawing targets and owned-resource release. The
 constructor initializes the default target and ownership marker explicitly.
+Screen-target image and number blits also honor the fixed GameLCD clip stored
+in the screen descriptor. Guests can draw a complete glyph strip through a
+single-cell destination clip; source offsets advance with the clipped destination.
+Opaque, alpha and cropped variants share this behavior. Offscreen targets retain
+their own image bounds and do not inherit the LCD clip.
 
 Fixed legacy window repaint clips each dirty rectangle, invokes its guest
 paint callback synchronously with the configured context, and visits child
@@ -231,10 +255,15 @@ and fullscreen presentation.
 Image resources are reconstructed from the CBE GIF variant or firmware PNG
 representation, decoded, and copied into guest image objects. Custom GIF
 palettes use big-endian RGB565; firmware PNG palettes use little-endian RGB565
-while PNG chunk lengths remain big-endian. Decoded RGB565 colors are preserved
-even for transparent pixels. A separate transparency mask is stored after the
-pixel data in the same heap allocation, with a host tag; opaque blits copy
-original colors and alpha blits consult the mask. Guest-created images without
+while PNG chunk lengths remain big-endian. Firmware-wrapped PNG images expose
+fully transparent pixels as RGB565 zero so guest transforms that copy only pixel
+words retain color-key transparency. Other decoded streams preserve their RGB
+components for opaque drawing. A separate bit-packed transparency mask follows the
+pixel data in the same allocation, with a host tag; alpha blits consult it to
+preserve opaque black pixels. It uses one bit per pixel instead of one byte,
+reducing image overhead within the existing 4 MiB general-heap boundary without
+overlapping the dedicated memory-block pool. Legacy byte-mask tags remain readable
+in otherwise compatible save states. Guest-created images without
 this metadata retain zero-color transparency. The mask is part of guest-memory
 save states, so no serialized field layout change is required.
 
@@ -250,13 +279,25 @@ screen to 32-bit RGB for `minifb`. Text is decoded as GBK or guest-endian UCS-2 
 embedded Unicode font, so the core does not depend on host fonts. Text
 coordinates live in the presented display space: for rotated games the glyphs
 are mapped from the presented display back into the active LCD surface pixel
-by pixel, and games that submit `DrawText` with zero coordinates inherit the
-pen origin latched from the preceding `GetScreenImage` call.
+by pixel. `DrawText` honors valid target images and their local coordinates,
+including `(0, 0)` in an offscreen glyph cache. Only context-only callers with
+no valid image use the pen origin latched from `GetScreenImage`; stale register
+values must not redirect cached glyphs to the screen.
 String APIs support explicit offscreen images and the raw LCD buffer alias.
+`DrawText` reads its RGB565 color from the low 16 bits of the full fifth ABI
+argument word. On big-endian guests the leading halfword contains padding,
+rather than the color.
 Clipped strings honor their pixel width; rectangle strings wrap and return their
 occupied line count and width. Scalar and packed LCD line APIs include both
-endpoints and clip pixels to the active surface. Missing firmware text returns
+endpoints and clip pixels to the active surface. Scalar outline/fill rectangle
+services accept screen coordinates with a stack color; explicit image destinations
+retain their separate geometry and color arguments. Missing firmware text returns
 a valid empty string; built-in phone UI strings are not supplied.
+
+The stdio `VmGetRand` service advances the existing deterministic 15-bit LCG
+stream. It does not return the CPU instruction counter; repeated requests must
+vary even without advancing guest instructions, including rejection-sampling
+loops that generate a new deck when restarting a game.
 
 ## Headless execution
 
@@ -347,6 +388,16 @@ Horizontal and vertical movement queries return signed distances, checking the
 map bounds and the directional edge bits on both source and destination cells.
 Both native scene layouts bind the movement pair: offsets +0x678/+0x67c and
 +0x680/+0x684 use the same horizontal/vertical query implementations.
+The shared game service slot 72 initializes a native tile map into a
+caller-provided object: the destination arrives in r0 and the picture library in
+r3, the map resource name through the fifth AAPCS argument and the tile capacity
+through the sixth. The host parses the named map, registers each tile image in
+the caller's library, lays out the column-major cell table and the pixel/tile
+dimension fields the guest renderer walks, and fills method slots 0x28..=0xbc
+with callable AUTO stubs so later indirect calls stay off NULL even when the map
+cannot be loaded. Without the handler the call fell through to the generic
+constructor path and left every method slot zero, faulting the guest on its next
+indirect call.
 Tile sizes come from map metadata; malformed or truncated maps are rejected.
 For scenes with empty built-in actor tables, the application's trailing-data
 callback runs synchronously with the decoded stream and its byte cursor. The

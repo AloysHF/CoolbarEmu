@@ -354,7 +354,8 @@ impl CoolbarMachine {
                 // and reports the SMS outcome through the trailing callback.
                 if self.register(0) == 14 {
                     let callback = self.argument(6);
-                    self.defer_callback(callback, vec![0], "smsResult");
+                    // Match the native local billing simulation without sending an SMS.
+                    self.defer_callback(callback, vec![1], "smsResult");
                     self.set_result(1);
                 } else {
                     self.set_result(0);

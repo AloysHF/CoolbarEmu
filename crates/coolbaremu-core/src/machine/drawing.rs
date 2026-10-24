@@ -12,6 +12,7 @@ use super::{
 use crate::image_decoder;
 
 const IMAGE_ALPHA_TAG: u32 = 0x414c5048;
+const IMAGE_ALPHA_BITS_TAG: u32 = 0x414c5031;
 const LCD_EMPTY_TEXT: u32 = MANAGER_BASE + 0x7f00;
 
 impl CoolbarMachine {
@@ -746,6 +747,27 @@ impl CoolbarMachine {
         self.set_result(0);
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn blit_picture_library_image(
+        &mut self,
+        target: u32,
+        image: u32,
+        sx: i32,
+        sy: i32,
+        width: i32,
+        height: i32,
+        x: i32,
+        y: i32,
+        alpha: bool,
+    ) {
+        if self.uses_fixed_manager_abi() && target == SCREEN_IMAGE_STRUCT {
+            // Fixed-manager callers crop glyph strips through the LCD descriptor.
+            self.legacy_clipped_blit(target, image, sx, sy, width, height, x, y, alpha);
+        } else {
+            self.blit_image(target, image, sx, sy, width, height, x, y, alpha);
+        }
+    }
+
     pub(crate) fn handle_picture_library_method(&mut self, offset: u32) {
         let library = self.register(0);
         let argument = self.register(1);
@@ -897,7 +919,7 @@ impl CoolbarMachine {
                             signed_coord(self.memory.r32(stack + 12)),
                         )
                     };
-                    self.blit_image(
+                    self.blit_picture_library_image(
                         target,
                         image,
                         sx,
@@ -908,6 +930,39 @@ impl CoolbarMachine {
                         dy,
                         offset == 0x38 || offset == 0x40,
                     );
+                }
+                self.set_result(0);
+            }
+            0x44 => {
+                let index = argument & 0xffff;
+                let number = (self.register(2) as i32).to_string();
+                let width = signed_coord(self.register(3));
+                let height = signed_coord(self.argument(4));
+                let x = signed_coord(self.argument(5));
+                let y = signed_coord(self.argument(6));
+                let alignment = self.argument(7);
+                if index < count && width > 0 && height > 0 {
+                    let image = self.memory.r32(images + index * 4);
+                    let total = number.len() as i32 * width;
+                    let left = match alignment {
+                        1 => x - total / 2,
+                        2 => x - total,
+                        _ => x,
+                    };
+                    for (position, digit) in number.bytes().enumerate() {
+                        let glyph = if digit == b'-' { 10 } else { digit - b'0' };
+                        self.blit_picture_library_image(
+                            target,
+                            image,
+                            i32::from(glyph) * width,
+                            0,
+                            width,
+                            height,
+                            left + position as i32 * width,
+                            y,
+                            true,
+                        );
+                    }
                 }
                 self.set_result(0);
             }
@@ -977,8 +1032,8 @@ impl CoolbarMachine {
     // / r2 (y) and issues DrawText with zero coordinates. The measured origins
     // match the guest's intended layout exactly (僵尸先生 centers its installer
     // text on the 400-wide display and advances by the measured glyph width),
-    // so index 1 latches the origin and index 10 falls back to it when its own
-    // coordinates are zero.
+    // so index 1 latches the origin. Index 10 uses it only for context-only
+    // callers without a valid target image; glyph caches retain local coordinates.
     pub(crate) fn handle_lcd_service(&mut self, index: u32) {
         match index {
             0 => self.set_result(SCREEN_IMAGE_STRUCT),
@@ -1018,18 +1073,34 @@ impl CoolbarMachine {
                 let string = self.register(1);
                 let raw_x = signed_coord(self.register(2));
                 let raw_y = signed_coord(self.register(3));
-                // Games that position text through the GetScreenImage latch
-                // submit DrawText with zero coordinates; only fall back to the
-                // latched origin in that case so explicit coordinates keep
-                // their previous meaning.
+                let target = self.register(0);
+                let valid_target = if matches!(target, 0 | SCREEN_IMAGE | SCREEN_IMAGE_STRUCT) {
+                    true
+                } else {
+                    let (width, height) = self.image_dims(target);
+                    let pixels = self.memory.r32(target);
+                    width > 0
+                        && height > 0
+                        && width <= 4096
+                        && height <= 4096
+                        && self
+                            .memory
+                            .region(
+                                pixels,
+                                (((width as u32 + 3) & !3) * height as u32 * 2) as usize,
+                            )
+                            .is_some()
+                };
+                // Valid image targets use local coordinates, including (0, 0).
+                // Only legacy context-only callers need the screen-origin fallback.
                 let uses_latched_origin =
-                    raw_x == 0 && raw_y == 0 && self.latched_text_origin != (0, 0);
+                    !valid_target && raw_x == 0 && raw_y == 0 && self.latched_text_origin != (0, 0);
                 let (x, y) = if uses_latched_origin {
                     self.latched_text_origin
                 } else {
                     (raw_x, raw_y)
                 };
-                let color = self.memory.r16(self.register(reg::SP));
+                let color = self.argument(4) as u16;
                 if service_trace_enabled(4, 10) {
                     let bytes = self.read_c_bytes(string, 256);
                     let (text, _, _) = GBK.decode(&bytes);
@@ -1097,17 +1168,13 @@ impl CoolbarMachine {
                 }
                 self.set_result(1);
             }
-            17 => {
-                self.draw_rect(true, true);
-                self.set_result(1);
-            }
             18 => {
                 if !self.draw_packed_screen_rect(false) {
                     self.draw_rect(false, false);
                 }
                 self.set_result(1);
             }
-            19 => {
+            17 | 19 => {
                 let x = signed_coord(self.register(0));
                 let y = signed_coord(self.register(1));
                 let width = signed_coord(self.register(2));
@@ -1120,9 +1187,19 @@ impl CoolbarMachine {
                     && (1 - extent..=extent).contains(&height)
                 {
                     let color = self.memory.r32(self.register(reg::SP)) as u16;
-                    self.fill_screen_rect(x, y, width, height, color);
+                    self.paint_rect(
+                        x,
+                        y,
+                        width,
+                        height,
+                        color,
+                        index == 17,
+                        self.display_surface.width as i32,
+                        self.display_surface.height as i32,
+                        SCREEN_IMAGE,
+                    );
                 } else {
-                    self.draw_rect(true, false);
+                    self.draw_rect(true, index == 17);
                 }
                 self.set_result(1);
             }
@@ -1322,6 +1399,7 @@ impl CoolbarMachine {
     }
 
     fn create_image_from_bytes(&mut self, resource: &[u8], name: &str, output: u32) -> u32 {
+        let native_png = resource.first() == Some(&3);
         let encoded = image_payload(resource);
         let decoded = match image_decoder::decode_image(encoded) {
             Ok(decoded) => decoded,
@@ -1359,15 +1437,21 @@ impl CoolbarMachine {
         }
         let pitch = decoded.width.next_multiple_of(4);
         let pixel_count = pitch.saturating_mul(decoded.height);
-        // Keep alpha in the allocation tail so opaque blits retain palette colors.
+        // Keep alpha in the allocation tail to preserve opaque black pixels.
         // The guest-memory tail also survives save-state restoration.
-        let pixels = self.allocate(pixel_count.saturating_mul(3).saturating_add(8));
+        let mut alpha_mask = vec![0u8; pixel_count.div_ceil(8) as usize];
+        let pixels = self.allocate(
+            pixel_count
+                .saturating_mul(2)
+                .saturating_add(alpha_mask.len() as u32)
+                .saturating_add(8),
+        );
         if pixels == 0 {
             return 0;
         }
         let mask = pixels + pixel_count * 2 + 8;
-        self.memory.w32(mask - 8, IMAGE_ALPHA_TAG);
-        self.memory.w32(mask - 4, !IMAGE_ALPHA_TAG);
+        self.memory.w32(mask - 8, IMAGE_ALPHA_BITS_TAG);
+        self.memory.w32(mask - 4, !IMAGE_ALPHA_BITS_TAG);
         for y in 0..decoded.height {
             for x in 0..decoded.width {
                 let offset = ((y * decoded.width + x) * 4) as usize;
@@ -1375,11 +1459,20 @@ impl CoolbarMachine {
                 let green = decoded.data[offset + 1] as u16;
                 let blue = decoded.data[offset + 2] as u16;
                 let alpha = decoded.data[offset + 3];
-                let color = ((red & 0xf8) << 8) | ((green & 0xfc) << 3) | (blue >> 3);
+                // Guest PNG transforms copy RGB565 pixels without the host mask.
+                let color = if native_png && alpha == 0 {
+                    0
+                } else {
+                    ((red & 0xf8) << 8) | ((green & 0xfc) << 3) | (blue >> 3)
+                };
                 self.memory.w16(pixels + (y * pitch + x) * 2, color);
-                self.memory.w8(mask + y * pitch + x, u8::from(alpha < 128));
+                if alpha < 128 {
+                    let index = (y * pitch + x) as usize;
+                    alpha_mask[index / 8] |= 1 << (index % 8);
+                }
             }
         }
+        self.memory.write_bytes(mask, &alpha_mask);
         let header = self.image_header_len();
         let image = if output == 0 {
             self.allocate(header)
@@ -1562,25 +1655,40 @@ impl CoolbarMachine {
         let destination_pitch = ((destination_width + 3) & !3) as u32;
         let pixel_count = source_pitch.saturating_mul(source_height as u32);
         let mask_tag = source_pixels.saturating_add(pixel_count.saturating_mul(2));
-        let has_mask = transparent
-            && self
-                .memory
-                .region(
-                    source_pixels,
-                    pixel_count.saturating_mul(3).saturating_add(8) as usize,
-                )
-                .is_some()
-            && self.memory.r32(mask_tag) == IMAGE_ALPHA_TAG
-            && self.memory.r32(mask_tag + 4) == !IMAGE_ALPHA_TAG;
+        let mask_kind = if transparent && self.memory.region(mask_tag, 8).is_some() {
+            let tag = self.memory.r32(mask_tag);
+            let bytes = match tag {
+                IMAGE_ALPHA_TAG => pixel_count,
+                IMAGE_ALPHA_BITS_TAG => pixel_count.div_ceil(8),
+                _ => 0,
+            };
+            if bytes != 0
+                && self.memory.r32(mask_tag + 4) == !tag
+                && self
+                    .memory
+                    .region(mask_tag, bytes.saturating_add(8) as usize)
+                    .is_some()
+            {
+                tag
+            } else {
+                0
+            }
+        } else {
+            0
+        };
         for row in 0..height as u32 {
             for column in 0..width as u32 {
                 let source_offset =
                     ((source_y as u32 + row) * source_pitch + source_x as u32 + column) * 2;
                 let color = self.memory.r16(source_pixels + source_offset);
-                let masked = if has_mask {
-                    self.memory.r8(mask_tag + 8 + source_offset / 2) != 0
-                } else {
-                    transparent && color == 0
+                let pixel_index = source_offset / 2;
+                let masked = match mask_kind {
+                    IMAGE_ALPHA_TAG => self.memory.r8(mask_tag + 8 + pixel_index) != 0,
+                    IMAGE_ALPHA_BITS_TAG => {
+                        self.memory.r8(mask_tag + 8 + pixel_index / 8) & (1 << (pixel_index % 8))
+                            != 0
+                    }
+                    _ => transparent && color == 0,
                 };
                 if !masked {
                     let destination_offset = ((destination_y as u32 + row) * destination_pitch
@@ -2223,12 +2331,282 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn firmware_png_transparency_survives_guest_rgb565_copies() {
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(
+                &[255, 255, 255, 0, 255, 0, 0, 255, 0, 255, 0, 255],
+                3,
+                1,
+                image::ExtendedColorType::Rgba8,
+            )
+            .unwrap();
+        let mut resource = vec![3];
+        resource.extend_from_slice(&(png.len() as u32).to_be_bytes());
+        resource.extend_from_slice(&3u16.to_be_bytes());
+        resource.extend_from_slice(&1u16.to_be_bytes());
+        resource.extend_from_slice(&png);
+        for wide in [false, true] {
+            for big_endian in [false, true] {
+                let mut machine = CoolbarMachine::new_blank_for_tests();
+                machine.wide_images = wide;
+                let mut memory = super::super::memory::MachineMemory::new(big_endian);
+                memory.regions = std::mem::take(&mut machine.memory.regions);
+                machine.memory = memory;
+                machine.initialize_screen();
+                let source = machine.create_image_from_bytes(&resource, "firmware PNG", 0);
+                let source_pixels = machine.memory.r32(source);
+                assert_eq!(machine.memory.r16(source_pixels), 0);
+                let mut state = vec![0; crate::save_state::SERIALIZED_SIZE];
+                crate::save_state::encode_machine(&machine, 123, &mut state).unwrap();
+                let mut restored = crate::save_state::decode_machine(&state, 123).unwrap();
+                let mirrored = restored.allocate(24);
+                let pixels = restored.allocate(8);
+                restored.memory.w32(mirrored, pixels);
+                restored.write_image_dims(mirrored, 3, 1);
+                // Native transforms copy only RGB565 words, not host mask metadata.
+                for x in 0..3 {
+                    let color = restored.memory.r16(source_pixels + (2 - x) * 2);
+                    restored.memory.w16(pixels + x * 2, color);
+                }
+                restored.fill_screen_rect(0, 0, 3, 1, 0x001f);
+                restored.blit_image(SCREEN_IMAGE_STRUCT, mirrored, 0, 0, 3, 1, 0, 0, true);
+                assert_eq!(
+                    &restored.frame_pixels()[..3],
+                    &[0x00ff00, 0xff0000, 0x0000ff]
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod rendering_tests {
     use super::*;
     use armv4t_emu::Mode;
+
+    #[test]
+    fn fixed_picture_library_blits_respect_the_lcd_clip() {
+        for wide in [false, true] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            let mut memory = super::super::memory::MachineMemory::new(true);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.executable.big_endian = true;
+            machine.executable.preferred_code_address = 0x043e_0000;
+            machine.executable.code_image_size = machine.executable.code_size as u32 + 4;
+            machine.wide_images = wide;
+            machine.initialize_screen();
+            let library = machine.allocate(0x54);
+            let images = machine.allocate(4);
+            let image = machine.allocate(32);
+            let pixels = machine.allocate(64);
+            machine.memory.w32(image, pixels);
+            machine.write_image_dims(image, 6, 4);
+            for y in 0..4 {
+                for x in 0..6 {
+                    let color = if (x, y) == (2, 1) {
+                        0
+                    } else {
+                        0x100 + y * 6 + x
+                    };
+                    machine.memory.w16(pixels + (y * 8 + x) * 2, color as u16);
+                }
+            }
+            machine.memory.w16(library + 8, 1);
+            machine.memory.w32(library + 16, images);
+            machine.memory.w16(library + 20, 1);
+            machine.memory.w32(images, image);
+            let stack = machine.allocate(24);
+            machine.cpu.reg_set(Mode::User, reg::SP, stack);
+            for offset in [0x30, 0x34, 0x38, 0x3c, 0x40] {
+                let (cx, cy, x, y) = if offset == 0x30 {
+                    (1, 1, 0, 0)
+                } else {
+                    (10, 20, 9, 19)
+                };
+                for (r, value) in [cx, cy, 2, 2].into_iter().enumerate() {
+                    machine.cpu.reg_set(Mode::User, r as u8, value);
+                }
+                machine.handle_game_service(14);
+                for y in 0..26 {
+                    for x in 0..18 {
+                        machine.memory.w16(SCREEN_IMAGE + (y * 240 + x) * 2, 0x5a5a);
+                    }
+                }
+                for (r, value) in [library, 0, x, y].into_iter().enumerate() {
+                    machine.cpu.reg_set(Mode::User, r as u8, value);
+                }
+                for (i, value) in [1, 0, 4, 3].into_iter().enumerate() {
+                    machine.memory.w32(stack + i as u32 * 4, value);
+                }
+                machine.handle_fixed_gameold_object_service((offset - 0x18) / 4);
+                for y in 0..26 {
+                    for x in 0..18 {
+                        let mut expected = 0x5a5a;
+                        if (cx..cx + 2).contains(&x) && (cy..cy + 2).contains(&y) {
+                            let sx = x - cx + 1 + u32::from(offset >= 0x3c);
+                            let sy = y - cy + 1;
+                            let color = machine.memory.r16(pixels + (sy * 8 + sx) * 2);
+                            if color != 0 || !matches!(offset, 0x38 | 0x40) {
+                                expected = color;
+                            }
+                        }
+                        assert_eq!(
+                            machine.memory.r16(SCREEN_IMAGE + (y * 240 + x) * 2),
+                            expected,
+                            "wide={wide} offset={offset:x} pixel={x},{y}"
+                        );
+                    }
+                }
+            }
+            for (r, value) in [11, 20, 1, 1].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, r as u8, value);
+            }
+            machine.handle_game_service(14);
+            for (r, value) in [library, 0, 25, 1].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, r as u8, value);
+            }
+            for (i, value) in [1, 10, 20, 0].into_iter().enumerate() {
+                machine.memory.w32(stack + i as u32 * 4, value);
+            }
+            machine.handle_fixed_gameold_object_service(11);
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 11) * 2),
+                0x105
+            );
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 10) * 2),
+                0x5a5a
+            );
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 12) * 2),
+                0x5a5a
+            );
+
+            for (r, value) in [10, 20, 0, 2].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, r as u8, value);
+            }
+            machine.handle_game_service(14);
+            for (r, value) in [library, 0, 9, 19].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, r as u8, value);
+            }
+            machine.handle_fixed_gameold_object_service(7);
+            assert_eq!(
+                machine.memory.r16(SCREEN_IMAGE + (20 * 240 + 11) * 2),
+                0x105
+            );
+
+            let target = machine.allocate(32);
+            let target_pixels = machine.allocate(64);
+            machine.memory.w32(target, target_pixels);
+            machine.write_image_dims(target, 6, 4);
+            machine.memory.w32(library + 4, target);
+            for (r, value) in [library, 0, 0, 0].into_iter().enumerate() {
+                machine.cpu.reg_set(Mode::User, r as u8, value);
+            }
+            machine.handle_fixed_gameold_object_service(7);
+            for y in 0..4 {
+                for x in 0..6 {
+                    assert_eq!(
+                        machine.memory.r16(target_pixels + (y * 8 + x) * 2),
+                        machine.memory.r16(pixels + (y * 8 + x) * 2)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn picture_library_numbers_use_stack_geometry_and_selected_target() {
+        for big_endian in [false, true] {
+            for wide in [false, true] {
+                let mut machine = CoolbarMachine::new_blank_for_tests();
+                let mut memory = super::super::memory::MachineMemory::new(big_endian);
+                memory.regions = std::mem::take(&mut machine.memory.regions);
+                machine.memory = memory;
+                machine.wide_images = wide;
+                machine.initialize_screen();
+                let library = machine.allocate(0x54);
+                let images = machine.allocate(4);
+                let image = machine.allocate(32);
+                let glyphs = machine.allocate(96);
+                machine.memory.w32(image, glyphs);
+                machine.write_image_dims(image, 22, 2);
+                for row in 0..2 {
+                    for glyph in 0..11 {
+                        machine
+                            .memory
+                            .w16(glyphs + (row * 24 + glyph * 2) * 2, 0x1200 + glyph as u16);
+                    }
+                }
+                let target = machine.allocate(32);
+                let pixels = machine.allocate(640);
+                machine.memory.w32(target, pixels);
+                machine.write_image_dims(target, 80, 4);
+                machine.memory.w32(library + 4, target);
+                machine.memory.w16(library + 8, 1);
+                machine.memory.w32(library + 16, images);
+                machine.memory.w16(library + 20, 1);
+                machine.memory.w32(images, image);
+                let stack = machine.allocate(20);
+                machine.cpu.reg_set(Mode::User, reg::SP, stack);
+                for (number, alignment, x) in [
+                    (0i32, 0, 40),
+                    (12, 1, 40),
+                    (-12, 2, 40),
+                    (i32::MIN, 0, 40),
+                    (12, 0, -1),
+                ] {
+                    for pixel in 0..320 {
+                        machine.memory.w16(pixels + pixel * 2, 0x7bef);
+                    }
+                    for (index, value) in [library, 0, number as u32, 2].into_iter().enumerate() {
+                        machine.cpu.reg_set(Mode::User, index as u8, value);
+                    }
+                    for (index, value) in [2, x as u32, 1, alignment, 0xdeadbeef]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        machine.memory.w32(stack + index as u32 * 4, value);
+                    }
+                    for register in 4..8 {
+                        machine.cpu.reg_set(Mode::User, register, 0xdeadbeef);
+                    }
+                    machine.handle_fixed_gameold_object_service(11);
+                    let text = number.to_string();
+                    let total = text.len() as i32 * 2;
+                    let left = x - match alignment {
+                        1 => total / 2,
+                        2 => total,
+                        _ => 0,
+                    };
+                    let mut expected = vec![0x7bef; 320];
+                    for (index, digit) in text.bytes().enumerate() {
+                        let column = left + index as i32 * 2;
+                        if (0..80).contains(&column) {
+                            let glyph = if digit == b'-' { 10 } else { digit - b'0' };
+                            for row in 1..3 {
+                                expected[row * 80 + column as usize] = 0x1200 + u16::from(glyph);
+                            }
+                        }
+                    }
+                    let actual: Vec<_> = (0..320)
+                        .map(|pixel| machine.memory.r16(pixels + pixel * 2))
+                        .collect();
+                    assert_eq!(
+                        actual, expected,
+                        "number={number} alignment={alignment} wide={wide} big_endian={big_endian}"
+                    );
+                    assert_eq!(machine.memory.r16(SCREEN_IMAGE), 0);
+                    assert_eq!(machine.memory.r16(library + 20), 1);
+                    assert_eq!(machine.register(reg::SP), stack);
+                }
+            }
+        }
+    }
 
     #[test]
     fn closing_an_overlay_resumes_without_repeating_initialization() {
@@ -2392,7 +2770,7 @@ mod rendering_tests {
         machine.memory.write_bytes(text, b"A\0");
         let stack = super::super::STACK_BASE + 0x100;
         machine.cpu.reg_set(Mode::User, reg::SP, stack);
-        machine.memory.w16(stack, 0xf800);
+        machine.memory.w32(stack, 0xf800);
         for (i, value) in [SCREEN_IMAGE, text, 10, 20].into_iter().enumerate() {
             machine.cpu.reg_set(Mode::User, i as u8, value);
         }
@@ -2406,6 +2784,44 @@ mod rendering_tests {
         }
         machine.handle_lcd_service(10);
         assert!(machine.frame_pixels().contains(&0xff0000));
+    }
+
+    #[test]
+    fn lcd_text_uses_valid_offscreen_images_instead_of_a_stale_screen_origin() {
+        for wide in [false, true] {
+            for big_endian in [false, true] {
+                let mut machine = CoolbarMachine::new_blank_for_tests();
+                machine.wide_images = wide;
+                let mut memory = super::super::memory::MachineMemory::new(big_endian);
+                memory.regions = std::mem::take(&mut machine.memory.regions);
+                machine.memory = memory;
+                machine.initialize_screen();
+                let image = machine.allocate(24);
+                let pixels = machine.allocate(16 * 16 * 2);
+                machine.memory.w32(image, pixels);
+                machine.write_image_dims(image, 16, 16);
+                let text = machine.allocate(4);
+                machine.memory.write_bytes(text, b"A\0");
+                let stack = super::super::STACK_BASE + 0x100;
+                machine.cpu.reg_set(Mode::User, reg::SP, stack);
+                machine.memory.w32(stack, 0xf800);
+                machine.latched_text_origin = (3312, 100);
+                for (i, value) in [image, text, 0, 0].into_iter().enumerate() {
+                    machine.cpu.reg_set(Mode::User, i as u8, value);
+                }
+                machine.handle_lcd_service(10);
+                assert!(machine.frame_pixels().iter().all(|&pixel| pixel == 0));
+                let colors: Vec<u16> = (0..16 * 16)
+                    .map(|i| machine.memory.r16(pixels + i * 2))
+                    .collect();
+                assert!(
+                    colors.contains(&0xf800),
+                    "The glyph must use the promoted stack color in either guest byte order"
+                );
+                machine.blit_image(SCREEN_IMAGE_STRUCT, image, 0, 0, 16, 16, 20, 30, true);
+                assert!(machine.frame_pixels().contains(&0xff0000));
+            }
+        }
     }
 
     #[test]
@@ -2527,5 +2943,157 @@ mod rendering_tests {
         let pixels = machine.frame_pixels();
         assert!(pixels[38 * 240..54 * 240].iter().any(|p| *p != 0));
         assert!(pixels[..20 * 240].iter().all(|p| *p == 0));
+    }
+}
+
+#[cfg(test)]
+mod alpha_storage_tests {
+    use super::*;
+    use image::ImageEncoder;
+
+    fn image_machine(wide: bool, big_endian: bool) -> CoolbarMachine {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.wide_images = wide;
+        let mut memory = super::super::memory::MachineMemory::new(big_endian);
+        memory.regions = std::mem::take(&mut machine.memory.regions);
+        machine.memory = memory;
+        machine.initialize_screen();
+        machine
+    }
+
+    #[test]
+    fn scalar_lcd_rectangles_preserve_outline_bounds_and_image_destination() {
+        for wide in [false, true] {
+            for big_endian in [false, true] {
+                for index in [17, 19] {
+                    let mut machine = image_machine(wide, big_endian);
+                    let stack = super::super::STACK_BASE + 0x100;
+                    machine.set_user_register(reg::SP, stack);
+                    machine.memory.w32(stack, 0xf800);
+                    machine.memory.w32(stack + 4, 0x07e0);
+                    for (i, value) in [5, 60, 10, 10].into_iter().enumerate() {
+                        machine.set_user_register(i as u8, value);
+                    }
+                    machine.handle_lcd_service(index);
+                    for y in 0..320 {
+                        for x in 0..240 {
+                            let inside = (5..15).contains(&x) && (60..70).contains(&y);
+                            let edge = x == 5 || x == 14 || y == 60 || y == 69;
+                            let expected = if inside && (index == 19 || edge) {
+                                0xf800
+                            } else {
+                                0
+                            };
+                            assert_eq!(
+                                machine.memory.r16(SCREEN_IMAGE + (y * 240 + x) * 2),
+                                expected,
+                                "scalar rectangle must stay within its screen bounds"
+                            );
+                        }
+                    }
+                    let image = machine.allocate(machine.image_header_len());
+                    let pixels = machine.allocate(8 * 8 * 2);
+                    machine.memory.w32(image, pixels);
+                    machine.write_image_dims(image, 8, 8);
+                    machine.memory.w32(stack, 4);
+                    machine.memory.w32(stack + 4, 0x001f);
+                    for (i, value) in [image, 1, 2, 4].into_iter().enumerate() {
+                        machine.set_user_register(i as u8, value);
+                    }
+                    machine.handle_lcd_service(index);
+                    for y in 0..8 {
+                        for x in 0..8 {
+                            let inside = (1..5).contains(&x) && (2..6).contains(&y);
+                            let edge = x == 1 || x == 4 || y == 2 || y == 5;
+                            let expected = if inside && (index == 19 || edge) {
+                                0x001f
+                            } else {
+                                0
+                            };
+                            assert_eq!(machine.memory.r16(pixels + (y * 8 + x) * 2), expected);
+                        }
+                    }
+                    assert_eq!(
+                        machine.memory.r16(SCREEN_IMAGE + (60 * 240 + 5) * 2),
+                        0xf800
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compact_alpha_fits_guest_heap_and_preserves_clipped_pixels_after_save() {
+        let mut rgba = Vec::new();
+        let mut expected = Vec::new();
+        for y in 0..2 {
+            for x in 0..9 {
+                let (pixel, color) = if [(0, 0), (8, 0), (1, 1)].contains(&(x, y)) {
+                    ([255, 255, 255, 0], 0x0000ff)
+                } else if [(7, 0), (0, 1)].contains(&(x, y)) {
+                    ([0, 0, 0, 255], 0)
+                } else {
+                    ([0, 255, 0, 255], 0x00ff00)
+                };
+                rgba.extend_from_slice(&pixel);
+                expected.push(color);
+            }
+        }
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(&rgba, 9, 2, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        for wide in [false, true] {
+            for big_endian in [false, true] {
+                let mut machine = image_machine(wide, big_endian);
+                let limit = super::super::MEMORY_BLOCK_POOL;
+                machine.heap_cursor = limit - 64 - machine.image_header_len().next_multiple_of(8);
+                machine.free_heap_blocks.clear();
+                machine.memory.w32(limit, 0xa5a5_beef);
+                let image = machine.create_image_from_bytes(&png, "compact alpha", 0);
+                assert_ne!(
+                    image, 0,
+                    "valid image must fit without growing the guest heap"
+                );
+                let pixels = machine.memory.r32(image);
+                assert_eq!(machine.allocation_size(pixels), Some(64));
+                assert_eq!(machine.memory.r32(limit), 0xa5a5_beef);
+                let mut state = vec![0; crate::save_state::SERIALIZED_SIZE];
+                crate::save_state::encode_machine(&machine, 123, &mut state).unwrap();
+                let mut restored = crate::save_state::decode_machine(&state, 123).unwrap();
+                restored.fill_screen_rect(0, 0, 240, 20, 0x001f);
+                restored.blit_image(SCREEN_IMAGE_STRUCT, image, 0, 0, 9, 2, 0, 0, true);
+                restored.blit_image(SCREEN_IMAGE_STRUCT, image, 7, 0, 2, 2, 20, 10, true);
+                let frame = restored.frame_pixels();
+                assert_eq!(&frame[..9], &expected[..9]);
+                assert_eq!(&frame[240..249], &expected[9..]);
+                assert_eq!(&frame[2420..2422], &expected[7..9]);
+                assert_eq!(&frame[2660..2662], &expected[16..18]);
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_byte_alpha_remains_readable_after_save() {
+        for wide in [false, true] {
+            for big_endian in [false, true] {
+                let mut machine = image_machine(wide, big_endian);
+                let image = machine.allocate(machine.image_header_len());
+                let pixels = machine.allocate(24);
+                machine.memory.w32(image, pixels);
+                machine.write_image_dims(image, 2, 1);
+                machine.memory.w16(pixels, 0);
+                machine.memory.w16(pixels + 2, 0xffff);
+                machine.memory.w32(pixels + 8, IMAGE_ALPHA_TAG);
+                machine.memory.w32(pixels + 12, !IMAGE_ALPHA_TAG);
+                machine.memory.write_bytes(pixels + 16, &[0, 1, 0, 0]);
+                let mut state = vec![0; crate::save_state::SERIALIZED_SIZE];
+                crate::save_state::encode_machine(&machine, 123, &mut state).unwrap();
+                let mut restored = crate::save_state::decode_machine(&state, 123).unwrap();
+                restored.fill_screen_rect(0, 0, 2, 1, 0x001f);
+                restored.blit_image(SCREEN_IMAGE_STRUCT, image, 0, 0, 2, 1, 0, 0, true);
+                assert_eq!(&restored.frame_pixels()[..2], &[0, 0x0000ff]);
+            }
+        }
     }
 }

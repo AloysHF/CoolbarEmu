@@ -31,7 +31,8 @@ signatures and configuration keys are not supported.
   resource lookup, image decoding
 - **ARM/Thumb CPU emulation** — little- and big-endian execution, interworking branches
 - **Service bridge** — firmware-style API for memory, resources, display,
-  input, text, little-endian game-data reads, DF panel invalidation,
+  input, text, stateful stdio random numbers, little-endian game-data reads/writes
+  and string-length reads, DF panel invalidation,
   fixed-point game math, and
   packed-rectangle collision detection
 - **Guest filesystem** — sandboxed in-memory files used by CBE installers and
@@ -42,14 +43,23 @@ signatures and configuration keys are not supported.
   remain subject to the limitations in [Game Compatibility](docs/Game-Compatibility.md)
 - **Local billing simulation** — supported legacy point-play consumption requests
   receive a local receipt, allowing 1943 V101 to enter its selection and battle
-  screens without the retired payment server; no real charge or SMS is performed
+  screens without the retired payment server; accepted legacy SMS billing requests
+  receive deferred local success, allowing Sheep V10 to enter play without a real charge or SMS
 - **Login fields** — basic numeric account/password controls with focus,
   password masking and save-state preservation; online authentication is not implemented
-- **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction with format-specific RGB565 palette byte order
+- **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction
+  and format-specific palette byte order with compact persistent transparency masks;
+  firmware PNG transparency survives guest
+  RGB565 image transforms; picture-library numeric glyphs support HUD
+  counters and selected targets, with LCD clipping for fixed-manager sprite-sheet digits
+  and scalar screen/image rectangle outlines
 - **Text rendering** — GBK and guest-endian UCS-2 strings, clipped and wrapped
-  text, and offscreen drawing with an embedded Unicode bitmap font
+  text, promoted RGB565 stack colors in either guest byte order, and offscreen
+  glyph-cache drawing with an embedded Unicode bitmap font
 - **Screen composition** — resource initialization, stacked backgrounds and
-  modal overlays, event propagation, and resuming screens without reinitialization
+  modal overlays, event propagation, and resuming screens without reinitialization;
+  the shared tile-map game service initializes maps into caller objects with
+  registered tile images, column-major cells and callable method slots
 - **Application LCD dimensions** — startup screen clips, clears, and background layout resolve
   176×220, 240×320, 240×352, or 240×400 surfaces and their landscape variants;
   240×400 is the fallback. Screenshots and frontends share the active geometry;
@@ -92,7 +102,7 @@ signatures and configuration keys are not supported.
   is a planned follow-up)
 - **Touch input** — the guest touchscreen responds to mouse clicks in the
   standalone frontend and to pointer devices (mouse or touchscreen) in
-  RetroArch
+  RetroArch, including menus that consume touch edges while drawing
 - **Libretro integration** — playable libretro core with RGB888 video output,
   RetroPad input, content loading, save states, reset, and memory exposure
   (core options cover volume, touch input, auto BGM, screen orientation, and

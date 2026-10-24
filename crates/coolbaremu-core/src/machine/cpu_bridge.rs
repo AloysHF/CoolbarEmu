@@ -63,6 +63,29 @@ impl CoolbarMachine {
                 self.state = super::MachineState::Halted;
                 return Ok(());
             }
+            // A null indirect branch (e.g. `bx r3` with r3 == 0) is how the
+            // DF-engine vtable dispatch invokes a method slot that the guest
+            // never populated.  Branching to address 0 would fault, so treat
+            // it as an unimplemented method: resume at the caller's return
+            // address (LR is still the caller's because `bx` does not relink)
+            // with a zero result.  This mirrors the host-side
+            // fill_zero_method_slots handling for allocated objects, but also
+            // covers guest-managed objects whose method tables the host cannot
+            // pre-fill at construction time.
+            if self.cpu.thumb_mode() {
+                let insn = self.memory.r16(pc);
+                if insn & 0xff87 == 0x4700 {
+                    let rm = ((insn >> 3) & 0x0f) as u8;
+                    if rm < 13 && self.register(rm) == 0 {
+                        let lr = self.register(reg::LR) & !1;
+                        if lr != 0 && self.memory.region(lr, 2).is_some() {
+                            self.set_result(0);
+                            self.cpu.reg_set(Mode::User, reg::PC, lr);
+                            continue;
+                        }
+                    }
+                }
+            }
             if (SERVICE_BASE..SERVICE_BASE + SERVICE_SIZE).contains(&pc) {
                 self.handle_service(pc)?;
             } else if (MANAGER_BASE..MANAGER_BASE + MANAGER_SIZE as u32).contains(&pc) {
