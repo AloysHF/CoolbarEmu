@@ -3749,6 +3749,88 @@ mod tests {
         );
     }
 
+    /// A slot can hold a value that is mapped yet still names no routine.
+    /// Game #119 stores a data pointer in the slot: `ldr r0,[r0,#0x10]` then
+    /// `ldr r3,[r0,#0x6C]` yields 0x05037828, which is one entry of a ten
+    /// element record table (0x050377C0..0x050377E4) whose entries all point
+    /// at small-integer payload.  The value is even, so `bx r3` leaves Thumb
+    /// state and "executes" the records, sliding until the fetch runs off the
+    /// heap at 0x06000000.  Inside the ROM image an even value is a real ARM
+    /// entry point, so only slots outside it may be judged this way.
+    #[test]
+    fn indirect_branch_through_even_slot_outside_rom_returns_to_caller() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w16(entry, 0x4718); // Thumb bx r3
+        machine.memory.w16(entry + 2, 0xe7fe); // terminal self-branch
+        machine.cpu.reg_set(Mode::User, reg::PC, entry | 1);
+        machine.cpu.reg_set(Mode::User, reg::LR, (entry + 2) | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
+                                                          // Even, mapped, but in the heap rather than the ROM image.
+        machine.cpu.reg_set(Mode::User, 3, HEAP_BASE + 0x100);
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(
+            machine.state(),
+            MachineState::Halted,
+            "an even slot outside the ROM image must resume at LR"
+        );
+    }
+
+    /// The same slot value inside the ROM image is a genuine ARM entry point
+    /// — 058/059 call ARM routines that way — so it must still be taken, not
+    /// short-circuited into returning zero.
+    #[test]
+    fn indirect_branch_to_even_slot_inside_rom_is_not_a_dead_slot() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w16(entry, 0x4718); // Thumb bx r3
+        machine.memory.w16(entry + 2, 0xe7fe); // terminal self-branch
+                                               // An ARM routine that leaves a marker in r0 and returns, so the
+                                               // outcome is observable: a dead slot hands the caller a zero
+                                               // result instead of running it.
+        let arm_routine = entry + 0x100;
+        machine.executable.code_size = 0x200; // keep the routine in loaded ROM
+        machine.memory.w32(arm_routine, 0xe3a0_005a); // ARM mov r0, #0x5a
+        machine.memory.w32(arm_routine + 4, 0xe12f_ff1e); // ARM bx lr
+        machine.cpu.reg_set(Mode::User, reg::PC, entry | 1);
+        machine.cpu.reg_set(Mode::User, reg::LR, (entry + 2) | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
+        machine.cpu.reg_set(Mode::User, 3, arm_routine); // even, inside ROM
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(
+            machine.register(0),
+            0x5a,
+            "an even slot naming an ARM routine in ROM must be called"
+        );
+    }
+
+    /// A slot pointing at mapped memory that holds no instruction — a zeroed
+    /// buffer, an uninitialised page — decodes as a NOP and slides through
+    /// the region until it faults.  Game #119 hits this with 0x02000001: the
+    /// whole window at 0x02000000 is zero.
+    #[test]
+    fn indirect_branch_through_zero_filled_slot_returns_to_caller() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w16(entry, 0x4718); // Thumb bx r3
+        machine.memory.w16(entry + 2, 0xe7fe); // terminal self-branch
+        machine.cpu.reg_set(Mode::User, reg::PC, entry | 1);
+        machine.cpu.reg_set(Mode::User, reg::LR, (entry + 2) | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
+                                                          // Odd, mapped, outside the ROM image, and zero-filled: the stack
+                                                          // window answers for all three.
+        machine.cpu.reg_set(Mode::User, 3, STACK_BASE + 0x40 | 1);
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(
+            machine.state(),
+            MachineState::Halted,
+            "a zero-filled slot must resume at LR instead of sliding"
+        );
+    }
+
     /// Fixed-ABI directory entries must expose both an init stub (+0) and a
     /// get-table stub (+4). Bootstrap code that indexes the directory as a
     /// dense pointer array reads the +4 word; leaving it null makes the guest

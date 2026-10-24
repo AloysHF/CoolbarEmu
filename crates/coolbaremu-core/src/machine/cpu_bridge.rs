@@ -99,9 +99,46 @@ impl CoolbarMachine {
                             || (MANAGER_BASE..MANAGER_BASE + MANAGER_SIZE as u32)
                                 .contains(&aligned)
                             || (SERVICE_BASE..SERVICE_BASE + SERVICE_SIZE).contains(&aligned);
-                        let unresolved =
-                            slot == 0 || (!host_window && self.memory.region(aligned, 2).is_none());
+                        // Only the ROM image holds routines the guest
+                        // compiled, so that is the one place a slot can
+                        // legitimately name code.  Everything else — heap,
+                        // data, stack — is payload if it lands there.
+                        let in_rom_image = self
+                            .memory
+                            .region(aligned, 2)
+                            .is_some_and(|r| r.base == self.executable.code_address());
+                        // A slot can also land on mapped memory that simply
+                        // holds no code — an uninitialised page, a zeroed
+                        // resource buffer.  Fetching there decodes as a NOP
+                        // and slides through the region until it faults, so
+                        // the first instruction word says it: no real entry
+                        // point ever begins with a zero encoding.
+                        let starts_with_no_instruction = if slot % 2 == 1 {
+                            self.memory.region(aligned, 2).is_some()
+                                && self.memory.r16(aligned) == 0
+                        } else {
+                            self.memory.region(aligned, 4).is_some()
+                                && self.memory.r32(aligned) == 0
+                        };
+                        // An even slot leaves Thumb state.  Inside the ROM
+                        // image that is a real ARM entry point (058/059 call
+                        // ARM routines that way); anywhere else it is a slot
+                        // the guest never filled with a routine, and letting
+                        // the switch happen executes payload as code.
+                        let unresolved = slot == 0
+                            || (!host_window
+                                && (self.memory.region(aligned, 2).is_none()
+                                    || (!in_rom_image
+                                        && (slot.is_multiple_of(2)
+                                            || starts_with_no_instruction))));
                         if unresolved {
+                            if std::env::var_os("CBE_TRACE").is_some() {
+                                eprintln!(
+                                    "[bxstub] pc=0x{pc:08X} r{rm}=0x{slot:08X} even={} zero={}",
+                                    slot.is_multiple_of(2),
+                                    starts_with_no_instruction
+                                );
+                            }
                             let lr = self.register(reg::LR) & !1;
                             if lr != 0 && self.memory.region(lr, 2).is_some() {
                                 self.set_result(0);
