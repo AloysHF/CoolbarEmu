@@ -57,7 +57,9 @@ signatures and configuration keys are not supported.
   text, promoted RGB565 stack colors in either guest byte order, and offscreen
   glyph-cache drawing with an embedded Unicode bitmap font
 - **Screen composition** — resource initialization, stacked backgrounds and
-  modal overlays, event propagation, and resuming screens without reinitialization
+  modal overlays, event propagation, and resuming screens without reinitialization;
+  the shared tile-map game service initializes maps into caller objects with
+  registered tile images, column-major cells and callable method slots
 - **Application LCD dimensions** — startup screen clips, clears, and background layout resolve
   176×220, 240×320, 240×352, or 240×400 surfaces and their landscape variants;
   240×400 is the fallback. Screenshots and frontends share the active geometry;

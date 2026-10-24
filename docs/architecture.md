@@ -388,6 +388,16 @@ Horizontal and vertical movement queries return signed distances, checking the
 map bounds and the directional edge bits on both source and destination cells.
 Both native scene layouts bind the movement pair: offsets +0x678/+0x67c and
 +0x680/+0x684 use the same horizontal/vertical query implementations.
+The shared game service slot 72 initializes a native tile map into a
+caller-provided object: the destination arrives in r0 and the picture library in
+r3, the map resource name through the fifth AAPCS argument and the tile capacity
+through the sixth. The host parses the named map, registers each tile image in
+the caller's library, lays out the column-major cell table and the pixel/tile
+dimension fields the guest renderer walks, and fills method slots 0x28..=0xbc
+with callable AUTO stubs so later indirect calls stay off NULL even when the map
+cannot be loaded. Without the handler the call fell through to the generic
+constructor path and left every method slot zero, faulting the guest on its next
+indirect call.
 Tile sizes come from map metadata; malformed or truncated maps are rejected.
 For scenes with empty built-in actor tables, the application's trailing-data
 callback runs synchronously with the decoded stream and its byte cursor. The

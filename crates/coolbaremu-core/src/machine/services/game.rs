@@ -300,6 +300,7 @@ impl CoolbarMachine {
             71 => {
                 self.handle_method_stub(Self::method_stub_address(METHOD_KIND_GAMEOLD, 0x11c) & !1);
             }
+            72 if self.uses_fixed_manager_abi() => self.initialize_native_map(),
             75 if self.uses_fixed_manager_abi() => {
                 let object = self.register(0);
                 let capacity = self.register(1) & 0xffff;
