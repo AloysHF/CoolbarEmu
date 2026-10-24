@@ -7,12 +7,13 @@ use log::info;
 use super::{
     arm_blx_immediate_target, fixed_manager_specs, service_trace_enabled, thumb_add_pc_target,
     CoolbarMachine, APP_STORE_MANAGER, DATA_PACKAGE_FULL_PATH_SERVICE, EXIT_ADDRESS,
-    FIXED_GAMEOLD_OBJECT_SERVICE, FIXED_GAMEOLD_REGION_SERVICE, FIXED_MANAGER_GET,
-    FIXED_MANAGER_INIT, IO_METHOD_BASE, IO_METHOD_STRIDE, IO_NV_READ_OFFSET, IO_NV_WRITE_OFFSET,
-    LOG_NOOP_SERVICE, MANAGER_BASE, MANAGER_SIZE, MEMORY_BLOCK_SERVICE, METHOD_STUB_BASE,
-    METHOD_STUB_KINDS, METHOD_STUB_STRIDE, NATIVE_BILLING_PAYNUM, NATIVE_BILLING_REMAIN_DAY,
-    NATIVE_BILLING_SEND_SMS, NATIVE_DIRTY_RECT_SERVICE, NATIVE_DISPATCH_SERVICE,
-    NATIVE_SYSTEM_TIME_SERVICE, OLDLIB_DRAW_SERVICE, SERVICE_BASE, SERVICE_SIZE, TABLE_STRIDE,
+    EXIT_REGION_SIZE, FIXED_GAMEOLD_OBJECT_SERVICE, FIXED_GAMEOLD_REGION_SERVICE,
+    FIXED_MANAGER_GET, FIXED_MANAGER_INIT, IO_METHOD_BASE, IO_METHOD_STRIDE, IO_NV_READ_OFFSET,
+    IO_NV_WRITE_OFFSET, LOG_NOOP_SERVICE, MANAGER_BASE, MANAGER_SIZE, MEMORY_BLOCK_SERVICE,
+    METHOD_STUB_BASE, METHOD_STUB_KINDS, METHOD_STUB_STRIDE, NATIVE_BILLING_PAYNUM,
+    NATIVE_BILLING_REMAIN_DAY, NATIVE_BILLING_SEND_SMS, NATIVE_DIRTY_RECT_SERVICE,
+    NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE, OLDLIB_DRAW_SERVICE, SERVICE_BASE,
+    SERVICE_SIZE, TABLE_STRIDE,
 };
 
 impl CoolbarMachine {
@@ -98,6 +99,26 @@ impl CoolbarMachine {
                 // a callable stub, whichever protocol the game follows.
                 self.handle_native_dispatch_service();
                 self.return_from_service();
+            } else if (EXIT_ADDRESS..EXIT_ADDRESS + EXIT_REGION_SIZE).contains(&pc) {
+                // The exit window doubles as the host trampoline table. The
+                // sentinel at exactly EXIT_ADDRESS is the guest's "return to
+                // host" address (handled above), but games also treat it as a
+                // code base: they load the sentinel into a register and run a
+                // `BL` second half-word, whose offset selects a slot at
+                // EXIT_ADDRESS + offset. Fetching such a slot used to fault
+                // because only the single sentinel address was recognised.
+                // Each slot is an unanswered host call, so it must return to
+                // the caller — `LR` already holds the resume address that the
+                // `BL` half-word computed.
+                let target = self.register(reg::LR);
+                self.cpu.reg_set(Mode::User, reg::PC, target & !1);
+                let mut cpsr = self.register(reg::CPSR);
+                if target & 1 != 0 {
+                    cpsr |= 1 << 5;
+                } else {
+                    cpsr &= !(1 << 5);
+                }
+                self.cpu.reg_set(Mode::User, reg::CPSR, cpsr);
             } else if self.is_semihosting_call(pc) {
                 if self.handle_semihosting(pc)? {
                     return Ok(());

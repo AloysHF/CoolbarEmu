@@ -113,6 +113,16 @@ const SERVICE_BASE: u32 = 0x0c00_0000;
 const SERVICE_SIZE: u32 = 0x10_0000;
 const LOG_NOOP_SERVICE: u32 = SERVICE_BASE + SERVICE_SIZE - 4;
 const EXIT_ADDRESS: u32 = 0x0f00_0000;
+/// Size of the host trampoline window that starts at [`EXIT_ADDRESS`].
+///
+/// The sentinel at [`EXIT_ADDRESS`] is the guest's "return to host" address,
+/// but games also reuse it as a *code base*: they load the sentinel into a
+/// register and execute a `BL` second half-word whose offset selects a slot
+/// inside this window, i.e. `EXIT_ADDRESS + offset`. The reference emulator
+/// maps the same 4 KiB window (`PROGRAM_EXIT_ADDR`, `uc_mem_map(..., 0x1000)`)
+/// so those slots resolve instead of faulting, and each one simply returns to
+/// the caller through `LR`.
+const EXIT_REGION_SIZE: u32 = 0x1000;
 const FIXED_MANAGER_INIT: u32 = SERVICE_BASE + 0xe000;
 /// Per-manager "get table" stubs that return the canonical dense function
 /// table for the caller's group. Fixed-ABI directory entries place the init
@@ -1863,6 +1873,12 @@ impl CoolbarMachine {
     }
     pub fn last_pc(&self) -> u32 {
         self.last_pc
+    }
+    /// Source address of the most recent non-sequential control transfer
+    /// (the instruction that produced the current faulting PC), for fault
+    /// diagnostics.
+    pub fn last_branch_source(&self) -> Option<u32> {
+        self.recent_branches.back().map(|(from, _)| *from)
     }
     pub fn instruction_count(&self) -> u64 {
         self.instruction_count
@@ -3652,6 +3668,32 @@ mod tests {
 
         machine.run_until_return(1_000).unwrap();
         assert_eq!(machine.native_app_parser, parser);
+    }
+
+    /// The exit window doubles as the host trampoline table. Games load the
+    /// exit sentinel into `LR` and run a `BL` second half-word whose offset
+    /// selects a slot at `EXIT_ADDRESS + offset`; that half-word also stores
+    /// the resume address back into `LR`. Fetching such a slot must resume
+    /// through `LR` — before this, only the exact sentinel was recognised and
+    /// the slot faulted as an unmapped fetch.
+    #[test]
+    fn exit_region_fetch_dispatches_trampoline_call() {
+        let mut machine = machine_from_minimal_archive();
+        // `LR` carries the resume address the `BL` half-word computed; making
+        // it the sentinel means a correct dispatch lands back on the sentinel
+        // and the run ends cleanly instead of faulting.
+        machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+        machine
+            .cpu
+            .reg_set(Mode::User, reg::PC, EXIT_ADDRESS + 0x234);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10); // ARM state
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(
+            machine.register(reg::PC),
+            EXIT_ADDRESS,
+            "trampoline slot must resume through LR"
+        );
     }
 
     /// Fixed-ABI directory entries must expose both an init stub (+0) and a
