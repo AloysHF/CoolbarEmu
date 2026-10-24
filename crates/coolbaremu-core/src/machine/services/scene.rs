@@ -244,11 +244,17 @@ impl CoolbarMachine {
             );
         }
         // Empty actor tables precede the application-owned scene payload.
+        // The payload starts with the named-region count, which stays
+        // non-zero for scenes whose regions build the actors: the
+        // application callback owns that list and must run whenever the
+        // built-in actor table is empty, receiving the stream cursor
+        // positioned after both counts.
         let mut reader = Reader {
             bytes: &scene_bytes,
             position: descriptor.tail,
         };
-        if reader.short() == Some(0) && reader.short() == Some(0) {
+        let empty_actor_table = reader.short() == Some(0) && reader.short().is_some();
+        if empty_actor_table {
             let callback = self.argument(7);
             if callback != 0 {
                 let stream = self.allocate(scene_bytes.len() as u32);

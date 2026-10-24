@@ -1381,7 +1381,7 @@ impl CoolbarMachine {
     fn allocation_size(&self, address: u32) -> Option<u32> {
         let (&start, &size) = self.heap_allocations.range(..=address).next_back()?;
         let offset = address.checked_sub(start)?;
-        (offset < size).then_some(size - offset)
+        (offset < size).then(|| size - offset)
     }
 
     /// Execute one screen update and render pass.

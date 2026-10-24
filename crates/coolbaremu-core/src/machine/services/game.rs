@@ -1243,11 +1243,10 @@ impl CoolbarMachine {
             return;
         }
         for offset in (0..size).step_by(4) {
-            if self.memory.r32(obj + offset) == 0 {
-                self.memory.w32(
-                    obj + offset,
-                    Self::method_stub_address(METHOD_KIND_AUTO, offset),
-                );
+            let slot = obj.wrapping_add(offset);
+            if self.memory.r32(slot) == 0 {
+                self.memory
+                    .w32(slot, Self::method_stub_address(METHOD_KIND_AUTO, offset));
             }
         }
     }
@@ -1470,6 +1469,37 @@ impl CoolbarMachine {
                         self.memory.w16(a + off, 0);
                     }
                     self.memory.w32(a + 12, 0);
+                    // The GameOld scene model embeds the actor at
+                    // container+0x34 and keeps the global template table
+                    // pointer at container+0x14 (the actor's method-slot
+                    // range 0x10..0x28 deliberately stops before 0x14's
+                    // neighbour).  Some scenes build the container through a
+                    // code path that never links container+0x14, leaving the
+                    // actor lookup (scene handler 7) reading a NULL template
+                    // table and jumping to PC 0.  Repair it here: the actor
+                    // `a` is the embedded object, so the owning container is
+                    // `a - 0x34`.  At this point the container's own method
+                    // table (+0x40) may still be zero (the guest fills it
+                    // later), so we cannot gate on it.  Instead we only gate
+                    // on the object living in the heap and on the link being
+                    // still zero, which is sufficient and safe: a correctly
+                    // linked container already has a non-zero +0x14 and is
+                    // left untouched, while games that never set it get a
+                    // valid template-table base.
+                    let container = a.wrapping_sub(0x34);
+                    if (0x0500_0000..0x0a00_0000).contains(&a)
+                        && (0x0500_0000..0x0a00_0000).contains(&container)
+                    {
+                        let template_table = self.memory.r32(0x0502_FF68);
+                        let template_table = if template_table != 0 {
+                            template_table
+                        } else {
+                            0x0540_0000
+                        };
+                        if self.memory.r32(container + 0x14) == 0 {
+                            self.memory.w32(container + 0x14, template_table);
+                        }
+                    }
                 }
                 self.set_result(a);
             }
