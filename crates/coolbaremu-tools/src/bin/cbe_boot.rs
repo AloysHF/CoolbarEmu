@@ -44,6 +44,20 @@ struct Cli {
     orientation: OrientationArg,
     #[arg(long)]
     screenshot: Option<PathBuf>,
+    /// Dump a guest memory range as u32 words: START:END in hex.
+    #[arg(long, value_parser = parse_range)]
+    dump: Vec<(u32, u32)>,
+}
+
+fn parse_range(value: &str) -> Result<(u32, u32), String> {
+    let (start, end) = value
+        .split_once(':')
+        .ok_or_else(|| "range must use START:END hex syntax".to_owned())?;
+    let start = u32::from_str_radix(start.trim_start_matches("0x"), 16)
+        .map_err(|_| "range start must be a hex number".to_owned())?;
+    let end = u32::from_str_radix(end.trim_start_matches("0x"), 16)
+        .map_err(|_| "range end must be a hex number".to_owned())?;
+    Ok((start, end))
 }
 
 fn parse_key_event(value: &str) -> Result<(u32, u8), String> {
@@ -207,6 +221,36 @@ fn main() -> Result<()> {
     }
     for address in machine.bad_accesses().iter().take(32) {
         eprintln!("unmapped address=0x{address:08X}");
+    }
+    // Fault-context dump: every mapped region plus the ROM bytes around the
+    // last non-sequential branch site so the bad jump can be disassembled.
+    // Successful runs stay quiet; only a failure needs the crime scene.
+    if result.is_err() {
+        eprintln!("=== memory regions ===");
+        for region in machine.memory_regions() {
+            eprintln!(
+                "  base=0x{:08X} size=0x{:X} ro={}",
+                region.base, region.size, region.read_only
+            );
+        }
+        let fault = machine.last_pc();
+        let branch = machine.last_branch_source().unwrap_or(fault);
+        eprintln!("=== fault-context ROM (branch site 0x{branch:08X}) ===");
+        for addr in (branch.saturating_sub(0x60)..=branch.wrapping_add(0x1C)).step_by(4) {
+            eprintln!("0x{addr:08X}: 0x{:08X}", machine.read_u32(addr));
+        }
+        // For "unsupported instruction" faults the faulting PC is the real
+        // site, so dump the bytes there too (the branch site may be padding).
+        eprintln!("=== fault-context ROM (faulting pc 0x{fault:08X}) ===");
+        for addr in (fault.saturating_sub(0x20)..=fault.wrapping_add(0x20)).step_by(4) {
+            eprintln!("0x{addr:08X}: 0x{:08X}", machine.read_u32(addr));
+        }
+    }
+    for &(start, end) in &cli.dump {
+        eprintln!("=== dump 0x{start:08X}..0x{end:08X} ===");
+        for addr in (start..end).step_by(4) {
+            eprintln!("0x{addr:08X}: 0x{:08X}", machine.read_u32(addr));
+        }
     }
     result
 }
