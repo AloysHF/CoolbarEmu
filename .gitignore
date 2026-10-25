@@ -31,6 +31,7 @@ out_*/
 
 # Internal project files
 .claude/
+.workbuddy/
 CLAUDE.md
 AGENTS.md
 tmp/

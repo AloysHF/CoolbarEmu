@@ -71,7 +71,7 @@ Pushing the tag triggers `.github/workflows/release.yml`, which:
 
 1. Go to [Releases](https://github.com/AloysHF/CoolbarEmu/releases)
 2. Find the draft release created by CI
-3. Review the auto-generated changelog — edit if needed
+3. Review the auto-generated changelog — edit if needed(You can refer to the changelog of the previous official release)
 4. Verify all 15 expected artifacts are attached:
    - `coolbaremu-linux-x86_64.tar.gz`
    - `coolbaremu-linux-aarch64.tar.gz`
