@@ -30,6 +30,10 @@ rooms, actual recharges and multiplayer games remain unavailable. 坦克大战 V
 (A group, row 29) is a ROM-level defect rather than an emulation gap: its
 hard-coded screen descriptor names a data blob inside the code image as the
 screen logic routine, so its play run cannot be repaired host-side (issue #103).
+Rich (C group, row 33) is likewise a ROM-level defect: its resource handler is a
+single-use form that both the game itself and the standard screen lifecycle
+invoke without re-seeding, so the map load reads the name pool past the stack top
+and divides by zero; it cannot be repaired host-side (issue #201).
 
 ## Summary
 
@@ -315,7 +319,7 @@ not provide the original server's content or a real carrier payment service.
 | 30 | `C/Picview.CBE` | 176×220 | <img src="images/C/Picview.png" width="120" alt="Picview idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 31 | `C/Pocker.CBE` | 176×220 | <img src="images/C/Pocker.png" width="120" alt="Pocker idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 32 | `C/Precious.CBE` | 176×220 | <img src="images/C/Precious.png" width="120" alt="Precious idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
-| 33 | `C/Rich.CBE` | 176×220 | <img src="images/C/Rich.png" width="120" alt="Rich idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
+| 33 | `C/Rich.CBE` | 176×220 | <img src="images/C/Rich.png" width="120" alt="Rich idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay run is a ROM defect — not repairable host-side: the game's resource handler (load callback 0x01009266) is non-idempotent, gets invoked twice without re-seeding its group-index table (game-side pump call, then the standard screen lifecycle), and the stale write-back indices 48/51/54 read the name pool past the stack top into unmapped memory, so the map load returns resource id 0xFFFFFFFF and the width-0 image divides by zero. See issue #201 |
 | 34 | `C/Ringside.CBE` | 176×220 | <img src="images/C/Ringside.png" width="120" alt="Ringside idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
 | 35 | `C/RussBlock.CBE` | 176×220 | <img src="images/C/RussBlock.png" width="120" alt="RussBlock idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
 | 36 | `C/Sanbing.CBE` | 176×220 | <img src="images/C/Sanbing.png" width="120" alt="Sanbing idle frame"> | Not assessed | Ready | Native 176×220 LCD; startup margins resolved; gameplay unverified |
