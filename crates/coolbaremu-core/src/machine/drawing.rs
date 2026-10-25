@@ -2128,6 +2128,18 @@ impl CoolbarMachine {
             11 => {
                 let image = self.register(0);
                 if image != 0 {
+                    // This slot is the image destructor. Guests release a
+                    // picture library by clearing every image header here and
+                    // only then freeing the header slots themselves, so the
+                    // pixel allocation an image owns must be reclaimed before
+                    // the header is zeroed; clearing alone leaked every
+                    // decoded picture until the heap pool ran out (钻石迷情3
+                    // re-entered a mode with all decodes failing and a black
+                    // screen).
+                    let pixels = self.memory.r32(image);
+                    if pixels != 0 {
+                        self.deallocate(pixels);
+                    }
                     for offset in (0..12).step_by(4) {
                         self.memory.w32(image + offset, 0);
                     }
@@ -3095,5 +3107,55 @@ mod alpha_storage_tests {
                 assert_eq!(&restored.frame_pixels()[..2], &[0, 0x0000ff]);
             }
         }
+    }
+
+    #[test]
+    fn game_lcd_image_clear_reclaims_the_pixel_allocation() {
+        // Guests release a picture library by clearing every image header
+        // through game LCD slot 11 and only then freeing the header slots, so
+        // the slot must reclaim the pixel buffer the image owns. Clearing the
+        // header alone leaked every decoded picture until the heap pool ran
+        // out and later decodes failed (钻石迷情3 re-entry rendered black).
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.initialize_screen();
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(
+                &[255, 0, 0, 255, 0, 255, 0, 255],
+                2,
+                1,
+                image::ExtendedColorType::Rgba8,
+            )
+            .unwrap();
+        let image = machine.create_image_from_bytes(&png, "clear test", 0);
+        assert_ne!(image, 0);
+        let pixels = machine.memory.r32(image);
+        assert_ne!(pixels, 0);
+        let header = machine.allocate(8);
+        assert_ne!(header, 0);
+
+        machine.cpu.reg_set(armv4t_emu::Mode::User, 0, image);
+        machine.handle_game_lcd_service(11);
+
+        // The header is zeroed and the pixel allocation is back on the heap.
+        for offset in (0..12).step_by(4) {
+            assert_eq!(machine.memory.r32(image + offset), 0);
+        }
+        assert!(!machine.heap_allocations.contains_key(&pixels));
+        let reclaimed = machine.allocate(24);
+        assert_ne!(reclaimed, 0);
+        assert_eq!(reclaimed, pixels);
+
+        // Repeated create/clear cycles keep reclaiming the same space instead
+        // of walking the pool forward until allocations fail.
+        let mut images = Vec::new();
+        for _ in 0..64 {
+            let image = machine.create_image_from_bytes(&png, "clear cycle", 0);
+            assert_ne!(image, 0, "create/clear cycle must not exhaust the heap");
+            machine.cpu.reg_set(armv4t_emu::Mode::User, 0, image);
+            machine.handle_game_lcd_service(11);
+            images.push(image);
+        }
+        let _ = images;
     }
 }
