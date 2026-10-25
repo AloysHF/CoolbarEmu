@@ -60,6 +60,11 @@ impl VirtualFileSystem {
         let Some(dir) = dir else {
             return;
         };
+        // EmulatorJS unpacks the content and its companion archive into the
+        // wasm filesystem root, which also holds the runtime's own virtual
+        // directories (/dev, /proc, /usr, ...). Only the files sitting
+        // directly in that root are companion resources there.
+        let recurse = !(cfg!(target_os = "emscripten") && dir == Path::new("/"));
         let mut stack = vec![(dir.to_path_buf(), PathBuf::new())];
         // A runaway tree must not hang the loader; the depth limit only
         // truncates exotic layouts, sidecar directories are flat.
@@ -83,7 +88,9 @@ impl VirtualFileSystem {
                     format!("{}/{}", relative.to_string_lossy(), name)
                 };
                 if file_type.is_dir() {
-                    stack.push((entry.path(), PathBuf::from(&rel)));
+                    if recurse {
+                        stack.push((entry.path(), PathBuf::from(&rel)));
+                    }
                 } else {
                     self.host_files.insert(rel.to_lowercase(), entry.path());
                 }

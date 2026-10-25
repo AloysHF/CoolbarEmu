@@ -362,6 +362,9 @@ supplied image, honoring byte length and register/stack coordinates.
 Read-only companion-resource lookup prefers an exact relative path, then permits
 one leading firmware-root directory to be omitted. It preserves the remaining
 path and rejects parent traversal; guest writes remain in virtual memory.
+The Emscripten build treats the wasm filesystem root as flat and indexes only
+its direct files, because EmulatorJS extracts the content and its companion
+archive there alongside the runtime's own virtual directories.
 
 Screen registration through `vmAddScreenEx` retains its explicit callback context,
 including zero. Initialization, resource loading, logic and rendering share this

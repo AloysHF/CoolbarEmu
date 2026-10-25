@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="在浏览器中加载 Coolbar/CBE 应用即可直接运行，无需安装。由 EmulatorJS 与 CoolbarEmu WebAssembly 核心驱动。">
+  <meta name="theme-color" content="#0d1117">
+  <title>在线试玩 Coolbar 游戏 — CoolbarEmu</title>
+  <link rel="icon" type="image/png" href="res/logo.png">
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    .play-page {
+      min-height: 100vh;
+    }
+
+    .play-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      max-width: var(--max);
+      margin: 0 auto;
+      padding: 20px 24px;
+    }
+
+    .play-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 1.1rem;
+      letter-spacing: 0.02em;
+    }
+    .play-brand img { border-radius: 6px; }
+
+    .play-header-links {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 18px;
+    }
+    .play-header-links a { color: var(--muted); font-size: 0.9rem; }
+    .play-header-links a:hover { color: var(--amber); }
+
+    .play-main {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 8px 24px 64px;
+    }
+
+    .play-title { font-size: clamp(1.6rem, 4vw, 2.4rem); line-height: 1.2; }
+    .play-title span { color: var(--amber); }
+
+    .play-subtitle { color: var(--muted); margin: 8px 0 20px; max-width: 68ch; }
+    .play-subtitle code { color: var(--text); font-size: 0.95em; }
+
+    .play-stage {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      background: #05080c;
+      border: 1px solid rgba(240, 163, 94, 0.28);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+    }
+
+    .play-stage > #game { position: absolute; inset: 0; }
+    #game, #game canvas { width: 100% !important; height: 100% !important; }
+
+    .play-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 5;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      padding: 24px;
+      text-align: center;
+      background: rgba(5, 8, 12, 0.9);
+      backdrop-filter: blur(3px);
+    }
+
+    .play-overlay h2 { font-size: 1.3rem; }
+    .play-overlay p { color: var(--muted); max-width: 56ch; }
+    .play-overlay .button { margin-top: 4px; }
+    .play-overlay[hidden] { display: none; }
+    .play-overlay code { font-size: 0.9em; color: var(--text); }
+
+    .play-picker-files {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 14px 18px;
+    }
+
+    .play-file {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .play-file label.button { cursor: pointer; }
+    .play-file input[hidden] { display: none; }
+
+    .play-file-name {
+      font-size: 0.78rem;
+      color: var(--muted);
+      max-width: 220px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .play-file-name:empty { display: none; }
+
+    .play-picker-error { color: #ff8f7a; font-size: 0.85rem; }
+    .play-picker-hint { font-size: 0.78rem; color: #6b7684; }
+    .play-picker-hint a { color: var(--muted); text-decoration: underline; }
+
+    .play-start { margin-top: 6px; }
+    .play-start:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .play-stage.is-drop {
+      border-color: rgba(240, 163, 94, 0.7);
+      box-shadow: 0 0 0 3px rgba(240, 163, 94, 0.18), 0 20px 60px rgba(0, 0, 0, 0.45);
+    }
+
+    .play-controls {
+      margin-top: 16px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 20px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .play-controls kbd {
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      font-size: 0.78rem;
+      color: var(--text);
+      background: var(--panel);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-bottom-width: 2px;
+      border-radius: 5px;
+      padding: 1px 6px;
+    }
+
+    .play-reset {
+      margin-left: auto;
+      padding: 4px 14px;
+      font: inherit;
+      font-size: 0.8rem;
+      color: var(--muted);
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 999px;
+      cursor: pointer;
+    }
+
+    .play-reset:hover { color: var(--amber); border-color: rgba(240, 163, 94, 0.45); }
+    .play-reset[hidden] { display: none; }
+
+    .play-note { margin-top: 12px; font-size: 0.8rem; color: #6b7684; }
+    .play-note a { color: var(--muted); text-decoration: underline; }
+
+    @media (max-width: 640px) {
+      .play-header { padding: 16px; }
+      .play-header-links { gap: 12px; }
+      .play-header-links .optional { display: none; }
+      .play-main { padding: 0 16px 40px; }
+      .play-stage { border-radius: 10px; }
+      .play-stage.is-picking { aspect-ratio: auto; }
+      .play-stage.is-picking #play-picker { position: static; }
+      .play-overlay {
+        justify-content: center;
+        justify-content: safe center;
+        padding: 16px;
+        gap: 10px;
+        overflow-y: auto;
+        scrollbar-width: none;
+      }
+      .play-overlay::-webkit-scrollbar { display: none; }
+      .play-overlay h2 { font-size: 1.1rem; }
+      .play-overlay p { font-size: 0.85rem; }
+      .play-picker-hint { font-size: 0.72rem; }
+    }
+  </style>
+</head>
+<body class="play-page">
+
+  <header class="play-header">
+    <a href="index.html" class="play-brand">
+      <img src="res/logo.png" alt="CoolbarEmu" width="32" height="32">
+      <span>CoolbarEmu</span>
+    </a>
+    <nav class="play-header-links">
+      <a href="index.html" data-i18n="nav-back">返回首页</a>
+      <button id="lang-toggle" class="lang-toggle" aria-label="Switch language">EN</button>
+      <a href="https://github.com/AloysHF/CoolbarEmu" class="optional" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </header>
+
+  <main class="play-main">
+    <h1 class="play-title" data-i18n="title">在线试玩 <span>Coolbar</span> 游戏</h1>
+    <p class="play-subtitle" data-i18n="subtitle">选择本机上的 <code>.CBE</code> 应用；需要附属资源的应用可以再加一个 ZIP。由 <strong>EmulatorJS</strong> 与 CoolbarEmu WebAssembly 核心在浏览器中直接运行，无需安装。</p>
+
+    <div class="play-stage is-picking">
+      <div id="game"></div>
+
+      <div id="play-status" class="play-overlay" hidden>
+        <h2 data-i18n="status-title">正在加载核心…</h2>
+        <p data-i18n="status-desc">首次启动需要下载 WebAssembly 核心，请稍候。</p>
+      </div>
+
+      <div id="play-picker" class="play-overlay">
+        <h2 data-i18n="picker-title">选择游戏文件</h2>
+        <p data-i18n="picker-desc">游戏选择 <code>.CBE</code> 文件。应用如果要读取同目录的存档记录、支付插件或更新数据，请把这些附属文件打包成 ZIP 一并选择。选好后点击“开始游戏”。</p>
+        <div class="play-picker-files">
+          <div class="play-file">
+            <label class="button primary">
+              <span data-i18n="pick-game">选择游戏文件</span>
+              <input id="game-file" type="file" accept=".cbe,application/octet-stream" hidden>
+            </label>
+            <span id="game-name" class="play-file-name"></span>
+          </div>
+          <div class="play-file">
+            <label class="button secondary">
+              <span data-i18n="pick-sidecar">附属文件 ZIP（可选）</span>
+              <input id="sidecar-file" type="file" accept=".zip,application/zip" hidden>
+            </label>
+            <span id="sidecar-name" class="play-file-name"></span>
+          </div>
+        </div>
+        <p id="play-picker-error" class="play-picker-error" hidden></p>
+        <button id="play-start" class="button primary play-start" type="button" data-i18n="start" disabled>开始游戏</button>
+        <p class="play-picker-hint" data-i18n="picker-hint">也可以把文件拖进窗口。文件只在浏览器本地处理，不会被上传。支持范围见 <a href="https://github.com/AloysHF/CoolbarEmu/blob/master/docs/Game-Compatibility.md" target="_blank" rel="noopener">兼容性记录</a>。</p>
+      </div>
+
+      <div id="play-error" class="play-overlay" hidden>
+        <h2 data-i18n="error-title">无法启动在线模拟器</h2>
+        <p data-i18n="error-text">EmulatorJS 运行时未部署（缺少 <code>data/loader.js</code>）。请通过 Pages 部署流程生成 <code>site/data</code>，或直接使用独立版模拟器。</p>
+      </div>
+    </div>
+
+    <div class="play-controls">
+      <span data-i18n="ctrl-move"><kbd>方向键</kbd> / <kbd>WASD</kbd> 移动</span>
+      <span data-i18n="ctrl-confirm"><kbd>Enter</kbd> 确认</span>
+      <span data-i18n="ctrl-soft"><kbd>Q</kbd> / <kbd>E</kbd> 左右软键</span>
+      <span data-i18n="ctrl-misc"><kbd>*</kbd> = N · <kbd>#</kbd> = M · 数字键直接输入</span>
+      <span data-i18n="ctrl-gamepad">支持手柄与手机触屏</span>
+      <button id="play-reset" class="play-reset" type="button" data-i18n="reset" hidden>换一个游戏</button>
+    </div>
+
+    <p class="play-note" data-i18n="note">在线试玩使用 <a href="https://emulatorjs.org" target="_blank" rel="noopener">EmulatorJS</a>。游戏数据不随本站分发，请使用自己合法持有的文件。想离线游玩？从 <a href="https://github.com/AloysHF/CoolbarEmu/releases" target="_blank" rel="noopener">Releases</a> 下载独立模拟器或 RetroArch 核心。</p>
+  </main>
+
+  <script>
+    (function () {
+      'use strict';
+
+      var translations = {
+        zh: {
+          'meta-title': '在线试玩 Coolbar 游戏 — CoolbarEmu',
+          'meta-desc': '在浏览器中加载 Coolbar/CBE 应用即可直接运行，无需安装。由 EmulatorJS 与 CoolbarEmu WebAssembly 核心驱动。',
+          'nav-back': '返回首页',
+          'title': '在线试玩 <span>Coolbar</span> 游戏',
+          'subtitle': '选择本机上的 <code>.CBE</code> 应用；需要附属资源的应用可以再加一个 ZIP。由 <strong>EmulatorJS</strong> 与 CoolbarEmu WebAssembly 核心在浏览器中直接运行，无需安装。',
+          'status-title': '正在加载核心…',
+          'status-desc': '首次启动需要下载 WebAssembly 核心，请稍候。',
+          'picker-title': '选择游戏文件',
+          'picker-desc': '游戏选择 <code>.CBE</code> 文件。应用如果要读取同目录的存档记录、支付插件或更新数据，请把这些附属文件打包成 ZIP 一并选择。选好后点击“开始游戏”。',
+          'pick-game': '选择游戏文件',
+          'pick-sidecar': '附属文件 ZIP（可选）',
+          'start': '开始游戏',
+          'picker-hint': '也可以把文件拖进窗口。文件只在浏览器本地处理，不会被上传。支持范围见 <a href="https://github.com/AloysHF/CoolbarEmu/blob/master/docs/Game-Compatibility.md" target="_blank" rel="noopener">兼容性记录</a>。',
+          'error-title': '无法启动在线模拟器',
+          'error-text': 'EmulatorJS 运行时未部署（缺少 <code>data/loader.js</code>）。请通过 Pages 部署流程生成 <code>site/data</code>，或直接使用独立版模拟器。',
+          'ctrl-move': '<kbd>方向键</kbd> / <kbd>WASD</kbd> 移动',
+          'ctrl-confirm': '<kbd>Enter</kbd> 确认',
+          'ctrl-soft': '<kbd>Q</kbd> / <kbd>E</kbd> 左右软键',
+          'ctrl-misc': '<kbd>*</kbd> = N · <kbd>#</kbd> = M · 数字键直接输入',
+          'ctrl-gamepad': '支持手柄与手机触屏',
+          'reset': '换一个游戏',
+          'note': '在线试玩使用 <a href="https://emulatorjs.org" target="_blank" rel="noopener">EmulatorJS</a>。游戏数据不随本站分发，请使用自己合法持有的文件。想离线游玩？从 <a href="https://github.com/AloysHF/CoolbarEmu/releases" target="_blank" rel="noopener">Releases</a> 下载独立模拟器或 RetroArch 核心。',
+          'invalid-game': '仅支持 .CBE 游戏文件。',
+          'invalid-sidecar': '附属文件必须是 .zip 压缩包。'
+        },
+        en: {
+          'meta-title': 'Play Coolbar Games Online — CoolbarEmu',
+          'meta-desc': 'Load a Coolbar/CBE application in your browser, no install required. Powered by EmulatorJS and the CoolbarEmu WebAssembly core.',
+          'nav-back': 'Back to Home',
+          'title': 'Play <span>Coolbar</span> Games Online',
+          'subtitle': 'Pick a <code>.CBE</code> application; add a ZIP if it needs companion resources. <strong>EmulatorJS</strong> and the CoolbarEmu WebAssembly core run it right in the browser.',
+          'status-title': 'Loading core…',
+          'status-desc': 'The first launch downloads the WebAssembly core.',
+          'picker-title': 'Choose a game file',
+          'picker-desc': 'Pick a <code>.CBE</code> application. If it reads save records, payment plugins, or update data from its directory, pack those companion files into a ZIP and select it too. Then press Start.',
+          'pick-game': 'Choose Game File',
+          'pick-sidecar': 'Companion ZIP (optional)',
+          'start': 'Start Game',
+          'picker-hint': 'You can also drop files onto the window. Files are processed locally in your browser and never uploaded. See the <a href="https://github.com/AloysHF/CoolbarEmu/blob/master/docs/Game-Compatibility.md" target="_blank" rel="noopener">compatibility records</a> for tested support.',
+          'error-title': 'Unable to start the online emulator',
+          'error-text': 'The EmulatorJS runtime is not deployed (missing <code>data/loader.js</code>). Generate <code>site/data</code> through the Pages workflow, or use the standalone emulator.',
+          'ctrl-move': '<kbd>Arrows</kbd> / <kbd>WASD</kbd> Move',
+          'ctrl-confirm': '<kbd>Enter</kbd> Confirm',
+          'ctrl-soft': '<kbd>Q</kbd> / <kbd>E</kbd> Soft keys',
+          'ctrl-misc': '<kbd>*</kbd> = N · <kbd>#</kbd> = M · type digits directly',
+          'ctrl-gamepad': 'Gamepad and touch controls supported',
+          'reset': 'Play another game',
+          'note': 'Online play uses <a href="https://emulatorjs.org" target="_blank" rel="noopener">EmulatorJS</a>. Game data is not distributed with this site, so use your own legally obtained files. Prefer playing offline? Download the standalone emulator or the RetroArch core from <a href="https://github.com/AloysHF/CoolbarEmu/releases" target="_blank" rel="noopener">Releases</a>.',
+          'invalid-game': 'Only .CBE game files are supported.',
+          'invalid-sidecar': 'Companion files must be a .zip archive.'
+        }
+      };
+
+      var storageKey = 'coolbar-site-lang';
+      var currentLang;
+      try {
+        currentLang = localStorage.getItem(storageKey) || 'zh';
+      } catch (error) {
+        currentLang = 'zh';
+      }
+
+      var languageButton = document.getElementById('lang-toggle');
+      var description = document.querySelector('meta[name="description"]');
+
+      function applyLang(lang) {
+        currentLang = lang;
+        document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+        var t = translations[lang];
+
+        document.querySelectorAll('[data-i18n]').forEach(function (el) {
+          var key = el.getAttribute('data-i18n');
+          if (t[key] !== undefined) el.innerHTML = t[key];
+        });
+
+        document.title = t['meta-title'];
+        if (description) description.setAttribute('content', t['meta-desc']);
+        languageButton.textContent = lang === 'zh' ? 'EN' : '中';
+        languageButton.setAttribute('aria-label', lang === 'zh' ? 'Switch to English' : '切换到中文');
+
+        try {
+          localStorage.setItem(storageKey, lang);
+        } catch (error) {
+          // Language persistence is optional in restricted browsing contexts.
+        }
+      }
+
+      var RUNTIME_PATH = 'data/';
+      var GAME_EXTENSIONS = /\.cbe$/i;
+      var SIDECAR_EXTENSIONS = /\.zip$/i;
+      var stage = document.querySelector('.play-stage');
+      var status = document.getElementById('play-status');
+      var picker = document.getElementById('play-picker');
+      var pickerError = document.getElementById('play-picker-error');
+      var error = document.getElementById('play-error');
+      var gameInput = document.getElementById('game-file');
+      var sidecarInput = document.getElementById('sidecar-file');
+      var gameName = document.getElementById('game-name');
+      var sidecarName = document.getElementById('sidecar-name');
+      var startButton = document.getElementById('play-start');
+      var resetButton = document.getElementById('play-reset');
+      var gameFile = null;
+      var sidecarFile = null;
+      var booted = false;
+
+      function show(element) { element.hidden = false; }
+      function hide(element) { element.hidden = true; }
+
+      function fail(messageKey) {
+        pickerError.textContent = translations[currentLang][messageKey];
+        show(pickerError);
+      }
+
+      function updateStartState() {
+        startButton.disabled = !gameFile || booted;
+      }
+
+      function start() {
+        if (!gameFile || booted) return;
+        booted = true;
+        updateStartState();
+        stage.classList.remove('is-picking');
+        hide(picker);
+        hide(error);
+        hide(pickerError);
+        show(status);
+
+        window.EJS_player = '#game';
+        window.EJS_core = 'coolbaremu';
+        // Blob URLs have no file name, so EJS_gameName must keep the extension.
+        window.EJS_gameUrl = URL.createObjectURL(gameFile);
+        window.EJS_gameName = gameFile.name;
+        if (sidecarFile) {
+          // EmulatorJS extracts the archive next to the content file, which is
+          // where the core looks for companion resources on Emscripten.
+          window.EJS_biosUrl = URL.createObjectURL(sidecarFile);
+        }
+        window.EJS_pathtodata = RUNTIME_PATH;
+        window.EJS_startOnLoaded = false;
+        window.EJS_backgroundColor = '#05080c';
+        // Only zh-CN is deployed next to the runtime; other languages use the
+        // built-in English UI.
+        if (currentLang === 'zh') window.EJS_language = 'zh-CN';
+
+        var runtime = document.createElement('script');
+        runtime.src = RUNTIME_PATH + 'loader.js';
+        runtime.onload = function () {
+          hide(status);
+          show(resetButton);
+        };
+        runtime.onerror = function () {
+          booted = false;
+          updateStartState();
+          hide(status);
+          hide(picker);
+          show(error);
+          show(resetButton);
+        };
+        document.body.appendChild(runtime);
+      }
+
+      gameInput.addEventListener('change', function () {
+        var file = gameInput.files && gameInput.files[0];
+        if (!file) return;
+        if (!GAME_EXTENSIONS.test(file.name)) {
+          gameFile = null;
+          gameName.textContent = '';
+          fail('invalid-game');
+        } else {
+          gameFile = file;
+          gameName.textContent = file.name;
+          hide(pickerError);
+        }
+        updateStartState();
+      });
+
+      sidecarInput.addEventListener('change', function () {
+        var file = sidecarInput.files && sidecarInput.files[0];
+        if (!file) return;
+        if (!SIDECAR_EXTENSIONS.test(file.name)) {
+          sidecarFile = null;
+          sidecarName.textContent = '';
+          fail('invalid-sidecar');
+        } else {
+          sidecarFile = file;
+          sidecarName.textContent = file.name;
+          hide(pickerError);
+        }
+      });
+
+      startButton.addEventListener('click', start);
+
+      var dragDepth = 0;
+
+      document.addEventListener('dragenter', function (event) {
+        event.preventDefault();
+        if (booted) return;
+        dragDepth += 1;
+        stage.classList.add('is-drop');
+      });
+
+      document.addEventListener('dragover', function (event) {
+        event.preventDefault();
+      });
+
+      document.addEventListener('dragleave', function (event) {
+        event.preventDefault();
+        if (booted) return;
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (dragDepth === 0) stage.classList.remove('is-drop');
+      });
+
+      document.addEventListener('drop', function (event) {
+        event.preventDefault();
+        dragDepth = 0;
+        stage.classList.remove('is-drop');
+        if (booted) return;
+        var files = event.dataTransfer && event.dataTransfer.files;
+        if (!files || files.length === 0) return;
+        for (var i = 0; i < files.length; i += 1) {
+          var file = files[i];
+          if (GAME_EXTENSIONS.test(file.name)) {
+            gameFile = file;
+            gameName.textContent = file.name;
+            hide(pickerError);
+          } else if (SIDECAR_EXTENSIONS.test(file.name)) {
+            sidecarFile = file;
+            sidecarName.textContent = file.name;
+            hide(pickerError);
+          } else {
+            fail('invalid-game');
+          }
+        }
+        updateStartState();
+      });
+
+      resetButton.addEventListener('click', function () {
+        window.location.reload();
+      });
+
+      languageButton.addEventListener('click', function () {
+        applyLang(currentLang === 'zh' ? 'en' : 'zh');
+      });
+
+      applyLang(currentLang);
+      updateStartState();
+    })();
+  </script>
+</body>
+</html>
