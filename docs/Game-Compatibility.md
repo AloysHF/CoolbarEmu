@@ -34,6 +34,12 @@ Rich (C group, row 33) is likewise a ROM-level defect: its resource handler is a
 single-use form that both the game itself and the standard screen lifecycle
 invoke without re-seeding, so the map load reads the name pool past the stack top
 and divides by zero; it cannot be repaired host-side (issue #201).
+Bejeweled 3 (B group, row 66) had a host-side gap in the picture-release path:
+the game LCD slot that clears an image header never reclaimed the pixel
+allocation, so returning to the title leaked every decoded picture and a later
+re-entry found the heap pool full and rendered black; the slot now frees the
+allocation (b75283f), and re-entry across three cycles plus a scoring swap is
+verified (issue #192).
 
 ## Summary
 
@@ -273,7 +279,7 @@ not provide the original server's content or a real carrier payment service.
 | 63 | `B/美女桌球.CBE` | 400×240 | <img src="images/B/美女桌球.png" width="120" alt="美女桌球 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 64 | `B/英汉词典.CBE` | 240×400 | <img src="images/B/英汉词典.png" width="120" alt="英汉词典 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 65 | `B/血剑Online.CBE` | 240×400 | <img src="images/B/血剑Online.png" width="120" alt="血剑Online idle frame"> | Required | Ready | Idle frame captured; interaction/gameplay unverified |
-| 66 | `B/钻石迷情3.CBE` | 240×400 | <img src="images/B/钻石迷情3.png" width="120" alt="钻石迷情3 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
+| 66 | `B/钻石迷情3.CBE` | 240×400 | <img src="images/B/钻石迷情3.png" width="120" alt="钻石迷情3 idle frame"> | No known requirement | Ready | Idle frame captured; classic mode verified: first entry matches and swap touches score 0→50, and returning to the title and re-entering three times no longer blacks out — the re-entry decodes used to fail because the image-release slot leaked every decoded picture's pixel allocation until the heap pool ran out (fixed in b75283f). See issue #192 |
 | 67 | `B/雄霸天下.CBE` | 240×400 | <img src="images/B/雄霸天下.png" width="120" alt="雄霸天下 idle frame"> | Required | Ready | Idle frame captured; interaction/gameplay unverified |
 | 68 | `B/雷电.CBE` | 240×400 | <img src="images/B/雷电.png" width="120" alt="雷电 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 69 | `B/雷霆战机.CBE` | 240×400 | <img src="images/B/雷霆战机.png" width="120" alt="雷霆战机 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
