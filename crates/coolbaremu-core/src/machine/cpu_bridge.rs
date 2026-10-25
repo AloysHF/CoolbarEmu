@@ -102,11 +102,15 @@ impl CoolbarMachine {
                         // Only the ROM image holds routines the guest
                         // compiled, so that is the one place a slot can
                         // legitimately name code.  Everything else — heap,
-                        // data, stack — is payload if it lands there.
+                        // data, stack — is payload if it lands there.  The
+                        // ROM mapping is larger than what the archive loads,
+                        // though: its zero-filled tail would fault the fetch,
+                        // so a slot there names no routine either.
                         let in_rom_image = self
                             .memory
                             .region(aligned, 2)
-                            .is_some_and(|r| r.base == self.executable.code_address());
+                            .is_some_and(|r| r.base == self.executable.code_address())
+                            && !self.pc_in_unloaded_rom(aligned);
                         // A slot can also land on mapped memory that simply
                         // holds no code — an uninitialised page, a zeroed
                         // resource buffer.  Fetching there decodes as a NOP
@@ -122,14 +126,17 @@ impl CoolbarMachine {
                         };
                         // An even slot leaves Thumb state.  Inside the ROM
                         // image that is a real ARM entry point (058/059 call
-                        // ARM routines that way); anywhere else it is a slot
-                        // the guest never filled with a routine, and letting
-                        // the switch happen executes payload as code.
+                        // ARM routines that way); outside it the address is
+                        // usually a slot the guest never filled, but payload
+                        // and guest-generated ARM thunks share the heap, so
+                        // parity alone does not settle it — ask whether the
+                        // address can return before calling it a dead slot.
                         let unresolved = slot == 0
                             || (!host_window
                                 && (self.memory.region(aligned, 2).is_none()
                                     || (!in_rom_image
-                                        && (slot.is_multiple_of(2)
+                                        && ((slot.is_multiple_of(2)
+                                            && !self.names_arm_routine(aligned))
                                             || starts_with_no_instruction))));
                         if unresolved {
                             if std::env::var_os("CBE_TRACE").is_some() {
@@ -223,6 +230,32 @@ impl CoolbarMachine {
     /// True when `pc` falls inside the mapped ROM region but past the end of
     /// the loaded code image — the zero-filled BSS/data tail where a guest
     /// should never fetch instructions.
+    /// Whether `address` can be entered as ARM and come back: a routine ends
+    /// with `bx lr`, `mov pc, lr`, or a `ldm`/`pop` that reloads the program
+    /// counter.  Payload almost never reproduces those encodings inside a few
+    /// words, so the scan separates a guest-generated thunk from a slot the
+    /// guest forgot to fill — which matters because both live in the heap and
+    /// neither is distinguishable by address (`A/小酷音乐(强推)V101`, report
+    /// #45, calls a real heap thunk this way).
+    fn names_arm_routine(&mut self, address: u32) -> bool {
+        let mut pc = address & !3;
+        for _ in 0..24 {
+            if self.memory.region(pc, 4).is_none() {
+                return false;
+            }
+            let word = self.memory.r32(pc);
+            let returns = (word & 0x0fff_ffff) == 0x012f_ff1e // bx lr
+                || (word & 0x0fff_ffff) == 0x01a0_f00e // mov pc, lr
+                || (word & 0x0fff_0000) == 0x08bd_0000 // pop {…, pc}
+                || (word & 0x0fbf_0000) == 0x089b_0000; // ldm {…, pc}
+            if returns {
+                return true;
+            }
+            pc = pc.wrapping_add(4);
+        }
+        false
+    }
+
     fn pc_in_unloaded_rom(&self, pc: u32) -> bool {
         let code_start = self.executable.code_address();
         let code_end = code_start + self.executable.code_size as u32;

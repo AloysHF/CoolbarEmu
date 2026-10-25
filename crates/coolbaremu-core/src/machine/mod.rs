@@ -3806,6 +3806,57 @@ mod tests {
         );
     }
 
+    /// Parity alone cannot separate the two: `A/小酷音乐(强推)V101`
+    /// (report #45) keeps genuine ARM thunks in the heap and calls them
+    /// through the same `bx Rm` thunk.  Those must still run, so the look
+    /// ahead asks whether the address can return.
+    #[test]
+    fn indirect_branch_to_even_slot_naming_heap_routine_is_called() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w16(entry, 0x4718); // Thumb bx r3
+        machine.memory.w16(entry + 2, 0xe7fe); // terminal self-branch
+        let arm_routine = HEAP_BASE + 0x100;
+        machine.memory.w32(arm_routine, 0xe3a0_005a); // ARM mov r0, #0x5a
+        machine.memory.w32(arm_routine + 4, 0xe12f_ff1e); // ARM bx lr
+        machine.cpu.reg_set(Mode::User, reg::PC, entry | 1);
+        machine.cpu.reg_set(Mode::User, reg::LR, (entry + 2) | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
+        machine.cpu.reg_set(Mode::User, 3, arm_routine); // even, outside ROM
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(
+            machine.register(0),
+            0x5a,
+            "an even slot naming a heap ARM routine must still be called"
+        );
+    }
+
+    /// The ROM mapping is rounded out past both images, so its tail is
+    /// mapped yet holds no code — a fetch there faults as an unloaded ROM
+    /// address.  A slot landing on that tail names no routine either.
+    /// `A/小酷音乐(强推)V101` (report #45) reaches one through `bx r3` at
+    /// 0x043EA55E with 0x043EEF64 once earlier calls return results, and used
+    /// to fault there instead of resuming at its caller.
+    #[test]
+    fn indirect_branch_to_unloaded_rom_slot_returns_to_caller() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w16(entry, 0x4718); // Thumb bx r3
+        machine.memory.w16(entry + 2, 0xe7fe); // terminal self-branch
+        machine.cpu.reg_set(Mode::User, reg::PC, entry | 1);
+        machine.cpu.reg_set(Mode::User, reg::LR, (entry + 2) | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
+        machine.cpu.reg_set(Mode::User, 3, entry + 0x100); // past code_size
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(
+            machine.state(),
+            MachineState::Halted,
+            "a slot in the unloaded ROM tail must resume at LR"
+        );
+    }
+
     /// A slot pointing at mapped memory that holds no instruction — a zeroed
     /// buffer, an uninitialised page — decodes as a NOP and slides through
     /// the region until it faults.  Game #119 hits this with 0x02000001: the
