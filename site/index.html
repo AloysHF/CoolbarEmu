@@ -21,6 +21,7 @@
         <a href="#gallery" data-i18n="nav.gallery">游戏画廊</a>
         <a href="#architecture" data-i18n="nav.arch">技术架构</a>
         <a href="#quickstart" data-i18n="nav.quickstart">快速开始</a>
+        <a href="play.html" class="nav-play" data-i18n="nav.play">在线试玩</a>
         <button id="lang-toggle" class="lang-toggle" aria-label="Switch language">EN</button>
         <a class="nav-github" href="https://github.com/AloysHF/CoolbarEmu" target="_blank" rel="noopener">GitHub ↗</a>
       </div>
@@ -40,6 +41,7 @@
           同一套核心同时驱动桌面窗口与 RetroArch 前端。
         </p>
         <div class="hero-actions">
+          <a class="button play" href="play.html" data-i18n="hero.play">▶ 在线试玩</a>
           <a class="button primary" href="https://github.com/AloysHF/CoolbarEmu/releases/latest" target="_blank" rel="noopener" data-i18n="hero.download">下载 Release</a>
           <a class="button secondary" href="https://github.com/AloysHF/CoolbarEmu" target="_blank" rel="noopener" data-i18n="hero.source">查看源码 ↗</a>
         </div>
@@ -226,6 +228,23 @@
             <li><code>cargo build -p coolbaremu-libretro --release</code></li>
           </ol>
         </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====== ONLINE PLAY CTA ====== -->
+  <section id="play" class="section">
+    <div class="container">
+      <div class="play-cta">
+        <div class="play-cta-cover">
+          <img src="docs/images/B/魔塔.png" alt="Coolbar game screenshot" loading="lazy">
+        </div>
+        <div class="play-cta-body">
+          <span class="play-cta-badge" data-i18n="play.badge">无需安装 · 浏览器直接运行</span>
+          <h2 data-i18n="play.title">在线试玩 Coolbar 游戏</h2>
+          <p data-i18n="play.desc">选择本机上的 CBE 应用即可在浏览器中直接运行，需要附属资源的应用还可以附带 ZIP。支持键盘、手柄与手机触屏，文件不会离开你的设备。</p>
+          <a class="button play" href="play.html" data-i18n="play.button">▶ 开始试玩</a>
+        </div>
       </div>
     </div>
   </section>

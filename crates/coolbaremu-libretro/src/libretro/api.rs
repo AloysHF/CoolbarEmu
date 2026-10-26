@@ -246,7 +246,7 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
 
         // User orientation entries must be registered before the machine is
         // created, which is where the automatic profile is resolved.
-        load_user_orientation_profile();
+        load_user_orientation_profile(Path::new(path));
 
         match load_machine(Path::new(path)) {
             Ok((archive, mut machine)) => {
@@ -364,38 +364,51 @@ fn load_machine(path: &Path) -> anyhow::Result<(CbeArchive, CoolbarMachine)> {
 
 /// Load the optional user orientation profile once per process.
 ///
-/// The file is `<system_dir>/coolbaremu_orientation.csv`; a missing or invalid
-/// file is non-fatal because the built-in profile still applies.
-fn load_user_orientation_profile() {
+/// The profile is normally `<system_dir>/coolbaremu_orientation.csv`. Browser
+/// frontends cannot populate that directory, so on Emscripten a CSV extracted
+/// beside the content file is accepted too; EmulatorJS unpacks an
+/// `EJS_biosUrl` archive there. A missing or invalid file is non-fatal because
+/// the built-in profile still applies.
+fn load_user_orientation_profile(content_path: &Path) {
     static LOADED: AtomicBool = AtomicBool::new(false);
     if LOADED.swap(true, Ordering::Relaxed) {
         return;
     }
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     let mut system_dir: *const c_char = ptr::null();
     let ok = callbacks::environment(
         RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY,
         &mut system_dir as *mut _ as *mut c_void,
     );
-    if !ok || system_dir.is_null() {
-        log::info!("No frontend system directory; user orientation profile not loaded");
-        return;
+    if ok && !system_dir.is_null() {
+        if let Ok(dir) = unsafe { CStr::from_ptr(system_dir) }.to_str() {
+            if !dir.is_empty() {
+                candidates.push(Path::new(dir).join(ORIENTATION_PROFILE_FILE));
+            }
+        }
     }
-    let Ok(dir) = unsafe { CStr::from_ptr(system_dir) }.to_str() else {
-        log::warn!("Frontend system directory is not valid UTF-8");
-        return;
-    };
-    if dir.is_empty() {
-        log::info!("Frontend system directory is empty; user orientation profile not loaded");
-        return;
+    #[cfg(target_os = "emscripten")]
+    if let Some(dir) = content_path.parent() {
+        candidates.push(dir.join(ORIENTATION_PROFILE_FILE));
     }
-    let path = Path::new(dir).join(ORIENTATION_PROFILE_FILE);
-    match load_orientation_overrides(&path) {
-        Ok(count) => log::info!(
-            "Loaded {count} user orientation entries from {}",
-            path.display()
-        ),
-        Err(error) => log::info!("No user orientation profile applied: {error:#}"),
+    #[cfg(not(target_os = "emscripten"))]
+    let _ = content_path;
+    for path in candidates {
+        if !path.is_file() {
+            continue;
+        }
+        match load_orientation_overrides(&path) {
+            Ok(count) => {
+                log::info!(
+                    "Loaded {count} user orientation entries from {}",
+                    path.display()
+                );
+                return;
+            }
+            Err(error) => log::info!("Ignoring orientation profile {}: {error:#}", path.display()),
+        }
     }
+    log::info!("No user orientation profile loaded");
 }
 
 fn input_descriptors() -> [retro_input_descriptor; 15] {

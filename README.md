@@ -98,6 +98,11 @@ signatures and configuration keys are not supported.
   (core options cover volume, touch input, auto BGM, screen orientation, and
   debug logging); landscape titles use the resolved LCD dimensions, matching
   the standalone frontend
+- **Browser play** — the same libretro core compiled to WebAssembly for
+  [EmulatorJS](https://emulatorjs.org): load a `.CBE` application from your own
+  machine and play in the browser, with an optional companion ZIP for
+  applications that read sidecar files and a built-in online player on the
+  project site
 
 ## Usage
 
@@ -120,6 +125,16 @@ Install the core and load a game through RetroArch's **Load Content** menu.
 
 See the [RetroArch Core](docs/RetroArch-Core.md) guide for installation,
 supported platforms, RetroPad mapping, and features.
+
+### Browser Mode (EmulatorJS)
+
+The project site hosts an online player where a local `.CBE` file runs through
+the WebAssembly build of the libretro core:
+
+<https://AloysHF.github.io/CoolbarEmu/play.html>
+
+See the [EmulatorJS Core](docs/EmulatorJS-Core.md) guide to host the core in
+your own EmulatorJS page, supply companion files, and build the bundles.
 
 ## Building
 
@@ -145,6 +160,22 @@ directory.
 
 For Android cross-compilation, see [Android Libretro Core](docs/Android-Libretro-Core.md).
 For iOS, see [iOS Libretro Core](docs/iOS-Libretro-Core.md).
+
+### EmulatorJS Core (Browser)
+
+The EmulatorJS bundles need an activated emsdk, `p7zip`, and a nightly
+toolchain that can rebuild std:
+
+```bash
+cargo +nightly build -p coolbaremu-libretro \
+  --target wasm32-unknown-emscripten --profile wasm-release \
+  -Zbuild-std=std,panic_abort
+
+scripts/build-emulatorjs-core.sh
+```
+
+The result is `out/coolbaremu-emulatorjs.zip`. See
+[EmulatorJS Core](docs/EmulatorJS-Core.md) for requirements and host layout.
 
 ## Architecture
 
@@ -182,10 +213,10 @@ crates/
 │       │   ├── cbe_boot.rs   # Headless boot tool
 │       │   ├── cbe_analyze.rs # Archive analysis tool
 │       │   └── cbe_disasm.rs # ARM/Thumb disassembly tool
-└── coolbaremu-libretro/     # Libretro cdylib (→ coolbaremu_libretro.{dll,so,dylib})
+└── coolbaremu-libretro/     # Libretro cdylib/staticlib (→ coolbaremu_libretro.{dll,so,dylib}, .a for wasm)
     ├── coolbaremu_libretro.info   # RetroArch core metadata
     └── src/
-        ├── lib.rs               # cdylib crate root
+        ├── lib.rs               # crate root
         └── libretro/
             ├── api.rs           # Exported libretro functions
             ├── callbacks.rs     # Callback management

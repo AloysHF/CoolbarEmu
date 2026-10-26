@@ -62,7 +62,9 @@ Pushing the tag triggers `.github/workflows/release.yml`, which:
 2. **Builds libretro cores** for the same platforms, plus Linux and Windows
    i686, Android, iOS, and webOS, using the platform-specific core filenames
    and bundling `coolbaremu_libretro.info`
-3. **Creates a draft GitHub Release** with:
+3. **Builds the EmulatorJS browser core** (`coolbaremu-emulatorjs.zip`) with
+   the pinned Emscripten toolchain
+4. **Creates a draft GitHub Release** with:
    - Auto-generated release notes (PRs and commits since the previous tag)
    - A download table for standalone and libretro artifacts
    - All build artifacts attached
@@ -72,7 +74,7 @@ Pushing the tag triggers `.github/workflows/release.yml`, which:
 1. Go to [Releases](https://github.com/AloysHF/CoolbarEmu/releases)
 2. Find the draft release created by CI
 3. Review the auto-generated changelog — edit if needed(You can refer to the changelog of the previous official release)
-4. Verify all 15 expected artifacts are attached:
+4. Verify all 16 expected artifacts are attached:
    - `coolbaremu-linux-x86_64.tar.gz`
    - `coolbaremu-linux-aarch64.tar.gz`
    - `coolbaremu-macos-x86_64.tar.gz`
@@ -88,6 +90,7 @@ Pushing the tag triggers `.github/workflows/release.yml`, which:
    - `coolbaremu-android-libretro.tar.gz`
    - `coolbaremu-ios-libretro.tar.gz`
    - `coolbaremu-webos-libretro.tar.gz`
+   - `coolbaremu-emulatorjs.zip`
 5. Click **Publish release**
 
 ### 6. Sync upstream libretro metadata and builds
