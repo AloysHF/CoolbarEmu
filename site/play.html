@@ -407,9 +407,7 @@
           window.EJS_biosUrl = URL.createObjectURL(sidecarFile);
         }
         window.EJS_pathtodata = RUNTIME_PATH;
-        // The loader is injected only after the files are chosen, so the
-        // runtime can start right away instead of asking for a second click.
-        window.EJS_startOnLoaded = true;
+        window.EJS_startOnLoaded = false;
         window.EJS_backgroundColor = '#05080c';
         if (currentLang === 'zh') window.EJS_language = 'zh-CN';
 
