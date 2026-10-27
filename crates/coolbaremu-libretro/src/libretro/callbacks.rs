@@ -82,6 +82,13 @@ pub fn set_input_state(cb: retro_input_state_t) {
 }
 
 /// Query the frontend log interface, falling back to stderr.
+///
+/// `retro_log_printf_t` is C-variadic. On Emscripten the callee signature
+/// carries a hidden varargs pointer, so calling it through a plain
+/// `extern "C" fn(u32, *const c_char)` traps with "function signature
+/// mismatch". The EmulatorJS build therefore keeps writing to stderr, which
+/// the wasm frontend forwards to the console.
+#[cfg(not(target_os = "emscripten"))]
 pub fn init_log() {
     unsafe {
         CALLBACKS.log = Some(fallback_log);
@@ -95,6 +102,13 @@ pub fn init_log() {
                 CALLBACKS.log = Some(log_cb.log);
             }
         }
+    }
+}
+
+#[cfg(target_os = "emscripten")]
+pub fn init_log() {
+    unsafe {
+        CALLBACKS.log = Some(fallback_log);
     }
 }
 

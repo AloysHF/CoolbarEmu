@@ -212,7 +212,7 @@
 
   <main class="play-main">
     <h1 class="play-title" data-i18n="title">在线试玩 <span>Coolbar</span> 游戏</h1>
-    <p class="play-subtitle" data-i18n="subtitle">选择本机上的 <code>.CBE</code> 应用；需要附属资源的应用可以再加一个 ZIP。由 <strong>EmulatorJS</strong> 与 CoolbarEmu WebAssembly 核心在浏览器中直接运行，无需安装。</p>
+    <p class="play-subtitle" data-i18n="subtitle">选择本机上的 <code>.CBE</code> 应用。由 <strong>EmulatorJS</strong> 与 CoolbarEmu WebAssembly 核心在浏览器中直接运行，无需安装。</p>
 
     <div class="play-stage is-picking">
       <div id="game"></div>
@@ -224,7 +224,7 @@
 
       <div id="play-picker" class="play-overlay">
         <h2 data-i18n="picker-title">选择游戏文件</h2>
-        <p data-i18n="picker-desc">游戏选择 <code>.CBE</code> 文件。应用如果要读取同目录的存档记录、支付插件或更新数据，请把这些附属文件打包成 ZIP 一并选择。选好后点击“开始游戏”。</p>
+        <p data-i18n="picker-desc">游戏选择 <code>.CBE</code> 文件。选好后点击“开始游戏”。</p>
         <div class="play-picker-files">
           <div class="play-file">
             <label class="button primary">
@@ -233,16 +233,9 @@
             </label>
             <span id="game-name" class="play-file-name"></span>
           </div>
-          <div class="play-file">
-            <label class="button secondary">
-              <span data-i18n="pick-sidecar">附属文件 ZIP（可选）</span>
-              <input id="sidecar-file" type="file" accept=".zip,application/zip" hidden>
-            </label>
-            <span id="sidecar-name" class="play-file-name"></span>
-          </div>
         </div>
         <p id="play-picker-error" class="play-picker-error" hidden></p>
-        <button id="play-start" class="button primary play-start" type="button" data-i18n="start" disabled>开始游戏</button>
+        <button id="play-start" class="button primary play-start" type="button" data-i18n="start" hidden>开始游戏</button>
         <p class="play-picker-hint" data-i18n="picker-hint">也可以把文件拖进窗口。文件只在浏览器本地处理，不会被上传。支持范围见 <a href="https://github.com/AloysHF/CoolbarEmu/blob/master/docs/Game-Compatibility.md" target="_blank" rel="noopener">兼容性记录</a>。</p>
       </div>
 
@@ -274,13 +267,12 @@
           'meta-desc': '在浏览器中加载 Coolbar/CBE 应用即可直接运行，无需安装。由 EmulatorJS 与 CoolbarEmu WebAssembly 核心驱动。',
           'nav-back': '返回首页',
           'title': '在线试玩 <span>Coolbar</span> 游戏',
-          'subtitle': '选择本机上的 <code>.CBE</code> 应用；需要附属资源的应用可以再加一个 ZIP。由 <strong>EmulatorJS</strong> 与 CoolbarEmu WebAssembly 核心在浏览器中直接运行，无需安装。',
+          'subtitle': '选择本机上的 <code>.CBE</code> 应用。由 <strong>EmulatorJS</strong> 与 CoolbarEmu WebAssembly 核心在浏览器中直接运行，无需安装。',
           'status-title': '正在加载核心…',
           'status-desc': '首次启动需要下载 WebAssembly 核心，请稍候。',
           'picker-title': '选择游戏文件',
-          'picker-desc': '游戏选择 <code>.CBE</code> 文件。应用如果要读取同目录的存档记录、支付插件或更新数据，请把这些附属文件打包成 ZIP 一并选择。选好后点击“开始游戏”。',
+          'picker-desc': '游戏选择 <code>.CBE</code> 文件。选好后点击“开始游戏”。',
           'pick-game': '选择游戏文件',
-          'pick-sidecar': '附属文件 ZIP（可选）',
           'start': '开始游戏',
           'picker-hint': '也可以把文件拖进窗口。文件只在浏览器本地处理，不会被上传。支持范围见 <a href="https://github.com/AloysHF/CoolbarEmu/blob/master/docs/Game-Compatibility.md" target="_blank" rel="noopener">兼容性记录</a>。',
           'error-title': '无法启动在线模拟器',
@@ -292,21 +284,19 @@
           'ctrl-gamepad': '支持手柄与手机触屏',
           'reset': '换一个游戏',
           'note': '在线试玩使用 <a href="https://emulatorjs.org" target="_blank" rel="noopener">EmulatorJS</a>。游戏数据不随本站分发，请使用自己合法持有的文件。想离线游玩？从 <a href="https://github.com/AloysHF/CoolbarEmu/releases" target="_blank" rel="noopener">Releases</a> 下载独立模拟器或 RetroArch 核心。',
-          'invalid-game': '仅支持 .CBE 游戏文件。',
-          'invalid-sidecar': '附属文件必须是 .zip 压缩包。'
+          'invalid-game': '仅支持 .CBE 游戏文件。'
         },
         en: {
           'meta-title': 'Play Coolbar Games Online — CoolbarEmu',
           'meta-desc': 'Load a Coolbar/CBE application in your browser, no install required. Powered by EmulatorJS and the CoolbarEmu WebAssembly core.',
           'nav-back': 'Back to Home',
           'title': 'Play <span>Coolbar</span> Games Online',
-          'subtitle': 'Pick a <code>.CBE</code> application; add a ZIP if it needs companion resources. <strong>EmulatorJS</strong> and the CoolbarEmu WebAssembly core run it right in the browser.',
+          'subtitle': 'Pick a <code>.CBE</code> application. <strong>EmulatorJS</strong> and the CoolbarEmu WebAssembly core run it right in the browser.',
           'status-title': 'Loading core…',
           'status-desc': 'The first launch downloads the WebAssembly core.',
           'picker-title': 'Choose a game file',
-          'picker-desc': 'Pick a <code>.CBE</code> application. If it reads save records, payment plugins, or update data from its directory, pack those companion files into a ZIP and select it too. Then press Start.',
+          'picker-desc': 'Pick a <code>.CBE</code> application, then press Start.',
           'pick-game': 'Choose Game File',
-          'pick-sidecar': 'Companion ZIP (optional)',
           'start': 'Start Game',
           'picker-hint': 'You can also drop files onto the window. Files are processed locally in your browser and never uploaded. See the <a href="https://github.com/AloysHF/CoolbarEmu/blob/master/docs/Game-Compatibility.md" target="_blank" rel="noopener">compatibility records</a> for tested support.',
           'error-title': 'Unable to start the online emulator',
@@ -318,8 +308,7 @@
           'ctrl-gamepad': 'Gamepad and touch controls supported',
           'reset': 'Play another game',
           'note': 'Online play uses <a href="https://emulatorjs.org" target="_blank" rel="noopener">EmulatorJS</a>. Game data is not distributed with this site, so use your own legally obtained files. Prefer playing offline? Download the standalone emulator or the RetroArch core from <a href="https://github.com/AloysHF/CoolbarEmu/releases" target="_blank" rel="noopener">Releases</a>.',
-          'invalid-game': 'Only .CBE game files are supported.',
-          'invalid-sidecar': 'Companion files must be a .zip archive.'
+          'invalid-game': 'Only .CBE game files are supported.'
         }
       };
 
@@ -358,20 +347,16 @@
 
       var RUNTIME_PATH = 'data/';
       var GAME_EXTENSIONS = /\.cbe$/i;
-      var SIDECAR_EXTENSIONS = /\.zip$/i;
       var stage = document.querySelector('.play-stage');
       var status = document.getElementById('play-status');
       var picker = document.getElementById('play-picker');
       var pickerError = document.getElementById('play-picker-error');
       var error = document.getElementById('play-error');
       var gameInput = document.getElementById('game-file');
-      var sidecarInput = document.getElementById('sidecar-file');
       var gameName = document.getElementById('game-name');
-      var sidecarName = document.getElementById('sidecar-name');
       var startButton = document.getElementById('play-start');
       var resetButton = document.getElementById('play-reset');
       var gameFile = null;
-      var sidecarFile = null;
       var booted = false;
 
       function show(element) { element.hidden = false; }
@@ -383,7 +368,8 @@
       }
 
       function updateStartState() {
-        startButton.disabled = !gameFile || booted;
+        startButton.hidden = !gameFile;
+        startButton.disabled = booted;
       }
 
       function start() {
@@ -401,11 +387,6 @@
         // Blob URLs have no file name, so EJS_gameName must keep the extension.
         window.EJS_gameUrl = URL.createObjectURL(gameFile);
         window.EJS_gameName = gameFile.name;
-        if (sidecarFile) {
-          // EmulatorJS extracts the archive next to the content file, which is
-          // where the core looks for companion resources on Emscripten.
-          window.EJS_biosUrl = URL.createObjectURL(sidecarFile);
-        }
         window.EJS_pathtodata = RUNTIME_PATH;
         window.EJS_startOnLoaded = false;
         window.EJS_backgroundColor = '#05080c';
@@ -443,20 +424,6 @@
         updateStartState();
       });
 
-      sidecarInput.addEventListener('change', function () {
-        var file = sidecarInput.files && sidecarInput.files[0];
-        if (!file) return;
-        if (!SIDECAR_EXTENSIONS.test(file.name)) {
-          sidecarFile = null;
-          sidecarName.textContent = '';
-          fail('invalid-sidecar');
-        } else {
-          sidecarFile = file;
-          sidecarName.textContent = file.name;
-          hide(pickerError);
-        }
-      });
-
       startButton.addEventListener('click', start);
 
       var dragDepth = 0;
@@ -491,10 +458,6 @@
           if (GAME_EXTENSIONS.test(file.name)) {
             gameFile = file;
             gameName.textContent = file.name;
-            hide(pickerError);
-          } else if (SIDECAR_EXTENSIONS.test(file.name)) {
-            sidecarFile = file;
-            sidecarName.textContent = file.name;
             hide(pickerError);
           } else {
             fail('invalid-game');

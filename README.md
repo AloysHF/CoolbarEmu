@@ -100,8 +100,7 @@ signatures and configuration keys are not supported.
   the standalone frontend
 - **Browser play** — the same libretro core compiled to WebAssembly for
   [EmulatorJS](https://emulatorjs.org): load a `.CBE` application from your own
-  machine and play in the browser, with an optional companion ZIP for
-  applications that read sidecar files and a built-in online player on the
+  machine and play in the browser, with a built-in online player on the
   project site
 
 ## Usage

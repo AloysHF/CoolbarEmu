@@ -174,8 +174,8 @@
     "play.badge": { zh: "无需安装 · 浏览器直接运行", en: "No install · runs in your browser" },
     "play.title": { zh: "在线试玩 Coolbar 游戏", en: "Play Coolbar Games Online" },
     "play.desc": {
-      zh: "选择本机上的 CBE 应用即可在浏览器中直接运行，需要附属资源的应用还可以附带 ZIP。支持键盘、手柄与手机触屏，文件不会离开你的设备。",
-      en: "Pick a CBE application from your device and run it right in the browser; add a ZIP when it needs companion resources. Keyboard, gamepad, and touch are supported, and files never leave your device.",
+      zh: "选择本机上的 CBE 应用即可在浏览器中直接运行。支持键盘、手柄与手机触屏，文件不会离开你的设备。",
+      en: "Pick a CBE application from your device and run it right in the browser. Keyboard, gamepad, and touch are supported, and files never leave your device.",
     },
     "play.button": { zh: "▶ 开始试玩", en: "▶ Start Playing" },
     "footer.desc": { zh: "用 Rust 编写的 Coolbar/CBE 游戏模拟器", en: "A Rust emulator for Coolbar/CBE games" },

@@ -81,8 +81,8 @@ release (≥ 4.2.3) and keep this `cores/` directory.
 <script src="data/loader.js"></script>
 ```
 
-`site/play.html` in this repository is a complete example. It also shows the
-optional companion-archive slot described below.
+`site/play.html` in this repository is a complete example that loads a single
+`.CBE` file.
 
 When the game comes from a blob URL, EmulatorJS writes it into the wasm
 filesystem under `EJS_gameName`. Set that to the original file name, extension
@@ -91,10 +91,10 @@ content path for the core.
 
 ### Content and companion files
 
-A bare `.CBE` application loads on its own. Some applications also open files
-from their own directory, such as save records, payment plugins, or update
-data. Because EmulatorJS hands the core one content file, ship those files as
-a separate ZIP in `EJS_biosUrl`:
+The built-in player loads a bare `.CBE` application. Some applications also
+open files from their own directory, such as save records, payment plugins, or
+update data. Because EmulatorJS hands the core one content file, a custom page
+can ship those files as a separate ZIP in `EJS_biosUrl`:
 
 ```html
 EJS_biosUrl = URL.createObjectURL(companionZip);
