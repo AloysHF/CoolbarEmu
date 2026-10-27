@@ -90,44 +90,12 @@
     .play-overlay[hidden] { display: none; }
     .play-overlay code { font-size: 0.9em; color: var(--text); }
 
-    .play-picker-files {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: 14px 18px;
-    }
-
-    .play-file {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .play-file label.button { cursor: pointer; }
-    .play-file input[hidden] { display: none; }
-
-    .play-file-name {
-      font-size: 0.78rem;
-      color: var(--muted);
-      max-width: 220px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .play-file-name:empty { display: none; }
+    #play-picker label.button { cursor: pointer; }
+    #play-picker input[hidden] { display: none; }
 
     .play-picker-error { color: #ff8f7a; font-size: 0.85rem; }
     .play-picker-hint { font-size: 0.78rem; color: #6b7684; }
     .play-picker-hint a { color: var(--muted); text-decoration: underline; }
-
-    .play-start { margin-top: 6px; }
-    .play-start:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-      transform: none;
-      box-shadow: none;
-    }
 
     .play-stage.is-drop {
       border-color: rgba(240, 163, 94, 0.7);
@@ -224,18 +192,12 @@
 
       <div id="play-picker" class="play-overlay">
         <h2 data-i18n="picker-title">选择游戏文件</h2>
-        <p data-i18n="picker-desc">游戏选择 <code>.CBE</code> 文件。选好后点击“开始游戏”。</p>
-        <div class="play-picker-files">
-          <div class="play-file">
-            <label class="button primary">
-              <span data-i18n="pick-game">选择游戏文件</span>
-              <input id="game-file" type="file" accept=".cbe,application/octet-stream" hidden>
-            </label>
-            <span id="game-name" class="play-file-name"></span>
-          </div>
-        </div>
+        <p data-i18n="picker-desc">请选择 <code>.CBE</code> 应用文件，选择后会自动加载核心。</p>
+        <label class="button primary">
+          <span data-i18n="pick-game">选择游戏文件</span>
+          <input id="game-file" type="file" accept=".cbe,application/octet-stream" hidden>
+        </label>
         <p id="play-picker-error" class="play-picker-error" hidden></p>
-        <button id="play-start" class="button primary play-start" type="button" data-i18n="start" hidden>开始游戏</button>
         <p class="play-picker-hint" data-i18n="picker-hint">也可以把文件拖进窗口。文件只在浏览器本地处理，不会被上传。支持范围见 <a href="https://github.com/AloysHF/CoolbarEmu/blob/master/docs/Game-Compatibility.md" target="_blank" rel="noopener">兼容性记录</a>。</p>
       </div>
 
@@ -271,9 +233,8 @@
           'status-title': '正在加载核心…',
           'status-desc': '首次启动需要下载 WebAssembly 核心，请稍候。',
           'picker-title': '选择游戏文件',
-          'picker-desc': '游戏选择 <code>.CBE</code> 文件。选好后点击“开始游戏”。',
+          'picker-desc': '请选择 <code>.CBE</code> 应用文件，选择后会自动加载核心。',
           'pick-game': '选择游戏文件',
-          'start': '开始游戏',
           'picker-hint': '也可以把文件拖进窗口。文件只在浏览器本地处理，不会被上传。支持范围见 <a href="https://github.com/AloysHF/CoolbarEmu/blob/master/docs/Game-Compatibility.md" target="_blank" rel="noopener">兼容性记录</a>。',
           'error-title': '无法启动在线模拟器',
           'error-text': 'EmulatorJS 运行时未部署（缺少 <code>data/loader.js</code>）。请通过 Pages 部署流程生成 <code>site/data</code>，或直接使用独立版模拟器。',
@@ -295,9 +256,8 @@
           'status-title': 'Loading core…',
           'status-desc': 'The first launch downloads the WebAssembly core.',
           'picker-title': 'Choose a game file',
-          'picker-desc': 'Pick a <code>.CBE</code> application, then press Start.',
+          'picker-desc': 'Pick a <code>.CBE</code> application; the core loads as soon as you choose it.',
           'pick-game': 'Choose Game File',
-          'start': 'Start Game',
           'picker-hint': 'You can also drop files onto the window. Files are processed locally in your browser and never uploaded. See the <a href="https://github.com/AloysHF/CoolbarEmu/blob/master/docs/Game-Compatibility.md" target="_blank" rel="noopener">compatibility records</a> for tested support.',
           'error-title': 'Unable to start the online emulator',
           'error-text': 'The EmulatorJS runtime is not deployed (missing <code>data/loader.js</code>). Generate <code>site/data</code> through the Pages workflow, or use the standalone emulator.',
@@ -353,10 +313,7 @@
       var pickerError = document.getElementById('play-picker-error');
       var error = document.getElementById('play-error');
       var gameInput = document.getElementById('game-file');
-      var gameName = document.getElementById('game-name');
-      var startButton = document.getElementById('play-start');
       var resetButton = document.getElementById('play-reset');
-      var gameFile = null;
       var booted = false;
 
       function show(element) { element.hidden = false; }
@@ -367,15 +324,9 @@
         show(pickerError);
       }
 
-      function updateStartState() {
-        startButton.hidden = !gameFile;
-        startButton.disabled = booted;
-      }
-
-      function start() {
-        if (!gameFile || booted) return;
+      function boot(file) {
+        if (booted) return;
         booted = true;
-        updateStartState();
         stage.classList.remove('is-picking');
         hide(picker);
         hide(error);
@@ -385,8 +336,8 @@
         window.EJS_player = '#game';
         window.EJS_core = 'coolbaremu';
         // Blob URLs have no file name, so EJS_gameName must keep the extension.
-        window.EJS_gameUrl = URL.createObjectURL(gameFile);
-        window.EJS_gameName = gameFile.name;
+        window.EJS_gameUrl = URL.createObjectURL(file);
+        window.EJS_gameName = file.name;
         window.EJS_pathtodata = RUNTIME_PATH;
         window.EJS_startOnLoaded = false;
         window.EJS_backgroundColor = '#05080c';
@@ -400,31 +351,25 @@
         };
         runtime.onerror = function () {
           booted = false;
-          updateStartState();
           hide(status);
-          hide(picker);
           show(error);
           show(resetButton);
         };
         document.body.appendChild(runtime);
       }
 
-      gameInput.addEventListener('change', function () {
-        var file = gameInput.files && gameInput.files[0];
-        if (!file) return;
+      function pick(file) {
+        if (!file || booted) return;
         if (!GAME_EXTENSIONS.test(file.name)) {
-          gameFile = null;
-          gameName.textContent = '';
           fail('invalid-game');
-        } else {
-          gameFile = file;
-          gameName.textContent = file.name;
-          hide(pickerError);
+          return;
         }
-        updateStartState();
-      });
+        boot(file);
+      }
 
-      startButton.addEventListener('click', start);
+      gameInput.addEventListener('change', function () {
+        pick(gameInput.files && gameInput.files[0]);
+      });
 
       var dragDepth = 0;
 
@@ -450,20 +395,9 @@
         event.preventDefault();
         dragDepth = 0;
         stage.classList.remove('is-drop');
-        if (booted) return;
         var files = event.dataTransfer && event.dataTransfer.files;
         if (!files || files.length === 0) return;
-        for (var i = 0; i < files.length; i += 1) {
-          var file = files[i];
-          if (GAME_EXTENSIONS.test(file.name)) {
-            gameFile = file;
-            gameName.textContent = file.name;
-            hide(pickerError);
-          } else {
-            fail('invalid-game');
-          }
-        }
-        updateStartState();
+        pick(files[0]);
       });
 
       resetButton.addEventListener('click', function () {
@@ -475,7 +409,6 @@
       });
 
       applyLang(currentLang);
-      updateStartState();
     })();
   </script>
 </body>
