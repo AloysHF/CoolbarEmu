@@ -243,6 +243,23 @@ impl CoolbarMachine {
                 Self::method_stub_address(super::super::METHOD_KIND_GAMEOLD, method),
             );
         }
+        // Some engine builds place the window scroll pair one slot window
+        // earlier: the absolute set at +0x670 and the relative adjust at
+        // +0x674, with +0x668/+0x66c completing the same method block.
+        // 032 士兵突袭V10 (issue #106) centres its camera through `bx r4`
+        // with r4 loaded from scene+0x670 every frame and faulted on the
+        // never-populated slot.  Leave non-zero slots alone: unlike the
+        // fixed movement pair above, these offsets have no single
+        // cross-title contract, so only empty method slots are claimable.
+        for offset in [0x668u32, 0x66c, 0x670, 0x674] {
+            let slot = scene + offset;
+            if self.memory.r32(slot) == 0 {
+                self.memory.w32(
+                    slot,
+                    Self::method_stub_address(super::super::METHOD_KIND_GAMEOLD, offset),
+                );
+            }
+        }
         // Empty actor tables precede the application-owned scene payload.
         // The payload starts with the named-region count, which stays
         // non-zero for scenes whose regions build the actors: the
@@ -449,6 +466,33 @@ impl CoolbarMachine {
         Ok(())
     }
 
+    /// Firmware scene-window scroll methods that some engine builds expose
+    /// at scene+0x670 (absolute) and scene+0x674 (relative): r1 carries the
+    /// i16 x component and r2 the i16 y component.  The viewport origin the
+    /// tile renderer reads lives at scene+0x640/0x642, so writing those
+    /// fields is the whole effect; the guest's per-frame repaint then draws
+    /// the map at the new offset.  Unimplemented here would leave the slot
+    /// at zero and the guest's `bx r4` dispatch would jump to NULL.
+    pub(crate) fn scroll_scene_window(&mut self, offset: u32) {
+        let scene = self.register(0);
+        if scene == 0 {
+            self.set_result(0);
+            return;
+        }
+        let dx = self.register(1) as u16 as i16 as i32;
+        let dy = self.register(2) as u16 as i16 as i32;
+        let (next_x, next_y) = if offset == 0x670 {
+            (dx, dy)
+        } else {
+            let origin_x = self.memory.r16(scene + 0x640) as i16 as i32;
+            let origin_y = self.memory.r16(scene + 0x642) as i16 as i32;
+            (origin_x + dx, origin_y + dy)
+        };
+        self.memory.w16(scene + 0x640, next_x as u16);
+        self.memory.w16(scene + 0x642, next_y as u16);
+        self.set_result(0);
+    }
+
     pub(crate) fn query_scene_movement(&mut self, offset: u32) {
         let scene = self.register(0);
         let map = self.memory.r32(scene + 0x61c);
@@ -519,6 +563,40 @@ impl CoolbarMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The window scroll pair sits one slot block earlier than the movement
+    /// pair on some engine builds: +0x670 sets the viewport origin outright
+    /// and +0x674 adjusts it, both taking a signed i16 x/y in r1/r2.  032
+    /// 士兵突袭V10 loads these slots into `r4` and dispatches through
+    /// `bx r4` every frame, so an unpopulated slot faulted on NULL (#106).
+    #[test]
+    fn scene_window_scroll_methods_move_the_viewport_origin() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        let scene = machine.allocate(0x700);
+        machine.cpu.reg_set(Mode::User, 0, scene);
+        machine.cpu.reg_set(Mode::User, 1, 40);
+        machine.cpu.reg_set(Mode::User, 2, 24);
+        machine.scroll_scene_window(0x670);
+        assert_eq!(machine.memory.r16(scene + 0x640), 40);
+        assert_eq!(machine.memory.r16(scene + 0x642), 24);
+
+        // The method writes its result to r0, so the caller restores the scene.
+        machine.cpu.reg_set(Mode::User, 0, scene);
+        machine.cpu.reg_set(Mode::User, 1, (-8i32) as u32);
+        machine.cpu.reg_set(Mode::User, 2, 4);
+        machine.scroll_scene_window(0x674);
+        assert_eq!(machine.memory.r16(scene + 0x640) as i16, 32);
+        assert_eq!(machine.memory.r16(scene + 0x642) as i16, 28);
+        assert_eq!(machine.register(0), 0, "the method reports success");
+    }
+
+    #[test]
+    fn scene_window_scroll_ignores_a_null_scene() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.cpu.reg_set(Mode::User, 0, 0);
+        machine.scroll_scene_window(0x670);
+        assert_eq!(machine.register(0), 0);
+    }
 
     #[test]
     fn scene_initialization_exposes_real_map_cells_and_picture_library() {

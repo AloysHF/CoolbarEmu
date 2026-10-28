@@ -5774,7 +5774,13 @@ mod tests {
             assert_eq!(machine.memory.r16(library + 20), 1);
             assert_eq!(call(&mut machine, 0x20, 0), 2);
             assert_eq!(call(&mut machine, 0x24, 0), 1);
-            assert_eq!(call(&mut machine, 0x20, u32::MAX), 0);
+            // Index -1 is the current target surface, not a registered entry:
+            // 032 士兵突袭V10 divides by PL_GetWidth(-1)/3 and must not get 0
+            // (#106).  A positive index past the table still reports nothing.
+            let (screen_width, screen_height) = machine.image_dims(SCREEN_IMAGE_STRUCT);
+            assert_eq!(call(&mut machine, 0x20, u32::MAX), screen_width as u32);
+            assert_eq!(call(&mut machine, 0x24, u32::MAX), screen_height as u32);
+            assert_eq!(call(&mut machine, 0x20, 9), 0);
             machine.cpu.reg_set(Mode::User, 2, 10);
             machine.cpu.reg_set(Mode::User, 3, 20);
             call(&mut machine, 0x34, 0);
@@ -6376,6 +6382,54 @@ mod tests {
             assert_eq!(machine.memory.r16(image + 4), 188, "width recorded");
             assert_eq!(machine.memory.r16(image + 6), 0, "height recorded");
         }
+    }
+
+    /// Picture index -1 addresses the library's current target surface, not a
+    /// registered entry: 032 士兵突袭V10 sizes its HUD layout with
+    /// PL_GetWidth(-1)/PL_GetHeight(-1) right after recreating the library and
+    /// then divides a layout constant by width/3, so an empty library
+    /// answering zero divided by zero on every load (#106).
+    #[test]
+    fn picture_library_minus_one_index_reports_the_target_surface() {
+        let mut machine = machine_from_minimal_archive();
+        machine.initialize_screen();
+        machine.executable.big_endian = true;
+        machine.executable.preferred_code_address = 0x0010_0000;
+        machine.executable.code_image_size = 0x2000;
+        machine.executable.code_size = 4;
+        let library = machine.allocate(0x54);
+        machine.cpu.reg_set(Mode::User, 0, library);
+        machine.cpu.reg_set(Mode::User, 1, 8);
+        machine.handle_game_service(75);
+        assert_eq!(machine.memory.r16(library + 20), 0, "library starts empty");
+        let (width, height) = machine.image_dims(SCREEN_IMAGE_STRUCT);
+        assert!(width > 0 && height > 0, "screen header carries its size");
+        for (offset, expected) in [(0x20u32, width as u32), (0x24, height as u32)] {
+            machine.cpu.reg_set(Mode::User, 0, library);
+            machine.cpu.reg_set(Mode::User, 1, 0xffff);
+            machine.handle_method_stub(
+                CoolbarMachine::method_stub_address(METHOD_KIND_PICTURE, offset) & !1,
+            );
+            assert_eq!(
+                machine.register(0),
+                expected,
+                "sentinel answers the canvas dimension for slot 0x{offset:X}"
+            );
+        }
+        // Registered entries still report their own dimensions.
+        machine.cpu.reg_set(Mode::User, 0, library);
+        machine.cpu.reg_set(Mode::User, 1, 40);
+        machine.cpu.reg_set(Mode::User, 2, 20);
+        machine.handle_method_stub(
+            CoolbarMachine::method_stub_address(METHOD_KIND_PICTURE, 0x18) & !1,
+        );
+        assert_eq!(machine.register(0), 0, "blank canvas registers at index 0");
+        machine.cpu.reg_set(Mode::User, 0, library);
+        machine.cpu.reg_set(Mode::User, 1, 0);
+        machine.handle_method_stub(
+            CoolbarMachine::method_stub_address(METHOD_KIND_PICTURE, 0x20) & !1,
+        );
+        assert_eq!(machine.register(0), 40, "entry 0 keeps its own width");
     }
 
     /// Guest string encoding follows machine endianness: big-endian images

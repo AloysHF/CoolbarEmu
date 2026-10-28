@@ -1271,6 +1271,7 @@ impl CoolbarMachine {
         }
         match (kind, offset) {
             (METHOD_KIND_GAMEOLD, 0x680 | 0x684) => self.query_scene_movement(offset),
+            (METHOD_KIND_GAMEOLD, 0x670 | 0x674) => self.scroll_scene_window(offset),
             (METHOD_KIND_GAMEOLD, 0x130) => self.initialize_record(),
             (METHOD_KIND_PICTURE, _) => self.handle_picture_library_method(offset),
             (METHOD_KIND_ACTOR, _) => self.handle_actor_method(offset),

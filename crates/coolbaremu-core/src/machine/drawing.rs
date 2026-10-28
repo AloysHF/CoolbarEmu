@@ -850,20 +850,33 @@ impl CoolbarMachine {
             }
             0x20 | 0x24 => {
                 let index = argument & 0xffff;
-                let image = if index < count {
-                    self.memory.r32(images + index * 4)
+                // Picture index -1 (0xffff) addresses the library's current
+                // target surface, not a registered entry: 032 士兵突袭V10
+                // (issue #106) sizes its HUD layout with PL_GetWidth(-1) /
+                // PL_GetHeight(-1) immediately after recreating its library
+                // each frame, then divides a layout constant by width/3 —
+                // an empty-library zero there is a guaranteed division by
+                // zero.  Answer with the target's dimensions (the lib+4
+                // canvas, falling back to the screen image) for the
+                // sentinel, and keep the registered-entry path unchanged.
+                let (width, height) = if index == 0xffff {
+                    self.image_dims(target)
                 } else {
-                    0
-                };
-                let size = if image == 0 {
-                    0
-                } else {
-                    let (width, height) = self.image_dims(image);
-                    if offset == 0x20 {
-                        width as u32
+                    let image = if index < count {
+                        self.memory.r32(images + index * 4)
                     } else {
-                        height as u32
+                        0
+                    };
+                    if image == 0 {
+                        (0, 0)
+                    } else {
+                        self.image_dims(image)
                     }
+                };
+                let size = if offset == 0x20 {
+                    width as u32
+                } else {
+                    height as u32
                 };
                 self.set_result(size);
             }
