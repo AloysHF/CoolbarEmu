@@ -2048,6 +2048,58 @@ impl CoolbarMachine {
                 let image = self.create_image_from_stream(self.register(0), 0);
                 self.set_result(image);
             }
+            10 => {
+                // IMG_DrawChar: some engine builds render text one character
+                // at a time into a dedicated glyph-cell image and blit the
+                // cell onto the screen themselves afterwards.  僵尸先生(新品)
+                // V10 (issue #89) clears the cell with a memset after every
+                // call, so this is a one-shot render of the requested bytes
+                // at the cell origin; returning zero made the guest skip the
+                // blit and every text page stayed a blank panel.  These
+                // pages run in half-width mode (the game measures lines at
+                // the 8px font cell width and advances one cell per glyph),
+                // so squeeze each glyph into the left half of the cell — a
+                // full-width render overlaps every neighbouring character.
+                let image = self.register(0);
+                let mut rendered = false;
+                if image != 0 {
+                    let (width, height) = self.image_dims(image);
+                    let pixels = self.memory.r32(image);
+                    if pixels != 0 && width > 0 && width <= 64 && height > 0 && height <= 64 {
+                        let mut bytes = self.read_c_bytes(self.register(1), 64);
+                        let length = self.register(2) as usize;
+                        bytes.truncate(length.min(bytes.len()));
+                        let color = self.memory.r32(self.register(reg::SP) + 4) as u16;
+                        let (text, _, _) = GBK.decode(&bytes);
+                        let pitch = ((width as u32 + 3) & !3) as i32;
+                        let mut pen_x = 0i32;
+                        for character in text.chars() {
+                            let mut advance = (width / 2).max(1);
+                            if let Some(glyph) = unifont::get_glyph(character) {
+                                let draw_width = (glyph.get_width() as i32 / 2).max(1);
+                                advance = advance.min(draw_width);
+                                for glyph_y in 0..height.min(16) {
+                                    for cell_x in 0..draw_width {
+                                        let source_x =
+                                            cell_x * glyph.get_width() as i32 / draw_width;
+                                        if !glyph.get_pixel(source_x as usize, glyph_y as usize) {
+                                            continue;
+                                        }
+                                        let x = pen_x + cell_x;
+                                        if (0..width).contains(&x) {
+                                            let offset = (glyph_y * pitch + x) * 2;
+                                            self.memory.w16(pixels + offset as u32, color);
+                                        }
+                                    }
+                                }
+                            }
+                            pen_x += advance;
+                        }
+                        rendered = true;
+                    }
+                }
+                self.set_result(u32::from(rendered));
+            }
             1 | 2 => {
                 let stack = self.register(reg::SP);
                 let height = signed_coord(self.memory.r32(stack));
