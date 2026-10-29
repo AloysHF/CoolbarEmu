@@ -724,6 +724,14 @@ pub struct CoolbarMachine {
     billing_reg: BTreeMap<u16, (u8, u8)>,
     #[serde(skip, default)]
     free_heap_blocks: Vec<(u32, u32)>,
+    /// Live allocations carved out of a guest memory block, keyed by pointer:
+    /// (size, block base). Kept beside the global-heap maps so a block free
+    /// returns space to the block instead of leaking it.
+    #[serde(skip, default)]
+    block_allocations: BTreeMap<u32, (u32, u32)>,
+    /// Recycled runs per block base, sorted by block-relative offset.
+    #[serde(skip, default)]
+    block_free_runs: BTreeMap<u32, Vec<(u32, u32)>>,
     app_main: u32,
     app_exit: u32,
     service_calls: HashMap<(u32, u32), u64>,
@@ -918,6 +926,8 @@ impl CoolbarMachine {
             pending_callbacks: VecDeque::new(),
             billing_reg: BTreeMap::new(),
             free_heap_blocks: Vec::new(),
+            block_allocations: BTreeMap::new(),
+            block_free_runs: BTreeMap::new(),
             app_main: 0,
             app_exit: 0,
             service_calls: HashMap::new(),
@@ -1370,6 +1380,9 @@ impl CoolbarMachine {
 
     fn deallocate(&mut self, pointer: u32) {
         let Some(size) = self.heap_allocations.remove(&pointer) else {
+            // A pointer carved out of a guest memory block belongs to that
+            // block's space; returning it there keeps the block reusable.
+            self.release_block_allocation(pointer);
             return;
         };
         self.free_heap_blocks.push((pointer, size));
@@ -1960,6 +1973,8 @@ impl CoolbarMachine {
             pending_callbacks: VecDeque::new(),
             billing_reg: BTreeMap::new(),
             free_heap_blocks: Vec::new(),
+            block_allocations: BTreeMap::new(),
+            block_free_runs: BTreeMap::new(),
             app_main: 0,
             app_exit: 0,
             service_calls: HashMap::new(),
