@@ -16,6 +16,33 @@ use super::{
     SERVICE_SIZE, TABLE_STRIDE,
 };
 
+/// Whether an ARM condition code passes against `cpsr`, using the standard
+/// N/Z/C/V flags in bits 31..28. Mirrors the core's own test so instructions
+/// handled outside it stay conditional.
+fn arm_condition_met(condition: u8, cpsr: u32) -> bool {
+    let negative = cpsr & (1 << 31) != 0;
+    let zero = cpsr & (1 << 30) != 0;
+    let carry = cpsr & (1 << 29) != 0;
+    let overflow = cpsr & (1 << 28) != 0;
+    match condition {
+        0 => zero,
+        1 => !zero,
+        2 => carry,
+        3 => !carry,
+        4 => negative,
+        5 => !negative,
+        6 => overflow,
+        7 => !overflow,
+        8 => carry && !zero,
+        9 => !carry || zero,
+        10 => negative == overflow,
+        11 => negative != overflow,
+        12 => !zero && negative == overflow,
+        13 => zero || negative != overflow,
+        _ => true,
+    }
+}
+
 impl CoolbarMachine {
     pub(super) fn run_until_return(&mut self, instruction_limit: u64) -> Result<()> {
         for _ in 0..instruction_limit {
@@ -193,6 +220,8 @@ impl CoolbarMachine {
                     return Ok(());
                 }
             } else if self.handle_thumb_add_pc(pc) || self.handle_interworking_branch(pc) {
+            } else if self.handle_clz(pc) {
+                // ARMv5T `CLZ` handled outside the core; see the method.
             } else if self.pc_in_unloaded_rom(pc) {
                 // The guest branched into the zero-filled BSS/data tail of
                 // the ROM mapping — a bad function pointer, not real code.
@@ -219,8 +248,9 @@ impl CoolbarMachine {
         }
         self.state = super::MachineState::Faulted;
         bail!(
-            "CBE execution exceeded {instruction_limit} instructions at 0x{:08X}",
-            self.last_pc
+            "CBE execution exceeded {instruction_limit} instructions at 0x{:08X}{}",
+            self.last_pc,
+            self.unmapped_fetch_context()
         )
     }
 
@@ -327,6 +357,55 @@ impl CoolbarMachine {
             return false;
         };
         self.cpu.reg_set(Mode::User, reg::PC, target);
+        true
+    }
+
+    /// ARMv5T `CLZ Rd, Rm` — count leading zeros.
+    ///
+    /// The cores these games were built for are ARMv5TE, but the interpreter
+    /// only knows ARMv4T, where this encoding decodes as a data-processing
+    /// operation with a register-controlled shift: it never writes `Rd`, so the
+    /// destination keeps whatever the caller left there. Every software-float
+    /// helper opens with `CLZ` to normalise a mantissa, so the count comes back
+    /// as a stale value and the arithmetic downstream is meaningless — `B/美女
+    /// 桌球.CBE` (issue #190) turns a ball's step size into zero that way and
+    /// then spins through its per-pixel draw loop forever. Implementing the
+    /// instruction here keeps the core untouched.
+    fn handle_clz(&mut self, pc: u32) -> bool {
+        let (instruction, destination, source, next, condition) = if self.cpu.thumb_mode() {
+            // Thumb-2 `CLZ` is a 32-bit encoding: 111110101011 Rn 1111 Rd 1000 Rm.
+            let prefix = self.memory.r16(pc);
+            let suffix = self.memory.r16(pc + 2);
+            if prefix & 0xfff0 != 0xfab0 || suffix & 0xf0f0 != 0xf080 {
+                return false;
+            }
+            (
+                prefix as u32,
+                ((suffix >> 8) & 0x0f) as u8,
+                (suffix & 0x0f) as u8,
+                pc.wrapping_add(4),
+                14,
+            )
+        } else {
+            let word = self.memory.r32(pc);
+            if word & 0x0fff_0ff0 != 0x016f_0f10 {
+                return false;
+            }
+            (
+                word,
+                ((word >> 12) & 0x0f) as u8,
+                (word & 0x0f) as u8,
+                pc.wrapping_add(4),
+                (word >> 28) as u8,
+            )
+        };
+        let _ = instruction;
+        self.cpu.reg_set(Mode::User, reg::PC, next);
+        if arm_condition_met(condition, self.register(reg::CPSR)) {
+            let value = self.register(source);
+            self.cpu
+                .reg_set(Mode::User, destination, value.leading_zeros());
+        }
         true
     }
 

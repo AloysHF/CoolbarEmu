@@ -12,9 +12,13 @@ with group priority B, then C, then A; differently encoded variants remain separ
 
 The tables below record the current core's 200-frame idle execution and captured
 RGB565 frame. Each callback permits 100,000,000 instructions; each file has a
-90-second wall-clock protection by default. Three slow startup captures use a
-180-second external limit: `B/僵尸先生.CBE`, `B/激情砖块.CBE`, and
-`B/疯狂企鹅大冒险.CBE`; callback and instruction budgets are unchanged.
+90-second wall-clock protection by default. Two slow startup captures use a
+180-second external limit: `B/僵尸先生.CBE` and `B/激情砖块.CBE`; callback and
+instruction budgets are unchanged. `B/疯狂企鹅大冒险.CBE` needed that extension
+until the block allocator started recycling freed runs (b441741): it rebuilds its
+scene buffers every frame, so the bump-only allocator ran the 4 MiB pool dry and
+the 200-frame capture took 172 s. It now finishes in 80 s and is back under the
+default limit.
 An execution result is not a gameplay rating.
 `Ready` means the machine remains active; `Halted` means guest execution stopped.
 The current CoolbarEmu captures contain 243 `Ready` and two `Halted` results,
@@ -269,14 +273,14 @@ not provide the original server's content or a real carrier payment service.
 | 53 | `B/猫和老鼠.CBE` | 240×400 | <img src="images/B/猫和老鼠.png" width="120" alt="猫和老鼠 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 54 | `B/现代情趣大全.CBE` | 240×400 | <img src="images/B/现代情趣大全.png" width="120" alt="现代情趣大全 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 55 | `B/电子邮件.CBE` | 240×400 | <img src="images/B/电子邮件.png" width="120" alt="电子邮件 idle frame"> | Required | Ready | Idle frame captured; interaction/gameplay unverified |
-| 56 | `B/疯狂企鹅大冒险.CBE` | 400×240 | <img src="images/B/疯狂企鹅大冒险.png" width="120" alt="疯狂企鹅大冒险 idle frame"> | No known requirement | Ready | Title frame renders (96000 px / 439 colours). Before the block allocator learned to hand freed runs back (see the memory-service notes in this commit series) this title never finished 200 frames: it rebuilds its scene buffers every frame, so the bump-only allocator drained the 4 MiB pool and the run timed out. |
+| 56 | `B/疯狂企鹅大冒险.CBE` | 400×240 | <img src="images/B/疯狂企鹅大冒险.png" width="120" alt="疯狂企鹅大冒险 idle frame"> | No known requirement | Ready | Title frame renders (96000 px / 439 colours) and the 200-frame capture is down to 80 s from 172 s, so it fits the default limit again. Before the block allocator learned to hand freed runs back (b441741) it rebuilds its scene buffers every frame, drained the 4 MiB pool, and starved itself of memory. |
 | 57 | `B/疯狂捕鸟.CBE` | 400×240 | <img src="images/B/疯狂捕鸟.png" width="120" alt="疯狂捕鸟 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 58 | `B/疯狂斗地主.CBE` | 400×240 | <img src="images/B/疯狂斗地主.png" width="120" alt="疯狂斗地主 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 59 | `B/皇牌空战.CBE` | 240×400 | <img src="images/B/皇牌空战.png" width="120" alt="皇牌空战 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 60 | `B/碰嘭球.CBE` | 240×400 | <img src="images/B/碰嘭球.png" width="120" alt="碰嘭球 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 61 | `B/移淘网.CBE` | 240×400 | <img src="images/B/移淘网.png" width="120" alt="移淘网 idle frame"> | Required | Ready | Idle frame captured; interaction/gameplay unverified |
 | 62 | `B/笑死人.CBE` | 240×400 | <img src="images/B/笑死人.png" width="120" alt="笑死人 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
-| 63 | `B/美女桌球.CBE` | 400×240 | <img src="images/B/美女桌球.png" width="120" alt="美女桌球 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
+| 63 | `B/美女桌球.CBE` | 400×240 | <img src="images/B/美女桌球.png" width="120" alt="美女桌球 idle frame"> | No known requirement | Ready | Title, character/level select, the LEVEL 1 tutorial, the ball rack and the power/shot bar all render (70827 px / 1483 colours) and the run now finishes cleanly. Entering the first level used to hang: the guest's software float helpers open with ARMv5 `CLZ`, which the ARMv4T core decoded as a data-processing op that never wrote its destination, so the ball's step size collapsed to zero and the per-pixel draw loop never ended (issue #190). Character select content and the playable table are still unverified. |
 | 64 | `B/英汉词典.CBE` | 240×400 | <img src="images/B/英汉词典.png" width="120" alt="英汉词典 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 65 | `B/血剑Online.CBE` | 240×400 | <img src="images/B/血剑Online.png" width="120" alt="血剑Online idle frame"> | Required | Ready | Idle frame captured; interaction/gameplay unverified |
 | 66 | `B/钻石迷情3.CBE` | 240×400 | <img src="images/B/钻石迷情3.png" width="120" alt="钻石迷情3 idle frame"> | No known requirement | Ready | Idle frame captured; classic mode verified: first entry matches and swap touches score 0→50, and returning to the title and re-entering three times no longer blacks out — the re-entry decodes used to fail because the image-release slot leaked every decoded picture's pixel allocation until the heap pool ran out (fixed in b75283f). See issue #192 |

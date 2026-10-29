@@ -143,7 +143,15 @@ fn main() -> Result<()> {
                     machine.set_pointer(x, y, true);
                 }
             }
+            let before_frame_instructions = machine.instruction_count();
             result = machine.run_frame(cli.instruction_limit);
+            if std::env::var_os("CBE_FRAME_STATS").is_some() {
+                eprintln!(
+                    "frame {frame} instructions={} pc=0x{:08X}",
+                    machine.instruction_count() - before_frame_instructions,
+                    machine.last_pc()
+                );
+            }
             // Consume guest audio like a frontend so drained one-shots report
             // stopped and looping BGM restarts through the engine path.
             let _ = machine.take_audio_samples(4410);

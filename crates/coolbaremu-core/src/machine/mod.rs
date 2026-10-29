@@ -3663,6 +3663,64 @@ mod tests {
         );
     }
 
+    /// ARMv5T `CLZ Rd, Rm`.  The ARMv4T core predates the instruction and
+    /// decodes its encoding as a data-processing op that never writes `Rd`, so
+    /// a guest counting leading zeros reads back a stale register.  The
+    /// software-float helpers in every game open with `CLZ`; `B/美女桌球.CBE`
+    /// (issue #190) computed a zero step from it and span forever in its
+    /// per-pixel draw loop.
+    #[test]
+    fn arm_clz_counts_leading_zeros() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10); // ARM state
+        machine.cpu.reg_set(Mode::User, reg::PC, entry);
+        machine.memory.w32(entry, 0xE16F_1F10); // clz r1, r0
+        machine.memory.w32(entry + 4, 0xEAFF_FFFE); // b . (halts)
+
+        machine.cpu.reg_set(Mode::User, 0, 36);
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(machine.register(1), 26, "clz(36) == 26");
+        assert_eq!(machine.register(reg::PC), entry + 4, "clz advances pc");
+    }
+
+    #[test]
+    fn arm_clz_of_zero_is_thirty_two() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        machine.cpu.reg_set(Mode::User, reg::PC, entry);
+        machine.memory.w32(entry, 0xE16F_1F10); // clz r1, r0
+        machine.memory.w32(entry + 4, 0xEAFF_FFFE);
+
+        machine.cpu.reg_set(Mode::User, 0, 0);
+        machine.cpu.reg_set(Mode::User, 1, 0xDEAD_BEEF);
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(machine.register(1), 32, "clz(0) == 32");
+    }
+
+    /// A conditional `CLZ` must stay conditional: `CLZNE` with Z set leaves
+    /// the destination alone but still advances past the instruction.
+    #[test]
+    fn arm_clz_respects_its_condition_code() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10 | (1 << 30)); // ARM, Z set
+        machine.cpu.reg_set(Mode::User, reg::PC, entry);
+        machine.memory.w32(entry, 0x116F_1F10); // clzne r1, r0
+        machine.memory.w32(entry + 4, 0xEAFF_FFFE);
+
+        machine.cpu.reg_set(Mode::User, 0, 36);
+        machine.cpu.reg_set(Mode::User, 1, 0xDEAD_BEEF);
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(machine.register(1), 0xDEAD_BEEF, "clzne skipped when Z set");
+        assert_eq!(
+            machine.register(reg::PC),
+            entry + 4,
+            "skipped clz advances pc"
+        );
+    }
+
     /// Executing inside the manager region means the game calls the
     /// application interface as code (native-dispatch convention: id in r0,
     /// argument in r1). The fetch must be dispatched, not decoded as data —
