@@ -190,6 +190,17 @@ fn main() -> Result<()> {
         .copied()
         .collect::<std::collections::HashSet<_>>();
     eprintln!("frame nonzero={nonzero} colors={}", colors.len());
+    // Online titles stop at their login/"network error" page when the
+    // platform service is unreachable; naming the URL the guest asked for is
+    // the difference between "our stack is broken" and "that server is gone".
+    if !machine.network_last_http_url().is_empty() {
+        eprintln!(
+            "network url={} uplink={} downlink={}",
+            machine.network_last_http_url(),
+            machine.network_uplink_bytes(),
+            machine.network_downlink_bytes()
+        );
+    }
     if let Some(path) = &cli.screenshot {
         let (display_width, display_height) = machine.display_size();
         let rgb: Vec<u8> = pixels
