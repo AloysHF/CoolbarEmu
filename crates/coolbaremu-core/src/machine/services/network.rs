@@ -88,6 +88,13 @@ impl CoolbarMachine {
     fn network_connect(&mut self) {
         let callback = self.register(2);
         let connect_id_out = self.register(3);
+        // Record the destination so diagnostics can name the endpoint a title
+        // depends on. Raw lobby channels pass `host:port` here, HTTP channels
+        // pass a URL, and both are useful when judging an offline report.
+        let destination = self.read_guest_cstring(self.register(0), 256);
+        if !destination.is_empty() {
+            self.net_last_http_url = destination;
+        }
         if callback == 0 {
             self.set_result(0);
             return;

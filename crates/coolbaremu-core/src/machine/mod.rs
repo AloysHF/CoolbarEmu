@@ -1929,7 +1929,11 @@ impl CoolbarMachine {
         self.net_downlink_bytes
     }
 
-    /// Last URL requested through the network HTTP service, if any.
+    /// Last network destination the guest asked for, if any.
+    ///
+    /// HTTP requests store their URL; raw channel opens store the `host:port`
+    /// the guest passed to the connect service. Offline titles fail on the
+    /// first hop, so this is the endpoint that has to be named in a bug report.
     pub fn network_last_http_url(&self) -> &str {
         &self.net_last_http_url
     }
@@ -2094,6 +2098,27 @@ mod tests {
         assert_eq!((event.r0, event.r1, event.r2), (0, 0, 0));
         assert!(!event.screenless_only);
         assert_eq!(machine.net_downlink_bytes, 0);
+    }
+
+    #[test]
+    fn network_connect_records_the_raw_channel_destination() {
+        for big_endian in [false, true] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let destination = HEAP_BASE + 0x40;
+            machine
+                .memory
+                .write_bytes(destination, b"ghlc.51coolbar.com:20050\0");
+            machine.set_user_register(0, destination);
+            machine.set_user_register(1, 4);
+            machine.set_user_register(2, 0x0100_1237);
+            machine.set_user_register(3, HEAP_BASE + 0x100);
+            machine.handle_network_service(0);
+            assert_eq!(machine.network_last_http_url(), "ghlc.51coolbar.com:20050");
+            assert!(machine.memory.bad_accesses.is_empty());
+        }
     }
 
     #[test]
