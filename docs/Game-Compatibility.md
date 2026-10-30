@@ -29,8 +29,10 @@ explicitly listed in the Coverage / limitation column. Bookstore B retains its v
 online reading remains unverified. Zombie Master V101 reaches its landscape
 title menu. Music (recommended) V101 stops after offline continuation; usable
 startup is unverified. SMS Recharge V101 reaches its numeric account/password
-form. Six online-game V101 variants reach login screens. Authentication, online
-rooms, actual recharges and multiplayer games remain unavailable. 坦克大战 V10
+form. Six online-game V101 variants reach fully interactive login screens — taps,
+soft keys and arrows all register, the 资费说明 page opens — but 快速登陆 only opens the
+retired Coolbar lobby channel `ghlc.51coolbar.com:20050` (a RFC 2544 placeholder
+A record), so authentication, rooms and multiplayer games remain unobtainable. 坦克大战 V10
 (A group, row 29) is a ROM-level defect rather than an emulation gap: its
 hard-coded screen descriptor names a data blob inside the code image as the
 screen logic routine, so its play run cannot be repaired host-side (issue #103).
@@ -178,12 +180,12 @@ not provide the original server's content or a real carrier payment service.
 | 86 | `A/绝秘宝藏V101.CBE` | 240×320 | <img src="images/A/绝秘宝藏V101.png" width="120" alt="绝秘宝藏V101 idle frame"> | Not assessed | Ready | Offline continuation frame captured; interaction/gameplay unverified |
 | 87 | `A/美女俄罗斯V10.CBE` | 240×320 | <img src="images/A/美女俄罗斯V10.png" width="120" alt="美女俄罗斯V10 idle frame"> | Not assessed | Ready | Offline continuation frame captured; interaction/gameplay unverified |
 | 88 | `A/美女拖拉机V10.CBE` | 240×320 | <img src="images/A/美女拖拉机V10.png" width="120" alt="美女拖拉机V10 idle frame"> | Not assessed | Ready | Title, menus and scene navigation verified for 2,000 frames; complete gameplay unverified |
-| 89 | `A/联网五子棋(新版)V101.CBE` | 240×320 | <img src="images/A/联网五子棋(新版)V101.png" width="120" alt="联网五子棋(新版)V101 idle frame"> | Required | Ready | Login screen and numeric account/password fields checked for 2,000 idle callbacks plus scripted edits; online authentication and play unavailable |
-| 90 | `A/联网扎金花(新版)V101.CBE` | 240×320 | <img src="images/A/联网扎金花(新版)V101.png" width="120" alt="联网扎金花(新版)V101 idle frame"> | Required | Ready | Login screen and numeric account/password fields checked for 2,000 idle callbacks plus scripted edits; online authentication and play unavailable |
-| 91 | `A/联网拖拉机(新版)V101.CBE` | 240×320 | <img src="images/A/联网拖拉机(新版)V101.png" width="120" alt="联网拖拉机(新版)V101 idle frame"> | Required | Ready | Login screen and numeric account/password fields checked for 2,000 idle callbacks plus scripted edits; online authentication and play unavailable |
-| 92 | `A/联网斗地主(新版)V101.CBE` | 240×320 | <img src="images/A/联网斗地主(新版)V101.png" width="120" alt="联网斗地主(新版)V101 idle frame"> | Required | Ready | Login screen and numeric account/password fields checked for 2,000 idle callbacks plus scripted edits; online authentication and play unavailable |
-| 93 | `A/联网泡泡龙(新版)V101.CBE` | 240×320 | <img src="images/A/联网泡泡龙(新版)V101.png" width="120" alt="联网泡泡龙(新版)V101 idle frame"> | Required | Ready | Login screen and numeric account/password fields checked for 2,000 idle callbacks plus scripted edits; online authentication and play unavailable |
-| 94 | `A/联网麻将(强推)V101.CBE` | 240×320 | <img src="images/A/联网麻将(强推)V101.png" width="120" alt="联网麻将(强推)V101 idle frame"> | Required | Ready | Login screen and numeric account/password fields checked for 2,000 idle callbacks plus scripted edits; online authentication and play unavailable |
+| 89 | `A/联网五子棋(新版)V101.CBE` | 240×320 | <img src="images/A/联网五子棋(新版)V101.png" width="120" alt="联网五子棋(新版)V101 idle frame"> | Required | Ready | Login screen renders and responds to taps, soft keys and arrows; 快速登陆 opens the retired lobby channel `ghlc.51coolbar.com:20050`, so rooms and play are unobtainable |
+| 90 | `A/联网扎金花(新版)V101.CBE` | 240×320 | <img src="images/A/联网扎金花(新版)V101.png" width="120" alt="联网扎金花(新版)V101 idle frame"> | Required | Ready | Login screen renders and responds to taps, soft keys and arrows; 快速登陆 opens the retired lobby channel `ghlc.51coolbar.com:20050`, so rooms and play are unobtainable |
+| 91 | `A/联网拖拉机(新版)V101.CBE` | 240×320 | <img src="images/A/联网拖拉机(新版)V101.png" width="120" alt="联网拖拉机(新版)V101 idle frame"> | Required | Ready | Login screen renders and responds to taps, soft keys and arrows; 快速登陆 opens the retired lobby channel `ghlc.51coolbar.com:20050`, so rooms and play are unobtainable |
+| 92 | `A/联网斗地主(新版)V101.CBE` | 240×320 | <img src="images/A/联网斗地主(新版)V101.png" width="120" alt="联网斗地主(新版)V101 idle frame"> | Required | Ready | Login screen renders and responds to taps, soft keys and arrows; 快速登陆 opens the retired lobby channel `ghlc.51coolbar.com:20050`, so rooms and play are unobtainable |
+| 93 | `A/联网泡泡龙(新版)V101.CBE` | 240×320 | <img src="images/A/联网泡泡龙(新版)V101.png" width="120" alt="联网泡泡龙(新版)V101 idle frame"> | Required | Ready | Login screen renders and responds to taps, soft keys and arrows; 快速登陆 opens the retired lobby channel `ghlc.51coolbar.com:20050`, so rooms and play are unobtainable |
+| 94 | `A/联网麻将(强推)V101.CBE` | 240×320 | <img src="images/A/联网麻将(强推)V101.png" width="120" alt="联网麻将(强推)V101 idle frame"> | Required | Ready | Login screen renders and responds to taps, soft keys and arrows; 快速登陆 opens the retired lobby channel `ghlc.51coolbar.com:20050`, so rooms and play are unobtainable |
 | 95 | `A/象棋之唐伯虎点秋香V10.CBE` | 240×320 | <img src="images/A/象棋之唐伯虎点秋香V10.png" width="120" alt="象棋之唐伯虎点秋香V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 96 | `A/贪吃鱼(经典).CBE` | 240×320 | <img src="images/A/贪吃鱼(经典).png" width="120" alt="贪吃鱼(经典) idle frame"> | Not assessed | Ready | Title/menu, help text and basic selection checked; complete gameplay unverified |
 | 97 | `A/超级八十分(新品).CBE` | 240×320 | <img src="images/A/超级八十分(新品).png" width="120" alt="超级八十分(新品) idle frame"> | Not assessed | Ready | Title, menus and selection verified for 2,000 frames; full card gameplay unverified |
