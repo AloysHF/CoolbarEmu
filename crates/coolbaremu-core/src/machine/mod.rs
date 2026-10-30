@@ -3970,7 +3970,7 @@ mod tests {
         machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
                                                           // Odd, mapped, outside the ROM image, and zero-filled: the stack
                                                           // window answers for all three.
-        machine.cpu.reg_set(Mode::User, 3, STACK_BASE + 0x40 | 1);
+        machine.cpu.reg_set(Mode::User, 3, (STACK_BASE + 0x40) | 1);
 
         machine.run_until_return(1_000).unwrap();
         assert_eq!(

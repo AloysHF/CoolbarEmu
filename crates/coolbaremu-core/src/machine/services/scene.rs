@@ -1009,7 +1009,7 @@ mod tests {
         machine.handle_game_service(72);
         // The caller's object comes back as the result with the map laid out.
         assert_eq!(machine.register(0), object);
-        assert_eq!(machine.memory.r32(object + 0), 32);
+        assert_eq!(machine.memory.r32(object), 32);
         assert_eq!(machine.memory.r32(object + 4), 32);
         assert_eq!(machine.memory.r32(object + 8), 16);
         assert_eq!(machine.memory.r32(object + 12), 16);
