@@ -105,6 +105,26 @@ fn display_size() -> (u32, u32) {
     }
 }
 
+/// Run `body`, turning a panic into `fallback`.
+///
+/// A panic must never unwind across the C ABI: the frontend is a host process
+/// (RetroArch, a mobile app) that would be torn down with us. Swallowing the
+/// panic keeps the session recoverable and leaves a log entry behind.
+fn guard<T>(fallback: T, body: impl FnOnce() -> T) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(value) => value,
+        Err(payload) => {
+            let detail = payload
+                .downcast_ref::<&str>()
+                .map(|text| (*text).to_owned())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".to_owned());
+            log::error!("CoolbarEmu libretro entry point panicked: {detail}");
+            fallback
+        }
+    }
+}
+
 // ============================================================
 // Callback registration
 // ============================================================
@@ -158,22 +178,26 @@ pub extern "C" fn retro_api_version() -> u32 {
 
 #[no_mangle]
 pub extern "C" fn retro_init() {
-    callbacks::init_log();
-    super::logger::init();
-    log::info!("CoolbarEmu libretro core initialized");
+    guard((), || {
+        callbacks::init_log();
+        super::logger::init();
+        log::info!("CoolbarEmu libretro core initialized");
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn retro_deinit() {
-    unsafe {
-        EMULATOR = None;
-    }
-    log::info!("CoolbarEmu libretro core deinitialized");
+    guard((), || {
+        unsafe {
+            EMULATOR = None;
+        }
+        log::info!("CoolbarEmu libretro core deinitialized");
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn retro_get_system_info(info: *mut retro_system_info) {
-    unsafe {
+    guard((), || unsafe {
         (*info) = retro_system_info {
             library_name: c"CoolbarEmu".as_ptr(),
             library_version: c"0.1.0".as_ptr(),
@@ -181,27 +205,29 @@ pub extern "C" fn retro_get_system_info(info: *mut retro_system_info) {
             need_fullpath: true,
             block_extract: false,
         };
-    }
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn retro_get_system_av_info(info: *mut retro_system_av_info) {
-    let (base_width, base_height) = display_size();
-    unsafe {
-        (*info) = retro_system_av_info {
-            geometry: retro_game_geometry {
-                base_width,
-                base_height,
-                max_width: MAX_DISPLAY_WIDTH,
-                max_height: MAX_DISPLAY_HEIGHT,
-                aspect_ratio: base_width as f32 / base_height as f32,
-            },
-            timing: retro_system_timing {
-                fps: PACING_FPS as f64,
-                sample_rate: AUDIO_SAMPLE_RATE as f64,
-            },
-        };
-    }
+    guard((), || {
+        let (base_width, base_height) = display_size();
+        unsafe {
+            (*info) = retro_system_av_info {
+                geometry: retro_game_geometry {
+                    base_width,
+                    base_height,
+                    max_width: MAX_DISPLAY_WIDTH,
+                    max_height: MAX_DISPLAY_HEIGHT,
+                    aspect_ratio: base_width as f32 / base_height as f32,
+                },
+                timing: retro_system_timing {
+                    fps: PACING_FPS as f64,
+                    sample_rate: AUDIO_SAMPLE_RATE as f64,
+                },
+            };
+        }
+    })
 }
 
 // ============================================================
@@ -210,7 +236,7 @@ pub extern "C" fn retro_get_system_av_info(info: *mut retro_system_av_info) {
 
 #[no_mangle]
 pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
-    unsafe {
+    guard(false, || unsafe {
         if info.is_null() {
             return fail("Coolbar: the frontend passed no content information.");
         }
@@ -277,7 +303,7 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
                 "Coolbar: failed to load this game.\n{error:#}\n\nSupported content: a .cbe application file."
             )),
         }
-    }
+    })
 }
 
 /// Report a load failure to both the log and the frontend's on-screen message.
@@ -298,15 +324,17 @@ pub extern "C" fn retro_load_game_special(
 
 #[no_mangle]
 pub extern "C" fn retro_unload_game() {
-    unsafe {
-        EMULATOR = None;
-    }
-    log::info!("Game unloaded");
+    guard((), || {
+        unsafe {
+            EMULATOR = None;
+        }
+        log::info!("Game unloaded");
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn retro_run() {
-    unsafe {
+    guard((), || unsafe {
         let Some(emulator) = EMULATOR.as_mut() else {
             log::warn!("retro_run called before loading a game");
             return;
@@ -358,7 +386,7 @@ pub extern "C" fn retro_run() {
         let mut samples = emulator.machine.take_audio_samples(PACING_SAMPLES_PER_RUN);
         samples.resize(PACING_SAMPLES_PER_RUN * 2, 0);
         callbacks::audio_sample_batch(samples.as_ptr(), PACING_SAMPLES_PER_RUN);
-    }
+    })
 }
 
 fn load_machine(path: &Path) -> anyhow::Result<(CbeArchive, CoolbarMachine)> {
@@ -809,7 +837,7 @@ fn update_pointer(emulator: &mut Emulator) {
 
 #[no_mangle]
 pub extern "C" fn retro_reset() {
-    unsafe {
+    guard((), || unsafe {
         let Some(emulator) = EMULATOR.as_mut() else {
             log::warn!("retro_reset called before loading a game");
             return;
@@ -825,7 +853,7 @@ pub extern "C" fn retro_reset() {
             }
             Err(error) => log::error!("Failed to reset game: {error:#}"),
         }
-    }
+    })
 }
 
 #[no_mangle]
@@ -839,18 +867,18 @@ pub extern "C" fn retro_get_region() -> u32 {
 
 #[no_mangle]
 pub extern "C" fn retro_serialize_size() -> usize {
-    unsafe {
+    guard(0, || unsafe {
         if EMULATOR.is_none() {
             0
         } else {
             SERIALIZED_SIZE
         }
-    }
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn retro_serialize(data: *mut c_void, size: usize) -> bool {
-    unsafe {
+    guard(false, || unsafe {
         let Some(emulator) = EMULATOR.as_ref() else {
             return false;
         };
@@ -865,12 +893,12 @@ pub extern "C" fn retro_serialize(data: *mut c_void, size: usize) -> bool {
                 false
             }
         }
-    }
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn retro_unserialize(data: *const c_void, size: usize) -> bool {
-    unsafe {
+    guard(false, || unsafe {
         let Some(emulator) = EMULATOR.as_mut() else {
             return false;
         };
@@ -894,7 +922,7 @@ pub extern "C" fn retro_unserialize(data: *const c_void, size: usize) -> bool {
                 false
             }
         }
-    }
+    })
 }
 
 // ============================================================
@@ -913,7 +941,7 @@ pub extern "C" fn retro_cheat_set(_index: u32, _enabled: bool, _code: *const c_c
 
 #[no_mangle]
 pub extern "C" fn retro_get_memory_data(id: u32) -> *mut c_void {
-    unsafe {
+    guard(ptr::null_mut(), || unsafe {
         let Some(emulator) = EMULATOR.as_mut() else {
             return ptr::null_mut();
         };
@@ -930,12 +958,12 @@ pub extern "C" fn retro_get_memory_data(id: u32) -> *mut c_void {
                 .cast(),
             _ => ptr::null_mut(),
         }
-    }
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn retro_get_memory_size(id: u32) -> usize {
-    unsafe {
+    guard(0, || unsafe {
         if EMULATOR.is_none() {
             return 0;
         }
@@ -944,7 +972,7 @@ pub extern "C" fn retro_get_memory_size(id: u32) -> usize {
             RETRO_MEMORY_VIDEO_RAM => CoolbarMachine::video_ram_size(),
             _ => 0,
         }
-    }
+    })
 }
 
 #[cfg(test)]
