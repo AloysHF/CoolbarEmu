@@ -1491,27 +1491,28 @@ impl CoolbarMachine {
             );
         }
         // Requested resources must exist before the new screen initializes.
-        let resources_requested = self.resource_load_pending
-            && (self.resource_load_screen == 0 || self.resource_load_screen == screen);
         if self.load_pending_screen_resources(screen, screen_this, instruction_limit)? {
             return Ok(());
         }
         if !self.screen_initialized {
             let init = self.memory.r32(screen);
-            self.invoke_callback(init, screen_this, 0, 0, instruction_limit)?;
-            if self.finish_screen_callback_frame() {
-                return Ok(());
-            }
-            self.screen_initialized = true;
-            // A registered screen also owns an initial resource-load callback.
-            // Explicit requests keep their earlier load-before-init ordering.
-            if !resources_requested && !self.resource_load_pending {
+            if init == 0 {
+                // A screen without an initializer performs its setup in the
+                // load callback, which then serves as its entry routine.
                 let load = self.memory.r32(screen + 24);
                 self.invoke_callback(load, screen_this, 0, 0, instruction_limit)?;
                 if self.finish_screen_callback_frame() {
                     return Ok(());
                 }
+            } else {
+                // The load callback belongs to the guest's resource requests;
+                // replaying it here can reset state that init has positioned.
+                self.invoke_callback(init, screen_this, 0, 0, instruction_limit)?;
+                if self.finish_screen_callback_frame() {
+                    return Ok(());
+                }
             }
+            self.screen_initialized = true;
         }
         // Initialization may itself request another resource callback.
         if self.load_pending_screen_resources(screen, screen_this, instruction_limit)? {
@@ -5607,6 +5608,40 @@ mod tests {
             machine.memory.w32(object + 16, 7);
             machine.run_frame(100).unwrap();
             assert_eq!(machine.memory.r32(object + 16), 7);
+        }
+    }
+
+    #[test]
+    fn screen_entry_does_not_replay_a_load_callback_without_a_request() {
+        for big_endian in [false, true] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_screen();
+            machine.state = MachineState::Ready;
+            machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+            let object = machine.allocate(64);
+            let screen = object + 24;
+            let load = machine.allocate(6);
+            let init = machine.allocate(6);
+            for (callback, words) in [
+                (load, [0x212a, 0x6141, 0x4770]), // Store the loaded resource.
+                (init, [0x2107, 0x6141, 0x4770]), // Position the entity for play.
+            ] {
+                for (i, word) in words.into_iter().enumerate() {
+                    machine.memory.w16(callback + i as u32 * 2, word);
+                }
+            }
+            machine.memory.w32(screen, init | 1);
+            machine.memory.w32(screen + 24, load | 1);
+            // Enter the screen without a resource request.
+            machine.pending_screen = screen;
+            machine.run_frame(100).unwrap();
+            // Initialization's state survives; the loader ran only on request.
+            assert_eq!(machine.memory.r32(object + 20), 7);
+            assert!(!machine.resource_load_pending);
+            assert!(machine.screen_initialized);
         }
     }
 
