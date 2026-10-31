@@ -29,10 +29,18 @@ fn parse_animation(bytes: &[u8]) -> Option<Animation> {
         }
         fn integer(&mut self) -> Option<i16> {
             let value = i32::from_le_bytes(self.take(4)?.try_into().ok()?);
-            i16::try_from(value).ok()
+            // Every field is a 16-bit value padded to a 4-byte word, and the
+            // firmware reader keeps only the low 16 bits (封神演义V101's
+            // title.actor carries 0x00800000 padding words).  Decode by
+            // truncation instead of rejecting the whole animation.
+            Some(value as i16)
         }
         fn count(&mut self) -> Option<usize> {
-            usize::try_from(self.integer()?).ok().filter(|n| *n <= 4096)
+            // Negative counts read as empty sections, matching the firmware's
+            // `if (n > 0)` section guards.
+            let value = self.integer()?;
+            let value = usize::try_from(value).unwrap_or(0);
+            (value <= 4096).then_some(value)
         }
     }
     let mut reader = Reader { bytes, position: 0 };
@@ -301,5 +309,54 @@ mod tests {
         invalid[22..26].copy_from_slice(&32767i32.to_le_bytes());
         assert!(parse_animation(&invalid).is_none());
         assert!(parse_animation(&bytes[..bytes.len() - 1]).is_none());
+    }
+
+    #[test]
+    fn animation_reads_padded_words_by_low_16_bit_truncation() {
+        // 封神演义V101's title.actor pads its 16-bit fields into 4-byte
+        // words whose upper bytes are not zero (0x00800000); the firmware
+        // reader keeps the low 16 bits, so such words must decode by
+        // truncation instead of rejecting the animation.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1i32.to_le_bytes());
+        bytes.extend_from_slice(b"\x05a.gif");
+        for value in [1i32, 0, 0, 4, 5, 0, 1, 1, 2, 1, 0, 2, 3, 0, 0] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        let animation = parse_animation(&bytes).unwrap();
+        assert_eq!(animation.images[0], b"a.gif");
+        assert_eq!(animation.rectangles[0], [0, 0, 4, 5, 0]);
+        assert_eq!(animation.actions.len(), 1);
+        assert_eq!(animation.actions[0].len(), 1);
+        assert_eq!(animation.actions[0][0].duration, 2);
+        assert_eq!(animation.actions[0][0].parts[0], [0, 2, 3, 0, 0]);
+
+        // Padding noise in a coordinate word truncates to its low bits.
+        let mut padded = bytes.clone();
+        padded[rectangles_offset() + 4..rectangles_offset() + 8]
+            .copy_from_slice(&0x0080_0000i32.to_le_bytes());
+        let animation = parse_animation(&padded).unwrap();
+        assert_eq!(animation.rectangles[0], [0, 0, 4, 5, 0]);
+
+        // A negative section count reads as an empty section.
+        let mut no_actions = bytes.clone();
+        let actions = actions_offset();
+        no_actions[actions..actions + 4].copy_from_slice(&(-1i32).to_le_bytes());
+        let animation = parse_animation(&no_actions).unwrap();
+        assert_eq!(animation.images[0], b"a.gif");
+        assert_eq!(animation.rectangles[0], [0, 0, 4, 5, 0]);
+        assert!(animation.actions.is_empty());
+    }
+
+    /// Offset of the rectangle-count word: image count + length byte +
+    /// image name.
+    fn rectangles_offset() -> usize {
+        4 + 1 + 5
+    }
+
+    /// Offset of the action-count word: rectangles offset + rect count +
+    /// five rectangle words.
+    fn actions_offset() -> usize {
+        rectangles_offset() + 4 + 5 * 4
     }
 }
