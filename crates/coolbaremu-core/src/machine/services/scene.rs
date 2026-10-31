@@ -32,8 +32,6 @@ impl<'a> Reader<'a> {
 }
 
 struct SceneMap {
-    width: u16,
-    height: u16,
     name: Vec<u8>,
     position: [i16; 2],
     tail: usize,
@@ -58,8 +56,6 @@ fn first_scene_map(bytes: &[u8]) -> Option<SceneMap> {
         reader.take(8)?;
     }
     Some(SceneMap {
-        width,
-        height,
         name,
         position,
         tail: reader.position,
@@ -225,8 +221,13 @@ impl CoolbarMachine {
             .w16(object + 0x40, descriptor.position[0] as u16);
         self.memory
             .w16(object + 0x42, descriptor.position[1] as u16);
-        self.memory.w16(scene, descriptor.width);
-        self.memory.w16(scene + 2, descriptor.height);
+        // The scene's leading pair is the camera origin the guest's
+        // container renderer subtracts from actor coordinates, not the
+        // map size.  Firmware scene initialization starts the camera at
+        // the origin; storing the map dimensions here translated every
+        // actor off-screen (the map already fills the display).
+        self.memory.w16(scene, 0);
+        self.memory.w16(scene + 2, 0);
         // The first map is the native scene's background render target.
         self.memory.w32(scene + 0x61c, object);
         self.memory.w32(scene + 0x640, self.register(1));
@@ -318,11 +319,30 @@ impl CoolbarMachine {
         // guest that calls a method on a half-built object must not jump
         // to NULL.
         if object != 0 {
-            for offset in (NATIVE_MAP_METHOD_START..=NATIVE_MAP_METHOD_END).step_by(4) {
-                self.memory.w32(
-                    object + offset,
-                    Self::method_stub_address(super::super::METHOD_KIND_AUTO, offset),
-                );
+            // Never write past the caller's allocation.  A map object is
+            // often followed immediately by the next object or by the
+            // shared picture library (whose fields live right after it), so
+            // filling the full firmware slot range would corrupt the
+            // library and every later image lookup.
+            let allocation = self
+                .block_allocations
+                .get(&object)
+                .map(|(size, _)| *size)
+                .or_else(|| self.heap_allocations.get(&object).copied());
+            let mut last_slot = NATIVE_MAP_METHOD_END;
+            if let Some(size) = allocation {
+                last_slot = last_slot.min(size.saturating_sub(4));
+            } else if library > object {
+                last_slot = last_slot.min(library - object - 4);
+            }
+            for offset in (NATIVE_MAP_METHOD_START..=last_slot).step_by(4) {
+                let slot = object + offset;
+                if self.memory.r32(slot) == 0 {
+                    self.memory.w32(
+                        slot,
+                        Self::method_stub_address(super::super::METHOD_KIND_AUTO, offset),
+                    );
+                }
             }
         }
         if object == 0 || filename == 0 {
@@ -686,6 +706,10 @@ mod tests {
             assert_eq!(machine.register(0), scene);
             assert_eq!(machine.register(3), library);
             assert_eq!(machine.register(13), stack);
+            // Leading pair is the guest renderer's camera origin, not the
+            // map size: it must start at the origin so actors stay on screen.
+            assert_eq!(machine.memory.r16(scene), 0);
+            assert_eq!(machine.memory.r16(scene + 2), 0);
             assert_eq!(machine.memory.r32(marker), 28);
             for (offset, method) in [
                 (0x678, 0x680),
@@ -903,7 +927,6 @@ mod tests {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         let map = first_scene_map(&bytes).unwrap();
-        assert_eq!((map.width, map.height), (240, 320));
         assert_eq!(map.name, b"a.map");
         assert_eq!(map.position, [-8, 12]);
         bytes.pop();
