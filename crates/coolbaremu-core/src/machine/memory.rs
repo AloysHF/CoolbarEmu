@@ -83,6 +83,15 @@ impl MachineMemory {
         true
     }
 
+    pub(crate) fn read_bytes(&mut self, address: u32, size: usize) -> Option<Vec<u8>> {
+        let Some(region) = self.region(address, size) else {
+            self.bad_accesses.insert(address);
+            return None;
+        };
+        let offset = (address - region.base) as usize;
+        Some(region.data[offset..offset + size].to_vec())
+    }
+
     pub(crate) fn region(&self, address: u32, size: usize) -> Option<&Region> {
         self.regions.iter().find(|region| {
             let offset = address.wrapping_sub(region.base) as usize;
