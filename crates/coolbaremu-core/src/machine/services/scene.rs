@@ -123,6 +123,12 @@ fn parse_tile_map(bytes: &[u8]) -> Option<TileMap> {
     })
 }
 
+/// Byte range of the method slots inside a native map object.  The map
+/// data fields live below `NATIVE_MAP_METHOD_START`; the firmware exposes
+/// the object's callable methods from there up to `NATIVE_MAP_METHOD_END`.
+const NATIVE_MAP_METHOD_START: u32 = 0x28;
+const NATIVE_MAP_METHOD_END: u32 = 0xbc;
+
 impl CoolbarMachine {
     fn scene_resource_bytes(&mut self, name: &[u8]) -> Option<Vec<u8>> {
         let name_ptr = self.allocate(name.len() as u32 + 1);
@@ -237,12 +243,35 @@ impl CoolbarMachine {
                 Self::method_stub_address(super::super::METHOD_KIND_GAMEOLD, method),
             );
         }
+        // Some engine builds place the window scroll pair one slot window
+        // earlier: the absolute set at +0x670 and the relative adjust at
+        // +0x674, with +0x668/+0x66c completing the same method block.
+        // 032 士兵突袭V10 (issue #106) centres its camera through `bx r4`
+        // with r4 loaded from scene+0x670 every frame and faulted on the
+        // never-populated slot.  Leave non-zero slots alone: unlike the
+        // fixed movement pair above, these offsets have no single
+        // cross-title contract, so only empty method slots are claimable.
+        for offset in [0x668u32, 0x66c, 0x670, 0x674] {
+            let slot = scene + offset;
+            if self.memory.r32(slot) == 0 {
+                self.memory.w32(
+                    slot,
+                    Self::method_stub_address(super::super::METHOD_KIND_GAMEOLD, offset),
+                );
+            }
+        }
         // Empty actor tables precede the application-owned scene payload.
+        // The payload starts with the named-region count, which stays
+        // non-zero for scenes whose regions build the actors: the
+        // application callback owns that list and must run whenever the
+        // built-in actor table is empty, receiving the stream cursor
+        // positioned after both counts.
         let mut reader = Reader {
             bytes: &scene_bytes,
             position: descriptor.tail,
         };
-        if reader.short() == Some(0) && reader.short() == Some(0) {
+        let empty_actor_table = reader.short() == Some(0) && reader.short().is_some();
+        if empty_actor_table {
             let callback = self.argument(7);
             if callback != 0 {
                 let stream = self.allocate(scene_bytes.len() as u32);
@@ -269,6 +298,104 @@ impl CoolbarMachine {
             }
         }
         Ok(())
+    }
+
+    /// Firmware tile-map initialization into a caller-provided object
+    /// (shared game service slot 72).  The guest passes the destination
+    /// object in r0, the picture library that receives the map's tile
+    /// images in r3, the map resource name through the fifth AAPCS
+    /// argument and the tile capacity through the sixth.  The host parses
+    /// the named map resource, registers each tile image in the library,
+    /// lays out the column/cell tables the guest renderer walks and fills
+    /// the object's method slots with callable stubs so later indirect
+    /// calls stay off NULL.
+    pub(crate) fn initialize_native_map(&mut self) {
+        let object = self.register(0);
+        let library = self.register(3);
+        let filename = self.argument(4);
+        // The method slots must stay callable even when the map cannot be
+        // loaded: the generic constructor path filled these slots, and a
+        // guest that calls a method on a half-built object must not jump
+        // to NULL.
+        if object != 0 {
+            for offset in (NATIVE_MAP_METHOD_START..=NATIVE_MAP_METHOD_END).step_by(4) {
+                self.memory.w32(
+                    object + offset,
+                    Self::method_stub_address(super::super::METHOD_KIND_AUTO, offset),
+                );
+            }
+        }
+        if object == 0 || filename == 0 {
+            self.set_result(0);
+            return;
+        }
+        let name = self.read_c_bytes(filename, 256);
+        let Some(bytes) = self.scene_resource_bytes(&name) else {
+            self.set_result(0);
+            return;
+        };
+        let Some(map) = parse_tile_map(&bytes) else {
+            self.set_result(0);
+            return;
+        };
+        let ids = self.allocate(map.images.len() as u32 * 2);
+        let table = self.allocate(map.columns * 4);
+        let cells = self.allocate(map.columns * map.rows * 4);
+        if ids == 0 || table == 0 || cells == 0 {
+            for pointer in [ids, table, cells] {
+                self.deallocate(pointer);
+            }
+            self.set_result(0);
+            return;
+        }
+        for (index, name) in map.images.iter().enumerate() {
+            let name_ptr = self.allocate(name.len() as u32 + 1);
+            if name_ptr == 0 {
+                for pointer in [ids, table, cells] {
+                    self.deallocate(pointer);
+                }
+                self.set_result(0);
+                return;
+            }
+            self.memory.write_bytes(name_ptr, name);
+            self.memory.w8(name_ptr + name.len() as u32, 0);
+            let cpu = self.cpu;
+            self.cpu.reg_set(Mode::User, 0, library);
+            self.cpu.reg_set(Mode::User, 1, name_ptr);
+            self.handle_picture_library_method(0x1c);
+            let id = self.register(0);
+            self.cpu = cpu;
+            self.deallocate(name_ptr);
+            if id == u32::MAX {
+                for pointer in [ids, table, cells] {
+                    self.deallocate(pointer);
+                }
+                self.set_result(0);
+                return;
+            }
+            self.memory.w16(ids + index as u32 * 2, id as u16);
+        }
+        for column in 0..map.columns {
+            self.memory
+                .w32(table + column * 4, cells + column * map.rows * 4);
+        }
+        for (index, cell) in map.cells.iter().enumerate() {
+            self.memory.w32(cells + index as u32 * 4, *cell);
+        }
+        for (offset, value) in [
+            (0, map.pixel_width),
+            (4, map.pixel_height),
+            (8, map.tile_width),
+            (12, map.tile_height),
+            (16, map.columns),
+            (20, map.rows),
+            (24, table),
+            (28, ids),
+            (36, library),
+        ] {
+            self.memory.w32(object + offset, value);
+        }
+        self.set_result(object);
     }
 
     pub(crate) fn render_scene_window(&mut self, window: u32) {
@@ -337,6 +464,33 @@ impl CoolbarMachine {
         self.repaint_fixed_gameold_windows(sibling)?;
         self.set_result(0);
         Ok(())
+    }
+
+    /// Firmware scene-window scroll methods that some engine builds expose
+    /// at scene+0x670 (absolute) and scene+0x674 (relative): r1 carries the
+    /// i16 x component and r2 the i16 y component.  The viewport origin the
+    /// tile renderer reads lives at scene+0x640/0x642, so writing those
+    /// fields is the whole effect; the guest's per-frame repaint then draws
+    /// the map at the new offset.  Unimplemented here would leave the slot
+    /// at zero and the guest's `bx r4` dispatch would jump to NULL.
+    pub(crate) fn scroll_scene_window(&mut self, offset: u32) {
+        let scene = self.register(0);
+        if scene == 0 {
+            self.set_result(0);
+            return;
+        }
+        let dx = self.register(1) as u16 as i16 as i32;
+        let dy = self.register(2) as u16 as i16 as i32;
+        let (next_x, next_y) = if offset == 0x670 {
+            (dx, dy)
+        } else {
+            let origin_x = self.memory.r16(scene + 0x640) as i16 as i32;
+            let origin_y = self.memory.r16(scene + 0x642) as i16 as i32;
+            (origin_x + dx, origin_y + dy)
+        };
+        self.memory.w16(scene + 0x640, next_x as u16);
+        self.memory.w16(scene + 0x642, next_y as u16);
+        self.set_result(0);
     }
 
     pub(crate) fn query_scene_movement(&mut self, offset: u32) {
@@ -409,6 +563,40 @@ impl CoolbarMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The window scroll pair sits one slot block earlier than the movement
+    /// pair on some engine builds: +0x670 sets the viewport origin outright
+    /// and +0x674 adjusts it, both taking a signed i16 x/y in r1/r2.  032
+    /// 士兵突袭V10 loads these slots into `r4` and dispatches through
+    /// `bx r4` every frame, so an unpopulated slot faulted on NULL (#106).
+    #[test]
+    fn scene_window_scroll_methods_move_the_viewport_origin() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        let scene = machine.allocate(0x700);
+        machine.cpu.reg_set(Mode::User, 0, scene);
+        machine.cpu.reg_set(Mode::User, 1, 40);
+        machine.cpu.reg_set(Mode::User, 2, 24);
+        machine.scroll_scene_window(0x670);
+        assert_eq!(machine.memory.r16(scene + 0x640), 40);
+        assert_eq!(machine.memory.r16(scene + 0x642), 24);
+
+        // The method writes its result to r0, so the caller restores the scene.
+        machine.cpu.reg_set(Mode::User, 0, scene);
+        machine.cpu.reg_set(Mode::User, 1, (-8i32) as u32);
+        machine.cpu.reg_set(Mode::User, 2, 4);
+        machine.scroll_scene_window(0x674);
+        assert_eq!(machine.memory.r16(scene + 0x640) as i16, 32);
+        assert_eq!(machine.memory.r16(scene + 0x642) as i16, 28);
+        assert_eq!(machine.register(0), 0, "the method reports success");
+    }
+
+    #[test]
+    fn scene_window_scroll_ignores_a_null_scene() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.cpu.reg_set(Mode::User, 0, 0);
+        machine.scroll_scene_window(0x670);
+        assert_eq!(machine.register(0), 0);
+    }
 
     #[test]
     fn scene_initialization_exposes_real_map_cells_and_picture_library() {
@@ -744,5 +932,113 @@ mod tests {
         let mut invalid = bytes.clone();
         invalid[20..24].copy_from_slice(&0u32.to_le_bytes());
         assert!(parse_tile_map(&invalid).is_none());
+    }
+
+    #[test]
+    fn native_map_initialization_fills_caller_object_cells_and_library() {
+        fn packed(bytes: &[u8]) -> Vec<u8> {
+            let mut payload = vec![2];
+            payload.extend_from_slice(&(bytes.len() as u32 + 1).to_be_bytes());
+            payload.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+            payload.push(0x80 | bytes.len() as u8);
+            payload.extend_from_slice(bytes);
+            payload
+        }
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(32, 32, |x, y| {
+            image::Rgba(match (x < 16, y < 16) {
+                (true, true) => [255, 0, 0, 255],
+                (false, true) => [0, 255, 0, 255],
+                (true, false) => [0, 0, 255, 255],
+                _ => [255, 255, 0, 255],
+            })
+        }))
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+        // One tile image over a 32x32 pixel map of 16x16 tiles: 2x2 cells.
+        let mut map = 1u32.to_le_bytes().to_vec();
+        map.push(5);
+        map.extend_from_slice(b"a.png");
+        for value in [32u32, 32, 16, 16, 0, 1, 2, 3] {
+            map.extend_from_slice(&value.to_le_bytes());
+        }
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        let mut memory = super::super::super::memory::MachineMemory::new(true);
+        memory.regions = std::mem::take(&mut machine.memory.regions);
+        machine.memory = memory;
+        // The fixed-manager ABI is what routes shared game service slot 72
+        // to the tile-map builder; the real guests are big-endian.
+        machine.executable.big_endian = true;
+        machine.executable.preferred_code_address = 0x0010_0000;
+        machine.executable.code_image_size = 0x2000;
+        machine.executable.code_size = 4;
+        for (name, data) in [
+            ("a.map", packed(&map)),
+            ("a.png", png.into_inner()),
+            ("b.map", packed(&map)),
+        ] {
+            machine
+                .resources
+                .push(super::super::super::packages::HostResource {
+                    name: name.into(),
+                    data,
+                });
+        }
+        let package = machine.allocate(104);
+        machine.initialize_data_package(package, 5);
+        machine.load_main_resource_package(package);
+        let object = machine.allocate(0x100);
+        let library = machine.allocate(0x60);
+        let ids = machine.allocate(8);
+        let images = machine.allocate(16);
+        machine.memory.w16(library + 8, 4);
+        machine.memory.w32(library + 12, ids);
+        machine.memory.w32(library + 16, images);
+        let name = machine.allocate(6);
+        machine.memory.write_bytes(name, b"a.map\0");
+        let missing_name = machine.allocate(6);
+        machine.memory.write_bytes(missing_name, b"z.map\0");
+        let stack = machine.allocate(32);
+        machine.cpu.reg_set(Mode::User, 13, stack);
+        machine.memory.w32(stack, name);
+        machine.memory.w32(stack + 4, 20);
+        machine.cpu.reg_set(Mode::User, 0, object);
+        machine.cpu.reg_set(Mode::User, 3, library);
+        // Dispatching through the shared service table (not the helper
+        // directly) keeps the slot-72 wiring itself under test.
+        machine.handle_game_service(72);
+        // The caller's object comes back as the result with the map laid out.
+        assert_eq!(machine.register(0), object);
+        assert_eq!(machine.memory.r32(object), 32);
+        assert_eq!(machine.memory.r32(object + 4), 32);
+        assert_eq!(machine.memory.r32(object + 8), 16);
+        assert_eq!(machine.memory.r32(object + 12), 16);
+        assert_eq!(machine.memory.r32(object + 16), 2);
+        assert_eq!(machine.memory.r32(object + 20), 2);
+        assert_eq!(machine.memory.r32(object + 36), library);
+        let table = machine.memory.r32(object + 24);
+        let cell_ids = machine.memory.r32(object + 28);
+        assert_ne!(table, 0);
+        assert_ne!(cell_ids, 0);
+        for column in 0..2 {
+            let cells = machine.memory.r32(table + column * 4);
+            for row in 0..2 {
+                assert_eq!(machine.memory.r32(cells + row * 4), column * 2 + row);
+            }
+        }
+        // The map's tile image is registered in the caller's library.
+        assert_eq!(machine.memory.r16(library + 20), 1);
+        assert_ne!(machine.memory.r32(images), 0);
+        // Method slots stay callable so later indirect calls land on stubs.
+        let stub = CoolbarMachine::method_stub_address(super::super::super::METHOD_KIND_AUTO, 0x6c);
+        assert_eq!(machine.memory.r32(object + 0x6c), stub);
+        // A missing map resource still leaves the slots callable and reports failure.
+        let missing = machine.allocate(0x100);
+        machine.cpu.reg_set(Mode::User, 0, missing);
+        machine.cpu.reg_set(Mode::User, 3, library);
+        machine.memory.w32(stack, missing_name);
+        machine.handle_game_service(72);
+        assert_eq!(machine.register(0), 0);
+        assert_eq!(machine.memory.r32(missing + 0x6c), stub);
     }
 }

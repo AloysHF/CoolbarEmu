@@ -7,13 +7,41 @@ use log::info;
 use super::{
     arm_blx_immediate_target, fixed_manager_specs, service_trace_enabled, thumb_add_pc_target,
     CoolbarMachine, APP_STORE_MANAGER, DATA_PACKAGE_FULL_PATH_SERVICE, EXIT_ADDRESS,
-    FIXED_GAMEOLD_OBJECT_SERVICE, FIXED_GAMEOLD_REGION_SERVICE, FIXED_MANAGER_GET,
-    FIXED_MANAGER_INIT, IO_METHOD_BASE, IO_METHOD_STRIDE, IO_NV_READ_OFFSET, IO_NV_WRITE_OFFSET,
-    LOG_NOOP_SERVICE, MANAGER_BASE, MANAGER_SIZE, MEMORY_BLOCK_SERVICE, METHOD_STUB_BASE,
-    METHOD_STUB_KINDS, METHOD_STUB_STRIDE, NATIVE_BILLING_PAYNUM, NATIVE_BILLING_REMAIN_DAY,
-    NATIVE_BILLING_SEND_SMS, NATIVE_DIRTY_RECT_SERVICE, NATIVE_DISPATCH_SERVICE,
-    NATIVE_SYSTEM_TIME_SERVICE, OLDLIB_DRAW_SERVICE, SERVICE_BASE, SERVICE_SIZE, TABLE_STRIDE,
+    EXIT_REGION_SIZE, FIXED_GAMEOLD_OBJECT_SERVICE, FIXED_GAMEOLD_REGION_SERVICE,
+    FIXED_MANAGER_GET, FIXED_MANAGER_INIT, IO_METHOD_BASE, IO_METHOD_STRIDE, IO_NV_READ_OFFSET,
+    IO_NV_WRITE_OFFSET, LOG_NOOP_SERVICE, MANAGER_BASE, MANAGER_SIZE, MEMORY_BLOCK_SERVICE,
+    METHOD_STUB_BASE, METHOD_STUB_KINDS, METHOD_STUB_STRIDE, NATIVE_BILLING_PAYNUM,
+    NATIVE_BILLING_REMAIN_DAY, NATIVE_BILLING_SEND_SMS, NATIVE_DIRTY_RECT_SERVICE,
+    NATIVE_DISPATCH_SERVICE, NATIVE_SYSTEM_TIME_SERVICE, OLDLIB_DRAW_SERVICE, SERVICE_BASE,
+    SERVICE_SIZE, TABLE_STRIDE,
 };
+
+/// Whether an ARM condition code passes against `cpsr`, using the standard
+/// N/Z/C/V flags in bits 31..28. Mirrors the core's own test so instructions
+/// handled outside it stay conditional.
+fn arm_condition_met(condition: u8, cpsr: u32) -> bool {
+    let negative = cpsr & (1 << 31) != 0;
+    let zero = cpsr & (1 << 30) != 0;
+    let carry = cpsr & (1 << 29) != 0;
+    let overflow = cpsr & (1 << 28) != 0;
+    match condition {
+        0 => zero,
+        1 => !zero,
+        2 => carry,
+        3 => !carry,
+        4 => negative,
+        5 => !negative,
+        6 => overflow,
+        7 => !overflow,
+        8 => carry && !zero,
+        9 => !carry || zero,
+        10 => negative == overflow,
+        11 => negative != overflow,
+        12 => !zero && negative == overflow,
+        13 => zero || negative != overflow,
+        _ => true,
+    }
+}
 
 impl CoolbarMachine {
     pub(super) fn run_until_return(&mut self, instruction_limit: u64) -> Result<()> {
@@ -63,6 +91,98 @@ impl CoolbarMachine {
                 self.state = super::MachineState::Halted;
                 return Ok(());
             }
+            // An indirect branch through an unpopulated method slot (e.g.
+            // `bx r3` with r3 == 0) is how the DF-engine vtable dispatch
+            // invokes a method the guest never implemented.  Branching to
+            // address 0 would fault, so treat it as an unimplemented method:
+            // resume at the caller's return address (LR is still the caller's
+            // because `bx` does not relink) with a zero result.  This mirrors
+            // the host-side fill_zero_method_slots handling for allocated
+            // objects, but also covers guest-managed objects whose method
+            // tables the host cannot pre-fill at construction time.
+            //
+            // A zero slot is only the cleanest case of the same thing: some
+            // games ship tables whose slot holds guest payload — a resource
+            // record, a length word, leftover heap bytes — instead of a
+            // function pointer.  Those values are non-zero, so the zero-slot
+            // rule misses them and the dispatch faults on a fetch from the
+            // payload address.  Judging the slot by whether it addresses
+            // mapped memory catches both cases without guessing at the table
+            // layout: anything unreachable is a call with no implementation
+            // to run.
+            if self.cpu.thumb_mode() {
+                let insn = self.memory.r16(pc);
+                if insn & 0xff87 == 0x4700 {
+                    let rm = ((insn >> 3) & 0x0f) as u8;
+                    if rm < 13 {
+                        let slot = self.register(rm);
+                        let aligned = slot & !1;
+                        // The host's own sentinel windows are unmapped by
+                        // design: a fetch there is intercepted as a host
+                        // call, not as a jump into nowhere.  Only values
+                        // that address nothing at all are dead slots.
+                        let host_window = (EXIT_ADDRESS..EXIT_ADDRESS + EXIT_REGION_SIZE)
+                            .contains(&aligned)
+                            || (MANAGER_BASE..MANAGER_BASE + MANAGER_SIZE as u32)
+                                .contains(&aligned)
+                            || (SERVICE_BASE..SERVICE_BASE + SERVICE_SIZE).contains(&aligned);
+                        // Only the ROM image holds routines the guest
+                        // compiled, so that is the one place a slot can
+                        // legitimately name code.  Everything else — heap,
+                        // data, stack — is payload if it lands there.  The
+                        // ROM mapping is larger than what the archive loads,
+                        // though: its zero-filled tail would fault the fetch,
+                        // so a slot there names no routine either.
+                        let in_rom_image = self
+                            .memory
+                            .region(aligned, 2)
+                            .is_some_and(|r| r.base == self.executable.code_address())
+                            && !self.pc_in_unloaded_rom(aligned);
+                        // A slot can also land on mapped memory that simply
+                        // holds no code — an uninitialised page, a zeroed
+                        // resource buffer.  Fetching there decodes as a NOP
+                        // and slides through the region until it faults, so
+                        // the first instruction word says it: no real entry
+                        // point ever begins with a zero encoding.
+                        let starts_with_no_instruction = if slot % 2 == 1 {
+                            self.memory.region(aligned, 2).is_some()
+                                && self.memory.r16(aligned) == 0
+                        } else {
+                            self.memory.region(aligned, 4).is_some()
+                                && self.memory.r32(aligned) == 0
+                        };
+                        // An even slot leaves Thumb state.  Inside the ROM
+                        // image that is a real ARM entry point (058/059 call
+                        // ARM routines that way); outside it the address is
+                        // usually a slot the guest never filled, but payload
+                        // and guest-generated ARM thunks share the heap, so
+                        // parity alone does not settle it — ask whether the
+                        // address can return before calling it a dead slot.
+                        let unresolved = slot == 0
+                            || (!host_window
+                                && (self.memory.region(aligned, 2).is_none()
+                                    || (!in_rom_image
+                                        && ((slot.is_multiple_of(2)
+                                            && !self.names_arm_routine(aligned))
+                                            || starts_with_no_instruction))));
+                        if unresolved {
+                            if std::env::var_os("CBE_TRACE").is_some() {
+                                eprintln!(
+                                    "[bxstub] pc=0x{pc:08X} r{rm}=0x{slot:08X} even={} zero={}",
+                                    slot.is_multiple_of(2),
+                                    starts_with_no_instruction
+                                );
+                            }
+                            let lr = self.register(reg::LR) & !1;
+                            if lr != 0 && self.memory.region(lr, 2).is_some() {
+                                self.set_result(0);
+                                self.cpu.reg_set(Mode::User, reg::PC, lr);
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
             if (SERVICE_BASE..SERVICE_BASE + SERVICE_SIZE).contains(&pc) {
                 self.handle_service(pc)?;
             } else if (MANAGER_BASE..MANAGER_BASE + MANAGER_SIZE as u32).contains(&pc) {
@@ -75,11 +195,33 @@ impl CoolbarMachine {
                 // a callable stub, whichever protocol the game follows.
                 self.handle_native_dispatch_service();
                 self.return_from_service();
+            } else if (EXIT_ADDRESS..EXIT_ADDRESS + EXIT_REGION_SIZE).contains(&pc) {
+                // The exit window doubles as the host trampoline table. The
+                // sentinel at exactly EXIT_ADDRESS is the guest's "return to
+                // host" address (handled above), but games also treat it as a
+                // code base: they load the sentinel into a register and run a
+                // `BL` second half-word, whose offset selects a slot at
+                // EXIT_ADDRESS + offset. Fetching such a slot used to fault
+                // because only the single sentinel address was recognised.
+                // Each slot is an unanswered host call, so it must return to
+                // the caller — `LR` already holds the resume address that the
+                // `BL` half-word computed.
+                let target = self.register(reg::LR);
+                self.cpu.reg_set(Mode::User, reg::PC, target & !1);
+                let mut cpsr = self.register(reg::CPSR);
+                if target & 1 != 0 {
+                    cpsr |= 1 << 5;
+                } else {
+                    cpsr &= !(1 << 5);
+                }
+                self.cpu.reg_set(Mode::User, reg::CPSR, cpsr);
             } else if self.is_semihosting_call(pc) {
                 if self.handle_semihosting(pc)? {
                     return Ok(());
                 }
             } else if self.handle_thumb_add_pc(pc) || self.handle_interworking_branch(pc) {
+            } else if self.handle_clz(pc) {
+                // ARMv5T `CLZ` handled outside the core; see the method.
             } else if self.pc_in_unloaded_rom(pc) {
                 // The guest branched into the zero-filled BSS/data tail of
                 // the ROM mapping — a bad function pointer, not real code.
@@ -106,8 +248,9 @@ impl CoolbarMachine {
         }
         self.state = super::MachineState::Faulted;
         bail!(
-            "CBE execution exceeded {instruction_limit} instructions at 0x{:08X}",
-            self.last_pc
+            "CBE execution exceeded {instruction_limit} instructions at 0x{:08X}{}",
+            self.last_pc,
+            self.unmapped_fetch_context()
         )
     }
 
@@ -117,6 +260,32 @@ impl CoolbarMachine {
     /// True when `pc` falls inside the mapped ROM region but past the end of
     /// the loaded code image — the zero-filled BSS/data tail where a guest
     /// should never fetch instructions.
+    /// Whether `address` can be entered as ARM and come back: a routine ends
+    /// with `bx lr`, `mov pc, lr`, or a `ldm`/`pop` that reloads the program
+    /// counter.  Payload almost never reproduces those encodings inside a few
+    /// words, so the scan separates a guest-generated thunk from a slot the
+    /// guest forgot to fill — which matters because both live in the heap and
+    /// neither is distinguishable by address (`A/小酷音乐(强推)V101`, report
+    /// #45, calls a real heap thunk this way).
+    fn names_arm_routine(&mut self, address: u32) -> bool {
+        let mut pc = address & !3;
+        for _ in 0..24 {
+            if self.memory.region(pc, 4).is_none() {
+                return false;
+            }
+            let word = self.memory.r32(pc);
+            let returns = (word & 0x0fff_ffff) == 0x012f_ff1e // bx lr
+                || (word & 0x0fff_ffff) == 0x01a0_f00e // mov pc, lr
+                || (word & 0x0fff_0000) == 0x08bd_0000 // pop {…, pc}
+                || (word & 0x0fbf_0000) == 0x089b_0000; // ldm {…, pc}
+            if returns {
+                return true;
+            }
+            pc = pc.wrapping_add(4);
+        }
+        false
+    }
+
     fn pc_in_unloaded_rom(&self, pc: u32) -> bool {
         let code_start = self.executable.code_address();
         let code_end = code_start + self.executable.code_size as u32;
@@ -188,6 +357,55 @@ impl CoolbarMachine {
             return false;
         };
         self.cpu.reg_set(Mode::User, reg::PC, target);
+        true
+    }
+
+    /// ARMv5T `CLZ Rd, Rm` — count leading zeros.
+    ///
+    /// The cores these games were built for are ARMv5TE, but the interpreter
+    /// only knows ARMv4T, where this encoding decodes as a data-processing
+    /// operation with a register-controlled shift: it never writes `Rd`, so the
+    /// destination keeps whatever the caller left there. Every software-float
+    /// helper opens with `CLZ` to normalise a mantissa, so the count comes back
+    /// as a stale value and the arithmetic downstream is meaningless — `B/美女
+    /// 桌球.CBE` (issue #190) turns a ball's step size into zero that way and
+    /// then spins through its per-pixel draw loop forever. Implementing the
+    /// instruction here keeps the core untouched.
+    fn handle_clz(&mut self, pc: u32) -> bool {
+        let (instruction, destination, source, next, condition) = if self.cpu.thumb_mode() {
+            // Thumb-2 `CLZ` is a 32-bit encoding: 111110101011 Rn 1111 Rd 1000 Rm.
+            let prefix = self.memory.r16(pc);
+            let suffix = self.memory.r16(pc + 2);
+            if prefix & 0xfff0 != 0xfab0 || suffix & 0xf0f0 != 0xf080 {
+                return false;
+            }
+            (
+                prefix as u32,
+                ((suffix >> 8) & 0x0f) as u8,
+                (suffix & 0x0f) as u8,
+                pc.wrapping_add(4),
+                14,
+            )
+        } else {
+            let word = self.memory.r32(pc);
+            if word & 0x0fff_0ff0 != 0x016f_0f10 {
+                return false;
+            }
+            (
+                word,
+                ((word >> 12) & 0x0f) as u8,
+                (word & 0x0f) as u8,
+                pc.wrapping_add(4),
+                (word >> 28) as u8,
+            )
+        };
+        let _ = instruction;
+        self.cpu.reg_set(Mode::User, reg::PC, next);
+        if arm_condition_met(condition, self.register(reg::CPSR)) {
+            let value = self.register(source);
+            self.cpu
+                .reg_set(Mode::User, destination, value.leading_zeros());
+        }
         true
     }
 

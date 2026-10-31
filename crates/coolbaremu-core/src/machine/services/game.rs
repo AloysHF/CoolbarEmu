@@ -300,6 +300,7 @@ impl CoolbarMachine {
             71 => {
                 self.handle_method_stub(Self::method_stub_address(METHOD_KIND_GAMEOLD, 0x11c) & !1);
             }
+            72 if self.uses_fixed_manager_abi() => self.initialize_native_map(),
             75 if self.uses_fixed_manager_abi() => {
                 let object = self.register(0);
                 let capacity = self.register(1) & 0xffff;
@@ -406,8 +407,10 @@ impl CoolbarMachine {
                 let buffer = self.register(0);
                 let cursor = self.register(1);
                 let offset = self.memory.r32(cursor);
-                self.memory
-                    .w16(buffer.wrapping_add(offset), self.register(2) as u16);
+                self.memory.write_bytes(
+                    buffer.wrapping_add(offset),
+                    &(self.register(2) as u16).to_le_bytes(),
+                );
                 self.memory.w32(cursor, offset.wrapping_add(2));
                 self.set_result(offset.wrapping_add(2));
             }
@@ -416,7 +419,7 @@ impl CoolbarMachine {
                 let cursor = self.register(1);
                 let offset = self.memory.r32(cursor);
                 self.memory
-                    .w32(buffer.wrapping_add(offset), self.register(2));
+                    .write_bytes(buffer.wrapping_add(offset), &self.register(2).to_le_bytes());
                 self.memory.w32(cursor, offset.wrapping_add(4));
                 self.set_result(offset.wrapping_add(4));
             }
@@ -1240,11 +1243,10 @@ impl CoolbarMachine {
             return;
         }
         for offset in (0..size).step_by(4) {
-            if self.memory.r32(obj + offset) == 0 {
-                self.memory.w32(
-                    obj + offset,
-                    Self::method_stub_address(METHOD_KIND_AUTO, offset),
-                );
+            let slot = obj.wrapping_add(offset);
+            if self.memory.r32(slot) == 0 {
+                self.memory
+                    .w32(slot, Self::method_stub_address(METHOD_KIND_AUTO, offset));
             }
         }
     }
@@ -1269,6 +1271,7 @@ impl CoolbarMachine {
         }
         match (kind, offset) {
             (METHOD_KIND_GAMEOLD, 0x680 | 0x684) => self.query_scene_movement(offset),
+            (METHOD_KIND_GAMEOLD, 0x670 | 0x674) => self.scroll_scene_window(offset),
             (METHOD_KIND_GAMEOLD, 0x130) => self.initialize_record(),
             (METHOD_KIND_PICTURE, _) => self.handle_picture_library_method(offset),
             (METHOD_KIND_ACTOR, _) => self.handle_actor_method(offset),
@@ -1299,6 +1302,17 @@ impl CoolbarMachine {
             // and its stack writeback clobbers a live return address.
             (METHOD_KIND_MEMORY, 0x78) => {
                 self.set_result(42);
+            }
+            // GameManagerOld slot 0x164 — a scalar getter, not an object
+            // method.  048 恶魔城(新品) stores the result straight into a
+            // loop bound (`0x043E8C14: str r0, [sp,#8]`) and then counts up
+            // to it.  The generic pointer-shaped fallback hands back a heap
+            // block, so the guest counted to 0x050C2908 (~84 million) and
+            // burned its whole instruction budget inside the loop.  The
+            // slot's contract is a count, so an unimplemented one is zero
+            // elements — the same answer the reference's `h_unimpl` gives.
+            (METHOD_KIND_MEMORY, 0x164) => {
+                self.set_result(0);
             }
             // MEMORY_BLOCK bump allocator installed by initMemoryBlock.
             // MB_Malloc(blk, n): 4-byte-aligned carve-out from the backing
@@ -1467,6 +1481,37 @@ impl CoolbarMachine {
                         self.memory.w16(a + off, 0);
                     }
                     self.memory.w32(a + 12, 0);
+                    // The GameOld scene model embeds the actor at
+                    // container+0x34 and keeps the global template table
+                    // pointer at container+0x14 (the actor's method-slot
+                    // range 0x10..0x28 deliberately stops before 0x14's
+                    // neighbour).  Some scenes build the container through a
+                    // code path that never links container+0x14, leaving the
+                    // actor lookup (scene handler 7) reading a NULL template
+                    // table and jumping to PC 0.  Repair it here: the actor
+                    // `a` is the embedded object, so the owning container is
+                    // `a - 0x34`.  At this point the container's own method
+                    // table (+0x40) may still be zero (the guest fills it
+                    // later), so we cannot gate on it.  Instead we only gate
+                    // on the object living in the heap and on the link being
+                    // still zero, which is sufficient and safe: a correctly
+                    // linked container already has a non-zero +0x14 and is
+                    // left untouched, while games that never set it get a
+                    // valid template-table base.
+                    let container = a.wrapping_sub(0x34);
+                    if (0x0500_0000..0x0a00_0000).contains(&a)
+                        && (0x0500_0000..0x0a00_0000).contains(&container)
+                    {
+                        let template_table = self.memory.r32(0x0502_FF68);
+                        let template_table = if template_table != 0 {
+                            template_table
+                        } else {
+                            0x0540_0000
+                        };
+                        if self.memory.r32(container + 0x14) == 0 {
+                            self.memory.w32(container + 0x14, template_table);
+                        }
+                    }
                 }
                 self.set_result(a);
             }
@@ -1952,8 +1997,10 @@ impl CoolbarMachine {
                 let buffer = self.register(0);
                 let cursor = self.register(1);
                 let offset = self.memory.r32(cursor);
-                self.memory
-                    .w16(buffer.wrapping_add(offset), self.register(2) as u16);
+                self.memory.write_bytes(
+                    buffer.wrapping_add(offset),
+                    &(self.register(2) as u16).to_le_bytes(),
+                );
                 self.memory.w32(cursor, offset.wrapping_add(2));
                 self.set_result(offset.wrapping_add(2));
             }
@@ -1962,7 +2009,7 @@ impl CoolbarMachine {
                 let cursor = self.register(1);
                 let offset = self.memory.r32(cursor);
                 self.memory
-                    .w32(buffer.wrapping_add(offset), self.register(2));
+                    .write_bytes(buffer.wrapping_add(offset), &self.register(2).to_le_bytes());
                 self.memory.w32(cursor, offset.wrapping_add(4));
                 self.set_result(offset.wrapping_add(4));
             }
@@ -2105,6 +2152,55 @@ mod tests {
             memory.map(0x1000, 4, false);
             memory.load(0x1000, &[0x78, 0x56, 0x34, 0x12]).unwrap();
             assert_eq!(read_little_endian_int(&mut memory, 0x1000), 0x1234_5678);
+        }
+    }
+
+    #[test]
+    fn game_stream_writes_round_trip_in_both_guest_byte_orders() {
+        use crate::machine::CoolbarMachine;
+        use armv4t_emu::Memory;
+
+        for big_endian in [false, true] {
+            for game_util in [false, true] {
+                let mut machine = CoolbarMachine::new_blank_for_tests();
+                let mut memory = MachineMemory::new(big_endian);
+                memory.regions = std::mem::take(&mut machine.memory.regions);
+                machine.memory = memory;
+                let buffer = machine.allocate(16);
+                let cursor = machine.allocate(4);
+                machine.memory.write_bytes(buffer, &[0xa5; 16]);
+                machine.memory.w32(cursor, 3);
+                for (index, value, expected_offset) in [(95, 0x1234_8003, 5), (96, 3, 9)] {
+                    machine.set_user_register(0, buffer);
+                    machine.set_user_register(1, cursor);
+                    machine.set_user_register(2, value);
+                    if game_util {
+                        machine.handle_game_util_service(index - 72);
+                    } else {
+                        machine.handle_game_service(index);
+                    }
+                    assert_eq!(machine.register(0), expected_offset);
+                    assert_eq!(machine.memory.r32(cursor), expected_offset);
+                }
+                let encoded: Vec<u8> = (0..10).map(|i| machine.memory.r8(buffer + i)).collect();
+                assert_eq!(
+                    encoded,
+                    [0xa5, 0xa5, 0xa5, 3, 0x80, 3, 0, 0, 0, 0xa5],
+                    "stream integers must be serialized little-endian"
+                );
+                machine.memory.w32(cursor, 3);
+                for (index, expected) in [(91, 0xffff_8003), (92, 3)] {
+                    machine.set_user_register(0, buffer);
+                    machine.set_user_register(1, cursor);
+                    if game_util {
+                        machine.handle_game_util_service(index - 72);
+                    } else {
+                        machine.handle_game_service(index);
+                    }
+                    assert_eq!(machine.register(0), expected);
+                }
+                assert_eq!(machine.memory.r32(cursor), 9);
+            }
         }
     }
 

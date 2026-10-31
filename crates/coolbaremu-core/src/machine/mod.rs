@@ -113,6 +113,16 @@ const SERVICE_BASE: u32 = 0x0c00_0000;
 const SERVICE_SIZE: u32 = 0x10_0000;
 const LOG_NOOP_SERVICE: u32 = SERVICE_BASE + SERVICE_SIZE - 4;
 const EXIT_ADDRESS: u32 = 0x0f00_0000;
+/// Size of the host trampoline window that starts at [`EXIT_ADDRESS`].
+///
+/// The sentinel at [`EXIT_ADDRESS`] is the guest's "return to host" address,
+/// but games also reuse it as a *code base*: they load the sentinel into a
+/// register and execute a `BL` second half-word whose offset selects a slot
+/// inside this window, i.e. `EXIT_ADDRESS + offset`. The reference emulator
+/// maps the same 4 KiB window (`PROGRAM_EXIT_ADDR`, `uc_mem_map(..., 0x1000)`)
+/// so those slots resolve instead of faulting, and each one simply returns to
+/// the caller through `LR`.
+const EXIT_REGION_SIZE: u32 = 0x1000;
 const FIXED_MANAGER_INIT: u32 = SERVICE_BASE + 0xe000;
 /// Per-manager "get table" stubs that return the canonical dense function
 /// table for the caller's group. Fixed-ABI directory entries place the init
@@ -714,6 +724,14 @@ pub struct CoolbarMachine {
     billing_reg: BTreeMap<u16, (u8, u8)>,
     #[serde(skip, default)]
     free_heap_blocks: Vec<(u32, u32)>,
+    /// Live allocations carved out of a guest memory block, keyed by pointer:
+    /// (size, block base). Kept beside the global-heap maps so a block free
+    /// returns space to the block instead of leaking it.
+    #[serde(skip, default)]
+    block_allocations: BTreeMap<u32, (u32, u32)>,
+    /// Recycled runs per block base, sorted by block-relative offset.
+    #[serde(skip, default)]
+    block_free_runs: BTreeMap<u32, Vec<(u32, u32)>>,
     app_main: u32,
     app_exit: u32,
     service_calls: HashMap<(u32, u32), u64>,
@@ -908,6 +926,8 @@ impl CoolbarMachine {
             pending_callbacks: VecDeque::new(),
             billing_reg: BTreeMap::new(),
             free_heap_blocks: Vec::new(),
+            block_allocations: BTreeMap::new(),
+            block_free_runs: BTreeMap::new(),
             app_main: 0,
             app_exit: 0,
             service_calls: HashMap::new(),
@@ -1360,6 +1380,9 @@ impl CoolbarMachine {
 
     fn deallocate(&mut self, pointer: u32) {
         let Some(size) = self.heap_allocations.remove(&pointer) else {
+            // A pointer carved out of a guest memory block belongs to that
+            // block's space; returning it there keeps the block reusable.
+            self.release_block_allocation(pointer);
             return;
         };
         self.free_heap_blocks.push((pointer, size));
@@ -1381,7 +1404,7 @@ impl CoolbarMachine {
     fn allocation_size(&self, address: u32) -> Option<u32> {
         let (&start, &size) = self.heap_allocations.range(..=address).next_back()?;
         let offset = address.checked_sub(start)?;
-        (offset < size).then_some(size - offset)
+        (offset < size).then(|| size - offset)
     }
 
     /// Execute one screen update and render pass.
@@ -1513,7 +1536,9 @@ impl CoolbarMachine {
 
         // Registered native screens poll input once in the idle callback.
         // Sending an extra edge callback makes event-agnostic logic act twice.
+        let mut delivered_input = false;
         if let Some(event) = key_event.filter(|_| self.native_app_parser == 0) {
+            delivered_input = true;
             self.memory.w32(KEY_EVENT_ARG, 1u32 << event.key);
             self.dispatch_screen_logic(
                 screen,
@@ -1545,6 +1570,7 @@ impl CoolbarMachine {
                 None
             };
             if let Some(touch_type) = touch_type {
+                delivered_input = true;
                 let packed = (self.pointer.x as u32) | ((self.pointer.y as u32) << 16);
                 self.memory.w32(TOUCH_EVENT_ARG, packed);
                 self.dispatch_screen_logic(screen, touch_type, TOUCH_EVENT_ARG, instruction_limit)?;
@@ -1557,7 +1583,10 @@ impl CoolbarMachine {
                 }
             }
         }
-        self.dispatch_screen_logic(screen, 6, 0, instruction_limit)?;
+        // Idle is an alternative event; sending it after input erases guest edge caches.
+        if !delivered_input {
+            self.dispatch_screen_logic(screen, 6, 0, instruction_limit)?;
+        }
         if self.finish_screen_callback_frame() {
             return Ok(());
         }
@@ -1858,6 +1887,12 @@ impl CoolbarMachine {
     pub fn last_pc(&self) -> u32 {
         self.last_pc
     }
+    /// Source address of the most recent non-sequential control transfer
+    /// (the instruction that produced the current faulting PC), for fault
+    /// diagnostics.
+    pub fn last_branch_source(&self) -> Option<u32> {
+        self.recent_branches.back().map(|(from, _)| *from)
+    }
     pub fn instruction_count(&self) -> u64 {
         self.instruction_count
     }
@@ -1894,7 +1929,11 @@ impl CoolbarMachine {
         self.net_downlink_bytes
     }
 
-    /// Last URL requested through the network HTTP service, if any.
+    /// Last network destination the guest asked for, if any.
+    ///
+    /// HTTP requests store their URL; raw channel opens store the `host:port`
+    /// the guest passed to the connect service. Offline titles fail on the
+    /// first hop, so this is the endpoint that has to be named in a bug report.
     pub fn network_last_http_url(&self) -> &str {
         &self.net_last_http_url
     }
@@ -1938,6 +1977,8 @@ impl CoolbarMachine {
             pending_callbacks: VecDeque::new(),
             billing_reg: BTreeMap::new(),
             free_heap_blocks: Vec::new(),
+            block_allocations: BTreeMap::new(),
+            block_free_runs: BTreeMap::new(),
             app_main: 0,
             app_exit: 0,
             service_calls: HashMap::new(),
@@ -2057,6 +2098,27 @@ mod tests {
         assert_eq!((event.r0, event.r1, event.r2), (0, 0, 0));
         assert!(!event.screenless_only);
         assert_eq!(machine.net_downlink_bytes, 0);
+    }
+
+    #[test]
+    fn network_connect_records_the_raw_channel_destination() {
+        for big_endian in [false, true] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            let destination = HEAP_BASE + 0x40;
+            machine
+                .memory
+                .write_bytes(destination, b"ghlc.51coolbar.com:20050\0");
+            machine.set_user_register(0, destination);
+            machine.set_user_register(1, 4);
+            machine.set_user_register(2, 0x0100_1237);
+            machine.set_user_register(3, HEAP_BASE + 0x100);
+            machine.handle_network_service(0);
+            assert_eq!(machine.network_last_http_url(), "ghlc.51coolbar.com:20050");
+            assert!(machine.memory.bad_accesses.is_empty());
+        }
     }
 
     #[test]
@@ -3626,6 +3688,64 @@ mod tests {
         );
     }
 
+    /// ARMv5T `CLZ Rd, Rm`.  The ARMv4T core predates the instruction and
+    /// decodes its encoding as a data-processing op that never writes `Rd`, so
+    /// a guest counting leading zeros reads back a stale register.  The
+    /// software-float helpers in every game open with `CLZ`; `B/美女桌球.CBE`
+    /// (issue #190) computed a zero step from it and span forever in its
+    /// per-pixel draw loop.
+    #[test]
+    fn arm_clz_counts_leading_zeros() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10); // ARM state
+        machine.cpu.reg_set(Mode::User, reg::PC, entry);
+        machine.memory.w32(entry, 0xE16F_1F10); // clz r1, r0
+        machine.memory.w32(entry + 4, 0xEAFF_FFFE); // b . (halts)
+
+        machine.cpu.reg_set(Mode::User, 0, 36);
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(machine.register(1), 26, "clz(36) == 26");
+        assert_eq!(machine.register(reg::PC), entry + 4, "clz advances pc");
+    }
+
+    #[test]
+    fn arm_clz_of_zero_is_thirty_two() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+        machine.cpu.reg_set(Mode::User, reg::PC, entry);
+        machine.memory.w32(entry, 0xE16F_1F10); // clz r1, r0
+        machine.memory.w32(entry + 4, 0xEAFF_FFFE);
+
+        machine.cpu.reg_set(Mode::User, 0, 0);
+        machine.cpu.reg_set(Mode::User, 1, 0xDEAD_BEEF);
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(machine.register(1), 32, "clz(0) == 32");
+    }
+
+    /// A conditional `CLZ` must stay conditional: `CLZNE` with Z set leaves
+    /// the destination alone but still advances past the instruction.
+    #[test]
+    fn arm_clz_respects_its_condition_code() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10 | (1 << 30)); // ARM, Z set
+        machine.cpu.reg_set(Mode::User, reg::PC, entry);
+        machine.memory.w32(entry, 0x116F_1F10); // clzne r1, r0
+        machine.memory.w32(entry + 4, 0xEAFF_FFFE);
+
+        machine.cpu.reg_set(Mode::User, 0, 36);
+        machine.cpu.reg_set(Mode::User, 1, 0xDEAD_BEEF);
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(machine.register(1), 0xDEAD_BEEF, "clzne skipped when Z set");
+        assert_eq!(
+            machine.register(reg::PC),
+            entry + 4,
+            "skipped clz advances pc"
+        );
+    }
+
     /// Executing inside the manager region means the game calls the
     /// application interface as code (native-dispatch convention: id in r0,
     /// argument in r1). The fetch must be dispatched, not decoded as data —
@@ -3646,6 +3766,218 @@ mod tests {
 
         machine.run_until_return(1_000).unwrap();
         assert_eq!(machine.native_app_parser, parser);
+    }
+
+    /// The exit window doubles as the host trampoline table. Games load the
+    /// exit sentinel into `LR` and run a `BL` second half-word whose offset
+    /// selects a slot at `EXIT_ADDRESS + offset`; that half-word also stores
+    /// the resume address back into `LR`. Fetching such a slot must resume
+    /// through `LR` — before this, only the exact sentinel was recognised and
+    /// the slot faulted as an unmapped fetch.
+    #[test]
+    fn exit_region_fetch_dispatches_trampoline_call() {
+        let mut machine = machine_from_minimal_archive();
+        // `LR` carries the resume address the `BL` half-word computed; making
+        // it the sentinel means a correct dispatch lands back on the sentinel
+        // and the run ends cleanly instead of faulting.
+        machine.cpu.reg_set(Mode::User, reg::LR, EXIT_ADDRESS | 1);
+        machine
+            .cpu
+            .reg_set(Mode::User, reg::PC, EXIT_ADDRESS + 0x234);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10); // ARM state
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(
+            machine.register(reg::PC),
+            EXIT_ADDRESS,
+            "trampoline slot must resume through LR"
+        );
+    }
+
+    /// A method slot holding guest payload — a resource record, a length
+    /// word, leftover heap bytes — branches to data rather than code, which
+    /// faults on the fetch.  Games that ship such tables (049, 070) call them
+    /// through a `bx Rm` thunk, so the slot must be judged by whether it
+    /// addresses anything at all: unreachable means the method has no
+    /// implementation to run and the call returns zero to its caller.
+    #[test]
+    fn indirect_branch_through_payload_slot_returns_to_caller() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w16(entry, 0x4718); // Thumb bx r3
+        machine.memory.w16(entry + 2, 0xe7fe); // terminal self-branch
+        machine.cpu.reg_set(Mode::User, reg::PC, entry | 1);
+        machine.cpu.reg_set(Mode::User, reg::LR, (entry + 2) | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
+        machine.cpu.reg_set(Mode::User, 3, 0x0003_0003); // payload, not code
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(
+            machine.state(),
+            MachineState::Halted,
+            "a payload slot must resume at LR instead of faulting"
+        );
+    }
+
+    /// The host sentinel windows are unmapped by design, so the
+    /// "addresses nothing" test must not claim them: `bx` to the exit
+    /// sentinel is the guest's "return to host", not an unimplemented
+    /// method, and resuming at LR there would trap the game in its caller.
+    #[test]
+    fn indirect_branch_to_exit_sentinel_still_returns_to_host() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w16(entry, 0x4700); // Thumb bx r0
+        machine.memory.w16(entry + 2, 0xe7fe); // terminal self-branch
+        machine.cpu.reg_set(Mode::User, reg::PC, entry | 1);
+        machine.cpu.reg_set(Mode::User, reg::LR, (entry + 2) | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
+        machine.cpu.reg_set(Mode::User, 0, EXIT_ADDRESS | 1); // exit sentinel
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(
+            machine.register(reg::PC),
+            EXIT_ADDRESS,
+            "the exit sentinel must end the run, not resume at LR"
+        );
+        assert_ne!(
+            machine.state(),
+            MachineState::Halted,
+            "the exit sentinel must not be mistaken for a dead method slot"
+        );
+    }
+
+    /// A slot can hold a value that is mapped yet still names no routine.
+    /// Game #119 stores a data pointer in the slot: `ldr r0,[r0,#0x10]` then
+    /// `ldr r3,[r0,#0x6C]` yields 0x05037828, which is one entry of a ten
+    /// element record table (0x050377C0..0x050377E4) whose entries all point
+    /// at small-integer payload.  The value is even, so `bx r3` leaves Thumb
+    /// state and "executes" the records, sliding until the fetch runs off the
+    /// heap at 0x06000000.  Inside the ROM image an even value is a real ARM
+    /// entry point, so only slots outside it may be judged this way.
+    #[test]
+    fn indirect_branch_through_even_slot_outside_rom_returns_to_caller() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w16(entry, 0x4718); // Thumb bx r3
+        machine.memory.w16(entry + 2, 0xe7fe); // terminal self-branch
+        machine.cpu.reg_set(Mode::User, reg::PC, entry | 1);
+        machine.cpu.reg_set(Mode::User, reg::LR, (entry + 2) | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
+                                                          // Even, mapped, but in the heap rather than the ROM image.
+        machine.cpu.reg_set(Mode::User, 3, HEAP_BASE + 0x100);
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(
+            machine.state(),
+            MachineState::Halted,
+            "an even slot outside the ROM image must resume at LR"
+        );
+    }
+
+    /// The same slot value inside the ROM image is a genuine ARM entry point
+    /// — 058/059 call ARM routines that way — so it must still be taken, not
+    /// short-circuited into returning zero.
+    #[test]
+    fn indirect_branch_to_even_slot_inside_rom_is_not_a_dead_slot() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w16(entry, 0x4718); // Thumb bx r3
+        machine.memory.w16(entry + 2, 0xe7fe); // terminal self-branch
+                                               // An ARM routine that leaves a marker in r0 and returns, so the
+                                               // outcome is observable: a dead slot hands the caller a zero
+                                               // result instead of running it.
+        let arm_routine = entry + 0x100;
+        machine.executable.code_size = 0x200; // keep the routine in loaded ROM
+        machine.memory.w32(arm_routine, 0xe3a0_005a); // ARM mov r0, #0x5a
+        machine.memory.w32(arm_routine + 4, 0xe12f_ff1e); // ARM bx lr
+        machine.cpu.reg_set(Mode::User, reg::PC, entry | 1);
+        machine.cpu.reg_set(Mode::User, reg::LR, (entry + 2) | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
+        machine.cpu.reg_set(Mode::User, 3, arm_routine); // even, inside ROM
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(
+            machine.register(0),
+            0x5a,
+            "an even slot naming an ARM routine in ROM must be called"
+        );
+    }
+
+    /// Parity alone cannot separate the two: `A/小酷音乐(强推)V101`
+    /// (report #45) keeps genuine ARM thunks in the heap and calls them
+    /// through the same `bx Rm` thunk.  Those must still run, so the look
+    /// ahead asks whether the address can return.
+    #[test]
+    fn indirect_branch_to_even_slot_naming_heap_routine_is_called() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w16(entry, 0x4718); // Thumb bx r3
+        machine.memory.w16(entry + 2, 0xe7fe); // terminal self-branch
+        let arm_routine = HEAP_BASE + 0x100;
+        machine.memory.w32(arm_routine, 0xe3a0_005a); // ARM mov r0, #0x5a
+        machine.memory.w32(arm_routine + 4, 0xe12f_ff1e); // ARM bx lr
+        machine.cpu.reg_set(Mode::User, reg::PC, entry | 1);
+        machine.cpu.reg_set(Mode::User, reg::LR, (entry + 2) | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
+        machine.cpu.reg_set(Mode::User, 3, arm_routine); // even, outside ROM
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(
+            machine.register(0),
+            0x5a,
+            "an even slot naming a heap ARM routine must still be called"
+        );
+    }
+
+    /// The ROM mapping is rounded out past both images, so its tail is
+    /// mapped yet holds no code — a fetch there faults as an unloaded ROM
+    /// address.  A slot landing on that tail names no routine either.
+    /// `A/小酷音乐(强推)V101` (report #45) reaches one through `bx r3` at
+    /// 0x043EA55E with 0x043EEF64 once earlier calls return results, and used
+    /// to fault there instead of resuming at its caller.
+    #[test]
+    fn indirect_branch_to_unloaded_rom_slot_returns_to_caller() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w16(entry, 0x4718); // Thumb bx r3
+        machine.memory.w16(entry + 2, 0xe7fe); // terminal self-branch
+        machine.cpu.reg_set(Mode::User, reg::PC, entry | 1);
+        machine.cpu.reg_set(Mode::User, reg::LR, (entry + 2) | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
+        machine.cpu.reg_set(Mode::User, 3, entry + 0x100); // past code_size
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(
+            machine.state(),
+            MachineState::Halted,
+            "a slot in the unloaded ROM tail must resume at LR"
+        );
+    }
+
+    /// A slot pointing at mapped memory that holds no instruction — a zeroed
+    /// buffer, an uninitialised page — decodes as a NOP and slides through
+    /// the region until it faults.  Game #119 hits this with 0x02000001: the
+    /// whole window at 0x02000000 is zero.
+    #[test]
+    fn indirect_branch_through_zero_filled_slot_returns_to_caller() {
+        let mut machine = machine_from_minimal_archive();
+        let entry = machine.executable.code_address();
+        machine.memory.w16(entry, 0x4718); // Thumb bx r3
+        machine.memory.w16(entry + 2, 0xe7fe); // terminal self-branch
+        machine.cpu.reg_set(Mode::User, reg::PC, entry | 1);
+        machine.cpu.reg_set(Mode::User, reg::LR, (entry + 2) | 1);
+        machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30); // Thumb state
+                                                          // Odd, mapped, outside the ROM image, and zero-filled: the stack
+                                                          // window answers for all three.
+        machine.cpu.reg_set(Mode::User, 3, (STACK_BASE + 0x40) | 1);
+
+        machine.run_until_return(1_000).unwrap();
+        assert_eq!(
+            machine.state(),
+            MachineState::Halted,
+            "a zero-filled slot must resume at LR instead of sliding"
+        );
     }
 
     /// Fixed-ABI directory entries must expose both an init stub (+0) and a
@@ -3889,6 +4221,43 @@ mod tests {
             machine.instruction_count > before,
             "the deferred callback actually executed"
         );
+    }
+
+    #[test]
+    fn accepted_billing_sms_delivers_local_success_to_the_guest() {
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.cpu.reg_set(Mode::User, reg::CPSR, 0x30);
+            let stack = machine.allocate(16);
+            let marker = machine.allocate(4);
+            let callback = machine.allocate(12);
+            for (index, instruction) in [0x4901, 0x6008, 0x4770, 0x46c0].into_iter().enumerate() {
+                machine.memory.w16(callback + index as u32 * 2, instruction);
+            }
+            machine.memory.w32(callback + 8, marker);
+            machine.memory.w32(stack + 8, callback | 1);
+            machine.cpu.reg_set(Mode::User, reg::SP, stack);
+            machine.cpu.reg_set(Mode::User, 0, 13);
+            machine.handle_billing_service(15);
+            assert_eq!(machine.register(0), 0);
+            assert!(machine.pending_callbacks.is_empty());
+            machine.cpu.reg_set(Mode::User, 0, 14);
+            machine.handle_billing_service(15);
+            assert_eq!(machine.register(0), 1);
+            assert_eq!(machine.memory.r32(marker), 0);
+            machine.dispatch_pending_callbacks(100).unwrap();
+            assert_eq!(machine.memory.r32(marker), 1);
+            assert!(machine.pending_callbacks.is_empty());
+            machine.memory.w32(marker, 0);
+            machine.cpu.reg_set(Mode::User, 0, 14);
+            machine.handle_billing_service(15);
+            machine.handle_billing_service(16);
+            machine.dispatch_pending_callbacks(100).unwrap();
+            assert_eq!(machine.memory.r32(marker), 0);
+        }
     }
 
     #[test]
@@ -4945,6 +5314,51 @@ mod tests {
     }
 
     #[test]
+    fn screen_input_edges_survive_until_render() {
+        for big_endian in [false, true] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_screen();
+            machine.state = MachineState::Ready;
+            machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+            let object = machine.allocate(64);
+            let screen = object + 24;
+            let logic = machine.allocate(10);
+            let render = machine.allocate(10);
+            for (callback, words) in [
+                (logic, [0x6001, 0x6843, 0x3301, 0x6043, 0x4770]),
+                (render, [0x6801, 0x6081, 0x6842, 0x60c2, 0x4770]),
+            ] {
+                for (i, word) in words.into_iter().enumerate() {
+                    machine.memory.w16(callback + i as u32 * 2, word);
+                }
+            }
+            machine.memory.w32(screen + 8, logic | 1);
+            machine.memory.w32(screen + 12, render | 1);
+            machine.pending_screen = screen;
+            for (frame, event) in [0, 1, 3, 5, 4, 6].into_iter().enumerate() {
+                match frame {
+                    0 => machine.set_key(14, true),
+                    1 => machine.set_key(14, false),
+                    2 => machine.set_pointer(30, 40, true),
+                    3 => machine.set_pointer(50, 40, true),
+                    4 => machine.set_pointer(50, 40, false),
+                    _ => {}
+                }
+                machine.run_frame(100).unwrap();
+                assert_eq!(
+                    machine.memory.r32(object + 8),
+                    event,
+                    "render must observe the input event rather than a subsequent idle"
+                );
+                assert_eq!(machine.memory.r32(object + 12), frame as u32 + 1);
+            }
+        }
+    }
+
+    #[test]
     fn native_input_edges_do_not_duplicate_screen_logic() {
         let mut machine = CoolbarMachine::new_blank_for_tests();
         machine.state = MachineState::Ready;
@@ -5458,7 +5872,13 @@ mod tests {
             assert_eq!(machine.memory.r16(library + 20), 1);
             assert_eq!(call(&mut machine, 0x20, 0), 2);
             assert_eq!(call(&mut machine, 0x24, 0), 1);
-            assert_eq!(call(&mut machine, 0x20, u32::MAX), 0);
+            // Index -1 is the current target surface, not a registered entry:
+            // 032 士兵突袭V10 divides by PL_GetWidth(-1)/3 and must not get 0
+            // (#106).  A positive index past the table still reports nothing.
+            let (screen_width, screen_height) = machine.image_dims(SCREEN_IMAGE_STRUCT);
+            assert_eq!(call(&mut machine, 0x20, u32::MAX), screen_width as u32);
+            assert_eq!(call(&mut machine, 0x24, u32::MAX), screen_height as u32);
+            assert_eq!(call(&mut machine, 0x20, 9), 0);
             machine.cpu.reg_set(Mode::User, 2, 10);
             machine.cpu.reg_set(Mode::User, 3, 20);
             call(&mut machine, 0x34, 0);
@@ -5579,6 +5999,27 @@ mod tests {
             machine.memory.r32(buf),
             u32::from_le_bytes(*b"ABCD"),
             "gameold 0x214 copies from r1, not fills with r1"
+        );
+    }
+
+    /// A slot whose result the guest treats as a count has to hand back a
+    /// scalar.  048 恶魔城(新品) stores the 0x164 result straight into a loop
+    /// bound and counts up to it, so the generic pointer-shaped fallback —
+    /// a freshly allocated heap block — meant counting to the block's
+    /// address and burning the whole instruction budget inside the loop.
+    #[test]
+    fn method_stub_count_slot_returns_scalar_not_heap_block() {
+        let mut machine = machine_from_minimal_archive();
+        let obj = machine.allocate(0x40);
+        machine.cpu.reg_set(Mode::User, 0, obj);
+        machine.cpu.reg_set(Mode::User, 1, obj);
+        machine.handle_method_stub(
+            CoolbarMachine::method_stub_address(METHOD_KIND_MEMORY, 0x164) & !1,
+        );
+        assert_eq!(
+            machine.register(0),
+            0,
+            "an unimplemented count slot must be zero elements, not a heap block"
         );
     }
 
@@ -6039,6 +6480,54 @@ mod tests {
             assert_eq!(machine.memory.r16(image + 4), 188, "width recorded");
             assert_eq!(machine.memory.r16(image + 6), 0, "height recorded");
         }
+    }
+
+    /// Picture index -1 addresses the library's current target surface, not a
+    /// registered entry: 032 士兵突袭V10 sizes its HUD layout with
+    /// PL_GetWidth(-1)/PL_GetHeight(-1) right after recreating the library and
+    /// then divides a layout constant by width/3, so an empty library
+    /// answering zero divided by zero on every load (#106).
+    #[test]
+    fn picture_library_minus_one_index_reports_the_target_surface() {
+        let mut machine = machine_from_minimal_archive();
+        machine.initialize_screen();
+        machine.executable.big_endian = true;
+        machine.executable.preferred_code_address = 0x0010_0000;
+        machine.executable.code_image_size = 0x2000;
+        machine.executable.code_size = 4;
+        let library = machine.allocate(0x54);
+        machine.cpu.reg_set(Mode::User, 0, library);
+        machine.cpu.reg_set(Mode::User, 1, 8);
+        machine.handle_game_service(75);
+        assert_eq!(machine.memory.r16(library + 20), 0, "library starts empty");
+        let (width, height) = machine.image_dims(SCREEN_IMAGE_STRUCT);
+        assert!(width > 0 && height > 0, "screen header carries its size");
+        for (offset, expected) in [(0x20u32, width as u32), (0x24, height as u32)] {
+            machine.cpu.reg_set(Mode::User, 0, library);
+            machine.cpu.reg_set(Mode::User, 1, 0xffff);
+            machine.handle_method_stub(
+                CoolbarMachine::method_stub_address(METHOD_KIND_PICTURE, offset) & !1,
+            );
+            assert_eq!(
+                machine.register(0),
+                expected,
+                "sentinel answers the canvas dimension for slot 0x{offset:X}"
+            );
+        }
+        // Registered entries still report their own dimensions.
+        machine.cpu.reg_set(Mode::User, 0, library);
+        machine.cpu.reg_set(Mode::User, 1, 40);
+        machine.cpu.reg_set(Mode::User, 2, 20);
+        machine.handle_method_stub(
+            CoolbarMachine::method_stub_address(METHOD_KIND_PICTURE, 0x18) & !1,
+        );
+        assert_eq!(machine.register(0), 0, "blank canvas registers at index 0");
+        machine.cpu.reg_set(Mode::User, 0, library);
+        machine.cpu.reg_set(Mode::User, 1, 0);
+        machine.handle_method_stub(
+            CoolbarMachine::method_stub_address(METHOD_KIND_PICTURE, 0x20) & !1,
+        );
+        assert_eq!(machine.register(0), 40, "entry 0 keeps its own width");
     }
 
     /// Guest string encoding follows machine endianness: big-endian images

@@ -212,7 +212,13 @@ impl CoolbarMachine {
                 self.set_result(destination);
             }
             4 => self.set_result(0),
-            5 => self.set_result(self.instruction_count as u32),
+            5 => {
+                self.rand_state = self
+                    .rand_state
+                    .wrapping_mul(1_103_515_245)
+                    .wrapping_add(12_345);
+                self.set_result((self.rand_state >> 16) & 0x7fff);
+            }
             7 => {
                 let destination = self.register(0);
                 let source = self.register(1);
@@ -457,5 +463,32 @@ impl CoolbarMachine {
             .unwrap_or_else(|| vec![0u8; NV_BLOCK_SIZE as usize]);
         blob.resize(NV_BLOCK_SIZE as usize, 0);
         blob
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::machine::CoolbarMachine;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn stdio_random_is_bounded_varied_and_independent_of_instruction_timing() {
+        let mut first = CoolbarMachine::new_blank_for_tests();
+        let mut second = CoolbarMachine::new_blank_for_tests();
+        first.instruction_count = 1;
+        second.instruction_count = 0xf000_0000;
+        let mut samples = BTreeSet::new();
+        let mut residues = BTreeSet::new();
+        for _ in 0..64 {
+            first.handle_stdio_service(5);
+            second.handle_stdio_service(5);
+            let value = first.register_value(0);
+            assert_eq!(value, second.register_value(0));
+            assert!(value <= 0x7fff);
+            samples.insert(value);
+            residues.insert(value % 4);
+        }
+        assert!(samples.len() > 32);
+        assert_eq!(residues.len(), 4);
     }
 }
