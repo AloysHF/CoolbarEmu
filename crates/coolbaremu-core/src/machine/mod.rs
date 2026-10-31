@@ -4496,6 +4496,64 @@ mod tests {
         }
     }
 
+    /// Native dispatch sid 0x97 is the firmware text measure: the record
+    /// carries {GBK text pointer, wrap width} and the scalar-result fetch
+    /// must yield the wrapped line count.  Handing back the unknown-sid
+    /// stub-table pointer instead made guests multiply heap addresses into
+    /// scroll-panel geometry, freezing billing-flow story pages (issue
+    /// #160's 魔塔(新品) entry hang).
+    #[test]
+    fn native_text_measure_counts_wrapped_gbk_lines() {
+        fn measure(machine: &mut CoolbarMachine, text: u32, wrap: u32) -> u32 {
+            let record = machine.allocate(16);
+            machine.memory.w32(record, text);
+            machine.memory.w32(record + 4, wrap);
+            machine.cpu.reg_set(Mode::User, 0, 0x97);
+            machine.cpu.reg_set(Mode::User, 1, record);
+            machine.handle_native_dispatch_service();
+            assert_eq!(machine.register(0), 0x97);
+            let output = machine.allocate(4);
+            machine.memory.w32(output, 0xDEAD_BEEF);
+            machine.memory.w32(record, output);
+            machine.memory.w32(record + 4, 0x97);
+            machine.memory.w32(record + 8, 4);
+            machine.cpu.reg_set(Mode::User, 0, 0x7d1);
+            machine.cpu.reg_set(Mode::User, 1, record);
+            machine.handle_native_dispatch_service();
+            machine.memory.r32(output)
+        }
+
+        for big_endian in [false, true] {
+            let mut machine = machine_from_minimal_archive();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            // Four fullwidth glyphs (a1a1 is the GBK fullwidth space) span
+            // 64px: one line at a 100px wrap, two at 50px.
+            let fullwidth = machine.allocate(16);
+            machine
+                .memory
+                .write_bytes(fullwidth, b"\xa1\xa1\xa1\xa1\xa1\xa1\xa1\xa1\0");
+            assert_eq!(measure(&mut machine, fullwidth, 100), 1);
+            assert_eq!(measure(&mut machine, fullwidth, 50), 2);
+            assert_eq!(measure(&mut machine, fullwidth, 16), 4);
+            // An explicit newline forces a break regardless of width.
+            let broken = machine.allocate(16);
+            machine.memory.write_bytes(broken, b"a\nb\0");
+            assert_eq!(measure(&mut machine, broken, 100), 2);
+            // ASCII glyphs are halfwidth: ten fit one 80px line, not 79px.
+            let ascii = machine.allocate(16);
+            machine.memory.write_bytes(ascii, b"0123456789\0");
+            assert_eq!(measure(&mut machine, ascii, 80), 1);
+            assert_eq!(measure(&mut machine, ascii, 79), 2);
+            // Degenerate inputs stay numeric instead of becoming pointers.
+            let empty = machine.allocate(4);
+            machine.memory.w8(empty, 0);
+            assert_eq!(measure(&mut machine, empty, 100), 1);
+            assert_eq!(measure(&mut machine, 0, 100), 0);
+        }
+    }
+
     /// The native interface request honours two-byte result slots: the
     /// shared template's measure-call marshals a u16 output and reads it
     /// back, which is what terminates the render loop instead of letting
