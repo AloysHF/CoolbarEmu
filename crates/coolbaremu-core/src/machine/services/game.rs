@@ -233,6 +233,23 @@ impl CoolbarMachine {
                     );
                 self.set_result(u32::from(result));
             }
+            53 => {
+                // Abs: the engine accumulates an actor's sprite bounds with
+                // signed deltas, so a zero here corrupts the bounding box.
+                self.set_result(signed_coord(self.register(0)).unsigned_abs());
+            }
+            54 => {
+                // Max(a, b): upper edge of the accumulated sprite bounds.
+                let left = signed_coord(self.register(0));
+                let right = signed_coord(self.register(1));
+                self.set_result(left.max(right) as u32);
+            }
+            55 => {
+                // Min(a, b): lower edge of the accumulated sprite bounds.
+                let left = signed_coord(self.register(0));
+                let right = signed_coord(self.register(1));
+                self.set_result(left.min(right) as u32);
+            }
             56 if gameold_abi => {
                 self.handle_method_stub(Self::method_stub_address(METHOD_KIND_GAMEOLD, 0xe0) & !1);
             }
@@ -2130,6 +2147,24 @@ mod tests {
             machine.memory.w32(stack + 4, y);
             machine.handle_game_service(52);
             assert_eq!(machine.register(0), expected);
+        }
+    }
+
+    #[test]
+    fn gameold_abs_max_min_use_signed_halfword_coordinates() {
+        use crate::machine::CoolbarMachine;
+
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        for (index, first, second, expected) in [
+            (53, 0xffff_ffec, 0, 20),
+            (53, 0x0000_0014, 0, 20),
+            (54, 0x0000_0014, 0xffff_ffec, 20),
+            (55, 0x0000_0014, 0xffff_ffec, -20),
+        ] {
+            machine.set_user_register(0, first);
+            machine.set_user_register(1, second);
+            machine.handle_game_service(index);
+            assert_eq!(machine.register(0), expected as u32, "service {index}");
         }
     }
 

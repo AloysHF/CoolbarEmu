@@ -161,6 +161,8 @@ Native applications receive guest-callable tables whose entries lead to emulator
 - GBK text measurement and rendering;
 - phone-key edge and held-state queries, with held keys remaining visible on
   every guest tick until the frontend reports their release;
+- signed 16-bit arithmetic helpers (`Abs`, `Max`, `Min`) used by the fixed
+  GameManagerOld table to accumulate sprite bounding boxes;
 - screen transitions and resource notifications;
 - a bounded subset of C-style formatted strings.
 
@@ -377,7 +379,10 @@ assets. Explicit package image creation uses the same resource lookup path.
 
 Native scene initialization loads the first SCE2 background map from its resource
 name. Map dimensions, image slots, column-major cells and signed placement are
-preserved in guest memory. The embedded scene window draws the first map's tiles
+preserved in guest memory. The scene's leading pair is the camera origin that the
+container renderer subtracts from actor coordinates, so it starts at zero; the
+map already fills the display and storing the map dimensions there translated
+every actor off-screen. The embedded scene window draws the first map's tiles
 within its packed viewport, using the real tileset indices and signed placement.
 Its add-child method uses the shared window hierarchy. Each full background
 repaint invalidates the covered foreground windows, then runs their guest
@@ -395,9 +400,11 @@ through the sixth. The host parses the named map, registers each tile image in
 the caller's library, lays out the column-major cell table and the pixel/tile
 dimension fields the guest renderer walks, and fills method slots 0x28..=0xbc
 with callable AUTO stubs so later indirect calls stay off NULL even when the map
-cannot be loaded. Without the handler the call fell through to the generic
-constructor path and left every method slot zero, faulting the guest on its next
-indirect call.
+cannot be loaded. The fill never leaves the caller's allocation or runs into the
+following object or shared picture library, whose fields live immediately after
+the map object, and it only claims slots that are still zero. Without the handler
+the call fell through to the generic constructor path and left every method slot
+zero, faulting the guest on its next indirect call.
 Tile sizes come from map metadata; malformed or truncated maps are rejected.
 For scenes with empty built-in actor tables, the application's trailing-data
 callback runs synchronously with the decoded stream and its byte cursor. The
