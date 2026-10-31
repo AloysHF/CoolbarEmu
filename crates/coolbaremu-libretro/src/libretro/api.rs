@@ -212,19 +212,18 @@ pub extern "C" fn retro_get_system_av_info(info: *mut retro_system_av_info) {
 pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
     unsafe {
         if info.is_null() {
-            log::error!("Game info is null");
-            return false;
+            return fail("Coolbar: the frontend passed no content information.");
         }
         let game_info = &*info;
         if game_info.path.is_null() {
-            log::error!("Game path is null");
-            return false;
+            return fail("Coolbar: the frontend passed no content path.");
         }
         let path = match CStr::from_ptr(game_info.path).to_str() {
             Ok(path) => path,
             Err(error) => {
-                log::error!("Invalid game path: {error}");
-                return false;
+                return fail(&format!(
+                    "Coolbar: the content path is not valid UTF-8 ({error})."
+                ));
             }
         };
 
@@ -233,8 +232,7 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
             RETRO_ENVIRONMENT_SET_PIXEL_FORMAT,
             &pixel_format as *const _ as *mut c_void,
         ) {
-            log::error!("Failed to set pixel format");
-            return false;
+            return fail("Coolbar: this frontend does not support XRGB8888 video.");
         }
 
         register_input_descriptors();
@@ -251,8 +249,9 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
         match load_machine(Path::new(path)) {
             Ok((archive, mut machine)) => {
                 if let Err(error) = machine.boot(DEFAULT_INSTRUCTION_LIMIT) {
-                    log::error!("Failed to boot CBE application: {error:#}");
-                    return false;
+                    return fail(&format!(
+                        "Coolbar: failed to boot this application.\n{error:#}"
+                    ));
                 }
                 log::info!("Game loaded: {path}");
                 let content_crc32 = crc32fast::hash(archive.bytes());
@@ -274,12 +273,18 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
                 }
                 true
             }
-            Err(error) => {
-                log::error!("Failed to load game: {error:#}");
-                false
-            }
+            Err(error) => fail(&format!(
+                "Coolbar: failed to load this game.\n{error:#}\n\nSupported content: a .cbe application file."
+            )),
         }
     }
+}
+
+/// Report a load failure to both the log and the frontend's on-screen message.
+fn fail(message: &str) -> bool {
+    log::error!("{message}");
+    callbacks::show_message(message, 240);
+    false
 }
 
 #[no_mangle]
