@@ -31,6 +31,8 @@ and [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk):
 cargo install cargo-ndk
 rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
 export ANDROID_NDK_HOME=/path/to/android-ndk
+# Android 15 devices require 16 KB page alignment for native libraries.
+export RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384"
 
 # Build all four ABIs (artifacts land in target/<triple>/release/)
 cargo ndk -t arm64-v8a -t armeabi-v7a -t x86 -t x86_64 --platform 21 \
@@ -39,3 +41,24 @@ cargo ndk -t arm64-v8a -t armeabi-v7a -t x86 -t x86_64 --platform 21 \
 
 Each ABI produces `libcoolbaremu.so`; rename it to
 `coolbaremu_libretro_android.so` when installing into RetroArch on Android.
+
+## RetroDroid
+
+The same core ships inside [RetroDroid](https://github.com/AloysHF/RetroDroid),
+the all-in-one Android app for this emulator family. RetroDroid loads the
+`lib*.so` directly (no RetroArch required) and reads the neighbouring
+`android.json` for the system profile: display names, content extensions,
+virtual-controller preset, firmware requirements and orientation.
+
+Rules the core follows for any Android host:
+
+- Applications in this core have no battery-backed save RAM, so there is no
+  save file to place next to the content; libretro save states are handled by
+  the frontend.
+- Load failures are reported with `RETRO_ENVIRONMENT_SET_MESSAGE` and the log,
+  never as a silent `false`.
+- Panics are caught at the C ABI boundary, so a bad frame cannot kill the host.
+- Save states carry a `CBAR` magic header plus a format version; states from
+  another version are rejected instead of being misread.
+- Cores are linked with 16 KB page alignment for Android 15 devices.
+

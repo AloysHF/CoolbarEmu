@@ -1514,6 +1514,19 @@ mod tests {
     }
 
     #[test]
+    fn android_profile_matches_the_core_identity() {
+        let profile = include_str!("../../android.json");
+
+        // The cdylib is named after the [lib] target, and the profile must
+        // install exactly that file so the frontend can dlopen it.
+        assert!(profile.contains("\"so_name\": \"libcoolbaremu.so\""));
+        // Keep the profile in step with retro_get_system_info() and the state
+        // envelope; both are checked above and in the save-state tests.
+        assert!(profile.contains("\"supported_extensions\": [\"cbe\"]"));
+        assert!(profile.contains(&format!("\"save_state_format\": {SAVE_STATE_FORMAT}")));
+    }
+
+    #[test]
     fn metadata_manifests_match_implemented_features() {
         let core_info = include_str!("../../coolbaremu_libretro.info");
         let libretro_manifest = include_str!("../../Cargo.toml");
