@@ -130,12 +130,14 @@ CoolbarEmu executes native CBE applications instead of replacing their game logi
 
 
 Pending resource callbacks bound to a new screen run before its initialization,
-so initialization can use the objects created by resource loading. Requests
-issued during initialization still run before logic and rendering. When there
-is no explicit request, a screen's resource callback runs once after its
-initialization. Screens registered beneath an overlay also initialize and load
-their resources. Closing an overlay resumes the underlying screen without
-repeating its initialization or resource loading.
+so initialization can use the objects created by resource loading. A screen's
+load callback otherwise runs on entry only when initialization requests
+resources or the screen has no initializer at all; replaying it beside an
+initializer can reset state that initialization has just positioned. Requests
+issued during initialization still run before logic and rendering. Screens
+registered beneath an overlay also initialize and load their resources. Closing
+an overlay resumes the underlying screen without repeating its initialization
+or resource loading.
 
 ## Guest memory
 
