@@ -91,7 +91,9 @@ The Display column records the active output dimensions after orientation;
 startup clips take precedence over inferred clears. Unidentified modes retain
 the 240×400 fallback. Correct dimensions alone do not establish correct rendering.
 “Required” denotes an established network dependency; “Not assessed” means the
-dependency has not been verified for that archive variant. Offline callbacks do
+dependency has not been verified for that archive variant; “Blocked: dead server”
+means the only entry path is a Coolbar platform service that no longer answers,
+so the title cannot be taken further on the host. Offline callbacks do
 not provide the original server's content or a real carrier payment service.
 
 ### Group A
