@@ -200,7 +200,7 @@ pub extern "C" fn retro_get_system_info(info: *mut retro_system_info) {
     guard((), || unsafe {
         (*info) = retro_system_info {
             library_name: c"CoolbarEmu".as_ptr(),
-            library_version: c"0.1.0".as_ptr(),
+            library_version: concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr() as *const c_char,
             valid_extensions: c"cbe".as_ptr(),
             need_fullpath: true,
             block_extract: false,
@@ -1090,6 +1090,12 @@ mod tests {
                 .to_str()
                 .unwrap(),
             "cbe"
+        );
+        assert_eq!(
+            unsafe { CStr::from_ptr(info.library_version) }
+                .to_str()
+                .unwrap(),
+            env!("CARGO_PKG_VERSION")
         );
         assert!(info.need_fullpath);
         assert!(!info.block_extract);
