@@ -973,6 +973,25 @@ impl CoolbarMachine {
                 }
                 self.set_result(self.native_property_info);
             }
+            0x97 => {
+                // Firmware text measure: the record holds {GBK text pointer,
+                // wrap width} and the shared template expects the wrapped
+                // line count back through the scalar-result fetch.  Scroll
+                // panels size their content as lines × 18px against the
+                // viewport, so the old unknown-sid stub-table pointer
+                // poisoned that geometry with heap-layout noise and froze
+                // billing-flow story panels mid-scroll (issue #160).
+                let record = self.register(1);
+                let lines = if record == 0 {
+                    0
+                } else {
+                    let text = self.memory.r32(record);
+                    let wrap = self.memory.r32(record + 4);
+                    self.measure_gbk_text_lines(text, wrap)
+                };
+                self.native_scalar_results.insert(id, lines);
+                self.set_result(id);
+            }
             0x421 => {
                 if std::env::var_os("CBE_TRACE").is_some() {
                     eprintln!(
@@ -1767,6 +1786,49 @@ impl CoolbarMachine {
         }
     }
 
+    /// Firmware text measure for native dispatch sid 0x97: count the lines a
+    /// NUL-terminated GBK string occupies when greedily wrapped at `wrap`
+    /// pixels.  Fullwidth (GBK lead byte) glyphs render 16px wide and ASCII
+    /// glyphs 8px, matching the shared-template measure conventions used by
+    /// the UCS2 paths; an explicit `\n` forces a break.
+    fn measure_gbk_text_lines(&mut self, text: u32, wrap: u32) -> u32 {
+        if text == 0 {
+            return 0;
+        }
+        let wrap = if wrap == 0 { u32::MAX } else { wrap };
+        let mut lines = 1u32;
+        let mut current = 0u32;
+        let mut cursor = text;
+        for _ in 0..0x1_0000 {
+            let byte = self.memory.r8(cursor);
+            if byte == 0 {
+                break;
+            }
+            cursor += 1;
+            if byte == b'\n' {
+                lines += 1;
+                current = 0;
+                continue;
+            }
+            if byte == b'\r' || byte < 0x20 {
+                continue;
+            }
+            let width = if byte >= 0x81 {
+                cursor += 1;
+                16
+            } else {
+                8
+            };
+            if current > 0 && current + width > wrap {
+                lines += 1;
+                current = width;
+            } else {
+                current += width;
+            }
+        }
+        lines
+    }
+
     fn handle_native_interface_request(&mut self, argument: u32) {
         if argument == 0 {
             return;
@@ -1802,7 +1864,7 @@ impl CoolbarMachine {
                 }
                 Some(self.native_property_info)
             }
-            0x3f8 | 0x418 | 0x453 => Some(
+            0x3f8 | 0x418 | 0x453 | 0x97 => Some(
                 self.native_scalar_results
                     .get(&handle)
                     .copied()
