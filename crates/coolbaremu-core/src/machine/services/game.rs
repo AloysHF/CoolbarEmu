@@ -2112,8 +2112,44 @@ impl CoolbarMachine {
                 self.register(2),
                 self.register(3),
             ))),
+            37 => {
+                let result = self.storage_date();
+                self.set_result(result);
+            }
             _ => self.set_result(0),
         }
+    }
+
+    /// Firmware `Storage_Date(char *name, u8 *buffer, int size, bool write,
+    /// bool)`: the named save store behind the game's room-layout snapshot.
+    /// Reads only report success once a snapshot exists, so a fresh device
+    /// still lets the guest build its defaults.
+    fn storage_date(&mut self) -> u32 {
+        let name = self.read_c_string(self.register(0), 256);
+        if name.is_empty() {
+            return 0;
+        }
+        let path = format!("storage/{name}");
+        let buffer = self.register(1);
+        let size = self.register(2) as usize;
+        if self.register(3) == 0 {
+            if buffer == 0 || size == 0 {
+                return 0;
+            }
+            let Some(data) = self.memory.read_bytes(buffer, size) else {
+                return 0;
+            };
+            return u32::from(self.virtual_fs.write_file(&path, data));
+        }
+        let Some(mut data) = self.virtual_fs.read_file(&path) else {
+            return 0;
+        };
+        let found = !data.is_empty();
+        if buffer != 0 && size != 0 {
+            data.resize(size, 0);
+            self.memory.write_bytes(buffer, &data);
+        }
+        u32::from(found)
     }
 }
 
@@ -2299,6 +2335,67 @@ mod tests {
                 assert_eq!(machine.memory.r32(cursor), 9);
             }
         }
+    }
+
+    #[test]
+    fn storage_date_round_trips_named_snapshots_for_room_reset() {
+        use crate::machine::CoolbarMachine;
+        use armv4t_emu::Memory;
+
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        let name = machine.allocate(16);
+        let buffer = machine.allocate(8);
+
+        machine.set_user_register(0, name);
+        machine.set_user_register(1, buffer);
+        machine.set_user_register(2, 4);
+        machine.set_user_register(3, 0);
+        machine.memory.write_bytes(name, b"ghoulStorage\0");
+        machine
+            .memory
+            .write_bytes(buffer, &[0x11, 0x22, 0x33, 0x44]);
+        machine.handle_game_util_service(37);
+        assert_eq!(machine.register(0), 1);
+        assert_eq!(
+            machine.virtual_fs.file("storage/ghoulstorage"),
+            Some(&[0x11, 0x22, 0x33, 0x44][..])
+        );
+
+        machine.memory.write_bytes(buffer, &[0; 8]);
+        machine.set_user_register(0, name);
+        machine.set_user_register(1, buffer);
+        machine.set_user_register(2, 8);
+        machine.set_user_register(3, 1);
+        machine.handle_game_util_service(37);
+        assert_eq!(machine.register(0), 1);
+        let restored: Vec<u8> = (0..8).map(|i| machine.memory.r8(buffer + i)).collect();
+        assert_eq!(restored, [0x11, 0x22, 0x33, 0x44, 0, 0, 0, 0]);
+
+        machine.memory.write_bytes(name, b"ghoulContinue\0");
+        machine.memory.write_bytes(buffer, &[0x55; 8]);
+        machine.set_user_register(0, name);
+        machine.set_user_register(1, buffer);
+        machine.set_user_register(2, 8);
+        machine.set_user_register(3, 1);
+        machine.handle_game_util_service(37);
+        assert_eq!(machine.register(0), 0);
+        let untouched: Vec<u8> = (0..8).map(|i| machine.memory.r8(buffer + i)).collect();
+        assert_eq!(untouched, [0x55; 8]);
+
+        machine.memory.write_bytes(name, &[0]);
+        machine.set_user_register(0, name);
+        machine.set_user_register(1, buffer);
+        machine.set_user_register(2, 8);
+        machine.set_user_register(3, 1);
+        machine.handle_game_util_service(37);
+        assert_eq!(machine.register(0), 0);
+        machine.memory.write_bytes(name, b"ghoulStorage\0");
+        machine.set_user_register(0, name);
+        machine.set_user_register(1, 0);
+        machine.set_user_register(2, 4);
+        machine.set_user_register(3, 0);
+        machine.handle_game_util_service(37);
+        assert_eq!(machine.register(0), 0);
     }
 
     #[test]
