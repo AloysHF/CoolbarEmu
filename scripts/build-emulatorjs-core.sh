@@ -197,8 +197,9 @@ those files zipped into an `EJS_biosUrl` archive: EmulatorJS extracts the
 archive next to the content file, which is where the core looks for sidecars
 in the browser. Keep the companion files at the archive root.
 
-The optional `coolbaremu_orientation.csv` profile can also be supplied in that
-archive to register landscape titles that are not in the built-in profile.
+The optional `coolbaremu_orientation.csv` profile is a core support file, so
+it must keep the fixed layout below the wasm filesystem root:
+`coolbaremu/coolbaremu_orientation.csv` inside that archive.
 EOF
 
 ZIP="$OUT_DIR/../coolbaremu-emulatorjs.zip"

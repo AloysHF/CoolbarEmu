@@ -12,7 +12,7 @@ use coolbaremu_core::{
     AUDIO_SAMPLE_RATE, DEFAULT_INSTRUCTION_LIMIT, GUEST_FRAME_RATE, SERIALIZED_SIZE,
 };
 use std::ffi::{c_char, c_void, CStr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -40,8 +40,9 @@ const PACING_FPS: u32 = 60;
 /// tick, so the constant flow averages to the same 44.1 kHz stream.
 const PACING_SAMPLES_PER_RUN: usize = (AUDIO_SAMPLE_RATE / PACING_FPS) as usize;
 const PERFORMANCE_LEVEL: u32 = 3;
-/// Optional user orientation overrides looked up in the frontend system
-/// directory, loaded once per process before content loading.
+/// Optional user orientation overrides looked up below the frontend system
+/// directory at `<system>/coolbaremu/coolbaremu_orientation.csv`.
+const ORIENTATION_PROFILE_DIR: &str = "coolbaremu";
 const ORIENTATION_PROFILE_FILE: &str = "coolbaremu_orientation.csv";
 
 /// Converts frontend frames into guest screen ticks.
@@ -270,7 +271,7 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
 
         // User orientation entries must be registered before the machine is
         // created, which is where the automatic profile is resolved.
-        load_user_orientation_profile(Path::new(path));
+        load_user_orientation_profile();
 
         match load_machine(Path::new(path)) {
             Ok((archive, mut machine)) => {
@@ -398,53 +399,72 @@ fn load_machine(path: &Path) -> anyhow::Result<(CbeArchive, CoolbarMachine)> {
     Ok((archive, machine))
 }
 
+/// Return the entry of `dir` whose name equals `name` exactly.
+///
+/// Directory entries are compared instead of opening `dir/name` directly
+/// because Windows would match names that differ only in case.
+fn exact_child(dir: &Path, name: &str) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .find(|entry| entry.file_name().to_str() == Some(name))
+        .map(|entry| entry.path())
+}
+
+/// Resolve the optional orientation profile below the frontend system directory.
+fn orientation_profile_path(system_dir: &Path) -> Option<PathBuf> {
+    exact_child(system_dir, ORIENTATION_PROFILE_DIR)
+        .filter(|path| path.is_dir())
+        .and_then(|core_dir| exact_child(&core_dir, ORIENTATION_PROFILE_FILE))
+        .filter(|path| path.is_file())
+}
+
 /// Load the optional user orientation profile once per process.
 ///
-/// The profile is normally `<system_dir>/coolbaremu_orientation.csv`. Browser
-/// frontends cannot populate that directory, so on Emscripten a CSV extracted
-/// beside the content file is accepted too; EmulatorJS unpacks an
-/// `EJS_biosUrl` archive there. A missing or invalid file is non-fatal because
-/// the built-in profile still applies.
-fn load_user_orientation_profile(content_path: &Path) {
+/// The profile is read from the fixed frontend support layout
+/// `<system_dir>/coolbaremu/coolbaremu_orientation.csv`. Browser frontends
+/// expose the wasm filesystem root as the system directory, so the same
+/// archive path `coolbaremu/coolbaremu_orientation.csv` applies there. A
+/// missing or invalid file is non-fatal because the built-in profile still
+/// applies.
+fn load_user_orientation_profile() {
     static LOADED: AtomicBool = AtomicBool::new(false);
     if LOADED.swap(true, Ordering::Relaxed) {
         return;
     }
-    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     let mut system_dir: *const c_char = ptr::null();
     let ok = callbacks::environment(
         RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY,
         &mut system_dir as *mut _ as *mut c_void,
     );
-    if ok && !system_dir.is_null() {
-        if let Ok(dir) = unsafe { CStr::from_ptr(system_dir) }.to_str() {
-            if !dir.is_empty() {
-                candidates.push(Path::new(dir).join(ORIENTATION_PROFILE_FILE));
-            }
-        }
+    if !ok || system_dir.is_null() {
+        log::info!("No user orientation profile loaded (no system directory)");
+        return;
     }
-    #[cfg(target_os = "emscripten")]
-    if let Some(dir) = content_path.parent() {
-        candidates.push(dir.join(ORIENTATION_PROFILE_FILE));
+    let Ok(dir) = unsafe { CStr::from_ptr(system_dir) }.to_str() else {
+        log::info!("No user orientation profile loaded (system directory is not UTF-8)");
+        return;
+    };
+    if dir.is_empty() {
+        log::info!("No user orientation profile loaded (empty system directory)");
+        return;
     }
-    #[cfg(not(target_os = "emscripten"))]
-    let _ = content_path;
-    for path in candidates {
-        if !path.is_file() {
-            continue;
+    let expected = Path::new(dir)
+        .join(ORIENTATION_PROFILE_DIR)
+        .join(ORIENTATION_PROFILE_FILE);
+    let Some(path) = orientation_profile_path(Path::new(dir)) else {
+        log::info!("No user orientation profile at {}", expected.display());
+        return;
+    };
+    match load_orientation_overrides(&path) {
+        Ok(count) => {
+            log::info!(
+                "Loaded {count} user orientation entries from {}",
+                path.display()
+            );
         }
-        match load_orientation_overrides(&path) {
-            Ok(count) => {
-                log::info!(
-                    "Loaded {count} user orientation entries from {}",
-                    path.display()
-                );
-                return;
-            }
-            Err(error) => log::info!("Ignoring orientation profile {}: {error:#}", path.display()),
-        }
+        Err(error) => log::info!("Ignoring orientation profile {}: {error:#}", path.display()),
     }
-    log::info!("No user orientation profile loaded");
 }
 
 fn input_descriptors() -> [retro_input_descriptor; 15] {
@@ -1119,6 +1139,49 @@ mod tests {
         );
         assert_eq!(av.timing.fps, PACING_FPS as f64);
         assert_eq!(av.timing.sample_rate, AUDIO_SAMPLE_RATE as f64);
+    }
+
+    #[test]
+    fn orientation_profile_requires_the_exact_case_sensitive_layout() {
+        let root = std::env::temp_dir().join(format!(
+            "coolbaremu-libretro-profile-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+
+        // Windows resolves paths case-insensitively, so only an exact entry
+        // listing match may satisfy the fixed layout.
+        let wrong_dir = root.join("wrong-dir");
+        std::fs::create_dir_all(wrong_dir.join(ORIENTATION_PROFILE_DIR.to_uppercase())).unwrap();
+        std::fs::write(
+            wrong_dir
+                .join(ORIENTATION_PROFILE_DIR.to_uppercase())
+                .join(ORIENTATION_PROFILE_FILE),
+            "",
+        )
+        .unwrap();
+        assert_eq!(orientation_profile_path(&wrong_dir), None);
+
+        let wrong_file = root.join("wrong-file");
+        std::fs::create_dir_all(wrong_file.join(ORIENTATION_PROFILE_DIR)).unwrap();
+        std::fs::write(
+            wrong_file
+                .join(ORIENTATION_PROFILE_DIR)
+                .join(ORIENTATION_PROFILE_FILE.to_uppercase()),
+            "",
+        )
+        .unwrap();
+        assert_eq!(orientation_profile_path(&wrong_file), None);
+
+        let expected = root.join("exact");
+        std::fs::create_dir_all(expected.join(ORIENTATION_PROFILE_DIR)).unwrap();
+        let profile = expected
+            .join(ORIENTATION_PROFILE_DIR)
+            .join(ORIENTATION_PROFILE_FILE);
+        std::fs::write(&profile, "282fe73d,1143317,landscape\n").unwrap();
+        assert_eq!(orientation_profile_path(&expected), Some(profile));
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     /// Regression for issue #43: the guest must advance its 10 Hz screen

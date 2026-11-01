@@ -21,6 +21,30 @@ use standalone::input::{KeyboardMapper, RemapSpec};
 use standalone::scaler::{DisplayScaler, ScaleFilter};
 use standalone::window_backend::{create_window, WindowBackendArg};
 
+/// Optional user orientation profile looked up below the system directory.
+const ORIENTATION_PROFILE_DIR: &str = "coolbaremu";
+const ORIENTATION_PROFILE_FILE: &str = "coolbaremu_orientation.csv";
+
+/// Return the entry of `dir` whose name equals `name` exactly.
+///
+/// Directory entries are compared instead of opening `dir/name` directly
+/// because Windows would match names that differ only in case.
+fn exact_child(dir: &Path, name: &str) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .find(|entry| entry.file_name().to_str() == Some(name))
+        .map(|entry| entry.path())
+}
+
+/// Resolve `<system_dir>/coolbaremu/coolbaremu_orientation.csv`.
+fn orientation_profile_path(system_dir: &Path) -> Option<PathBuf> {
+    exact_child(system_dir, ORIENTATION_PROFILE_DIR)
+        .filter(|path| path.is_dir())
+        .and_then(|core_dir| exact_child(&core_dir, ORIENTATION_PROFILE_FILE))
+        .filter(|path| path.is_file())
+}
+
 /// Resolve the initial window size as an integer multiple of the presented
 /// active guest display.
 fn resolve_window_size(display_width: u32, display_height: u32, scale: u32) -> (usize, usize) {
@@ -84,6 +108,10 @@ struct Cli {
     #[arg(value_name = "GAME_PATH")]
     file: PathBuf,
 
+    /// System directory that holds coolbaremu/coolbaremu_orientation.csv.
+    #[arg(long, value_name = "DIR", default_value = "system")]
+    system_dir: PathBuf,
+
     /// List packaged resources and exit.
     #[arg(short, long)]
     list: bool,
@@ -101,11 +129,6 @@ struct Cli {
     /// games; explicit values override detection).
     #[arg(long, value_enum, default_value_t = OrientationArg::Auto)]
     orientation: OrientationArg,
-
-    /// Load extra display-orientation entries from a CSV file
-    /// (`crc32,length,orientation` per line) before starting.
-    #[arg(long, value_name = "FILE")]
-    orientation_profile: Option<PathBuf>,
 
     /// Remap a guest key in GUEST_KEY:KEY format.
     #[arg(long = "remap", value_name = "GUEST_KEY:KEY")]
@@ -183,8 +206,8 @@ fn main() -> Result<()> {
     let archive = CbeArchive::load(&cli.file)
         .with_context(|| format!("failed to load CBE file: {}", cli.file.display()))?;
     info!("{}", archive.summary());
-    if let Some(path) = &cli.orientation_profile {
-        let count = load_orientation_overrides(path)
+    if let Some(path) = orientation_profile_path(&cli.system_dir) {
+        let count = load_orientation_overrides(&path)
             .with_context(|| format!("failed to load orientation profile: {}", path.display()))?;
         info!(
             "Loaded {count} display-orientation entries from {}",
@@ -561,21 +584,13 @@ mod tests {
     }
 
     #[test]
-    fn orientation_profile_defaults_to_none_and_parses_a_path() {
+    fn system_dir_defaults_to_system_and_parses_a_path() {
         let default = Cli::try_parse_from(["coolbaremu", "game.CBE"]).unwrap();
-        assert_eq!(default.orientation_profile, None);
+        assert_eq!(default.system_dir, PathBuf::from("system"));
 
-        let cli = Cli::try_parse_from([
-            "coolbaremu",
-            "game.CBE",
-            "--orientation-profile",
-            "orientations.csv",
-        ])
-        .unwrap();
-        assert_eq!(
-            cli.orientation_profile,
-            Some(PathBuf::from("orientations.csv"))
-        );
+        let cli =
+            Cli::try_parse_from(["coolbaremu", "game.CBE", "--system-dir", "firmware"]).unwrap();
+        assert_eq!(cli.system_dir, PathBuf::from("firmware"));
     }
 
     #[test]

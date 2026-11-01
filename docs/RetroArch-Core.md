@@ -101,11 +101,14 @@ on top of it and turns profiled games sideways again. Pointer input is mapped
 back through the active orientation, so taps stay correct in every mode.
 
 Additional titles can be covered without a core update by placing a
-`coolbaremu_orientation.csv` file in RetroArch's **system directory** (Settings >
-Directory > System/BIOS). The format is one `crc32,length,orientation` entry
-per line (`crc32` hex, `length` decimal bytes, `orientation` one of
-`landscape`, `portrait`), matching the standalone `--orientation-profile`
-file; user entries win over built-in ones and are loaded once per run.
+`coolbaremu_orientation.csv` file at
+`<system>/coolbaremu/coolbaremu_orientation.csv`, where `<system>` is
+RetroArch's **system directory** (Settings > Directory > System/BIOS). The
+directory name and file name are matched case-sensitively; there is no search
+outside that path. The format is one `crc32,length,orientation` entry per line
+(`crc32` hex, `length` decimal bytes, `orientation` one of `landscape`,
+`portrait`), matching the standalone layout; user entries win over built-in
+ones and are loaded once per run.
 
 ## Touch Input
 

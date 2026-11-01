@@ -67,7 +67,8 @@ signatures and configuration keys are not supported.
 - **Automatic landscape rotation** — games packaged for the original phone's
   rotated landscape LCD are rotated using the active surface dimensions, with a
   landscape default window matching the frame, a `--orientation` override
-  for manual control, and a `--orientation-profile` file for titles outside the
+  for manual control, and an optional
+  `system/coolbaremu/coolbaremu_orientation.csv` profile for titles outside the
   built-in profile
 - **Display scaling** — nearest, bilinear, bicubic, and xbrz filters with
   aspect-ratio-preserving centering (`--filter`)

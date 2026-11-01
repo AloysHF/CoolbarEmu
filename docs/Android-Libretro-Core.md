@@ -52,6 +52,9 @@ virtual-controller preset, firmware requirements and orientation.
 
 Rules the core follows for any Android host:
 
+- The only optional support file is `coolbaremu/coolbaremu_orientation.csv`
+  below the frontend system directory. The path components and file name are
+  matched case-sensitively, with no search outside that location.
 - Applications in this core have no battery-backed save RAM, so there is no
   save file to place next to the content; libretro save states are handled by
   the frontend.
