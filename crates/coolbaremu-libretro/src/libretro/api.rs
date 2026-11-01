@@ -238,11 +238,11 @@ pub extern "C" fn retro_get_system_av_info(info: *mut retro_system_av_info) {
 pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
     guard(false, || unsafe {
         if info.is_null() {
-            return fail("Coolbar: the frontend passed no content information.");
+            return fail(MISSING_CONTENT_PATH);
         }
         let game_info = &*info;
         if game_info.path.is_null() {
-            return fail("Coolbar: the frontend passed no content path.");
+            return fail(MISSING_CONTENT_PATH);
         }
         let path = match CStr::from_ptr(game_info.path).to_str() {
             Ok(path) => path,
@@ -305,6 +305,9 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
         }
     })
 }
+
+const MISSING_CONTENT_PATH: &str =
+    "The frontend passed no content path; this core loads content from a file path only.";
 
 /// Report a load failure to both the log and the frontend's on-screen message.
 fn fail(message: &str) -> bool {
