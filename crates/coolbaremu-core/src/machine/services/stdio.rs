@@ -156,22 +156,67 @@ impl CoolbarMachine {
         if address == 0 {
             return String::new();
         }
-        // Big-endian images store guest strings as UCS2-BE (`00 XX` per
-        // ASCII char); little-endian images store them as single-byte GBK.
-        // Keying on byte[1] alone misreads every UCS2-BE path as ASCII and
-        // yields an empty string, so the machine endianness decides.
-        if !self.memory.is_big_endian() {
-            return self.read_gbk_string(address, 512);
+        // Guest paths come in three encodings across the corpus: UCS2-BE
+        // (`00 XX` per ASCII char, big-endian images), single-byte GBK
+        // (most little-endian images) and UCS2-LE (`XX 00`, some
+        // little-endian installers).  Machine endianness alone cannot
+        // decide: the 僵尸先生 installer is little-endian yet hands the
+        // firmware UCS2-LE paths, and reading those as single-byte stopped
+        // at the NUL after the leading "." so every open and mkdir targeted
+        // "." and the installer never wrote a file.
+        if self.memory.is_big_endian() {
+            return self.read_ucs2_be_string(address, 256);
         }
+        if self.path_units_are_ucs2_le(address) {
+            return self.read_ucs2_le_string(address, 256);
+        }
+        self.read_gbk_string(address, 512)
+    }
+
+    /// UCS2-BE text: one big-endian unit per character.
+    fn read_ucs2_be_string(&mut self, address: u32, limit: u32) -> String {
         let mut units = Vec::new();
-        for offset in 0..256u32 {
-            let unit = self.memory.r16(address + offset * 2);
+        for offset in 0..limit {
+            let unit = self.memory.r16(address.wrapping_add(offset * 2));
             if unit == 0 {
                 break;
             }
             units.push(unit);
         }
         String::from_utf16_lossy(&units)
+    }
+
+    /// UCS2-LE text: one little-endian unit per character.
+    fn read_ucs2_le_string(&mut self, address: u32, limit: u32) -> String {
+        let mut units = Vec::new();
+        for offset in 0..limit {
+            let unit = self.memory.r16(address.wrapping_add(offset * 2));
+            if unit == 0 {
+                break;
+            }
+            units.push(unit);
+        }
+        String::from_utf16_lossy(&units)
+    }
+
+    /// True when the guest string at `address` is UCS2-LE rather than
+    /// single-byte: every low byte carries a character and every high byte
+    /// is zero.  A one-character path decodes the same either way, so only
+    /// multi-character strings have to be classified.
+    fn path_units_are_ucs2_le(&mut self, address: u32) -> bool {
+        let mut characters = 0u32;
+        for index in 0..8u32 {
+            let low = self.memory.r8(address.wrapping_add(index * 2));
+            let high = self.memory.r8(address.wrapping_add(index * 2 + 1));
+            if low == 0 {
+                break;
+            }
+            if high != 0 {
+                return false;
+            }
+            characters += 1;
+        }
+        characters >= 2
     }
 
     pub(crate) fn handle_stdio_service(&mut self, index: u32) {
