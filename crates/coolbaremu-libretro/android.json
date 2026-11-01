@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "core": "coolbaremu",
+  "so_name": "libcoolbaremu.so",
+  "system": "coolbar",
+  "display_name": {
+    "en": "Coolbar",
+    "zh": "酷吧"
+  },
+  "short_name": "Coolbar",
+  "manufacturer": "Shanghai Coolbar",
+  "supported_extensions": ["cbe"],
+  "save_state_format": 1,
+  "firmware": [],
+  "input": {
+    "preset": "dpad-ab-lr-select"
+  },
+  "video": {
+    "orientation": "portrait",
+    "pixel_format": "xrgb8888"
+  },
+  "notes": {
+    "en": "Loads .cbe Coolbar applications. Uses a phone keypad: D-pad, Confirm, soft keys and Select for the number layer. Most titles present a 240x400 portrait screen; landscape titles rotate automatically.",
+    "zh": "加载 .cbe 酷吧应用。操作对应手机键盘：方向键、确认键、左右软键，按住 Select 切换数字层。多数游戏为 240x400 竖屏，横屏游戏会自动旋转。"
+  }
+}

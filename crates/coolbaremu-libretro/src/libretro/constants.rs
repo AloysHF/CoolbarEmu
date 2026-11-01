@@ -62,6 +62,8 @@ pub const RETRO_DEVICE_ID_POINTER_PRESSED: u32 = 2;
 pub const RETRO_DEVICE_ID_POINTER_RELEASED: u32 = 3;
 
 /// Environment callback commands used by this core.
+/// Show a transient on-screen message (has the EXPERIMENTAL flag set).
+pub const RETRO_ENVIRONMENT_SET_MESSAGE: u32 = 1 | 0x1_0000;
 pub const RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL: u32 = 8;
 pub const RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: u32 = 10;
 pub const RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS: u32 = 11;

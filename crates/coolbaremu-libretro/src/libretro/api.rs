@@ -105,6 +105,26 @@ fn display_size() -> (u32, u32) {
     }
 }
 
+/// Run `body`, turning a panic into `fallback`.
+///
+/// A panic must never unwind across the C ABI: the frontend is a host process
+/// (RetroArch, a mobile app) that would be torn down with us. Swallowing the
+/// panic keeps the session recoverable and leaves a log entry behind.
+fn guard<T>(fallback: T, body: impl FnOnce() -> T) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(value) => value,
+        Err(payload) => {
+            let detail = payload
+                .downcast_ref::<&str>()
+                .map(|text| (*text).to_owned())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".to_owned());
+            log::error!("CoolbarEmu libretro entry point panicked: {detail}");
+            fallback
+        }
+    }
+}
+
 // ============================================================
 // Callback registration
 // ============================================================
@@ -158,50 +178,56 @@ pub extern "C" fn retro_api_version() -> u32 {
 
 #[no_mangle]
 pub extern "C" fn retro_init() {
-    callbacks::init_log();
-    super::logger::init();
-    log::info!("CoolbarEmu libretro core initialized");
+    guard((), || {
+        callbacks::init_log();
+        super::logger::init();
+        log::info!("CoolbarEmu libretro core initialized");
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn retro_deinit() {
-    unsafe {
-        EMULATOR = None;
-    }
-    log::info!("CoolbarEmu libretro core deinitialized");
+    guard((), || {
+        unsafe {
+            EMULATOR = None;
+        }
+        log::info!("CoolbarEmu libretro core deinitialized");
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn retro_get_system_info(info: *mut retro_system_info) {
-    unsafe {
+    guard((), || unsafe {
         (*info) = retro_system_info {
             library_name: c"CoolbarEmu".as_ptr(),
-            library_version: c"0.1.0".as_ptr(),
+            library_version: concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr() as *const c_char,
             valid_extensions: c"cbe".as_ptr(),
             need_fullpath: true,
             block_extract: false,
         };
-    }
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn retro_get_system_av_info(info: *mut retro_system_av_info) {
-    let (base_width, base_height) = display_size();
-    unsafe {
-        (*info) = retro_system_av_info {
-            geometry: retro_game_geometry {
-                base_width,
-                base_height,
-                max_width: MAX_DISPLAY_WIDTH,
-                max_height: MAX_DISPLAY_HEIGHT,
-                aspect_ratio: base_width as f32 / base_height as f32,
-            },
-            timing: retro_system_timing {
-                fps: PACING_FPS as f64,
-                sample_rate: AUDIO_SAMPLE_RATE as f64,
-            },
-        };
-    }
+    guard((), || {
+        let (base_width, base_height) = display_size();
+        unsafe {
+            (*info) = retro_system_av_info {
+                geometry: retro_game_geometry {
+                    base_width,
+                    base_height,
+                    max_width: MAX_DISPLAY_WIDTH,
+                    max_height: MAX_DISPLAY_HEIGHT,
+                    aspect_ratio: base_width as f32 / base_height as f32,
+                },
+                timing: retro_system_timing {
+                    fps: PACING_FPS as f64,
+                    sample_rate: AUDIO_SAMPLE_RATE as f64,
+                },
+            };
+        }
+    })
 }
 
 // ============================================================
@@ -210,21 +236,20 @@ pub extern "C" fn retro_get_system_av_info(info: *mut retro_system_av_info) {
 
 #[no_mangle]
 pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
-    unsafe {
+    guard(false, || unsafe {
         if info.is_null() {
-            log::error!("Game info is null");
-            return false;
+            return fail(MISSING_CONTENT_PATH);
         }
         let game_info = &*info;
         if game_info.path.is_null() {
-            log::error!("Game path is null");
-            return false;
+            return fail(MISSING_CONTENT_PATH);
         }
         let path = match CStr::from_ptr(game_info.path).to_str() {
             Ok(path) => path,
             Err(error) => {
-                log::error!("Invalid game path: {error}");
-                return false;
+                return fail(&format!(
+                    "Coolbar: the content path is not valid UTF-8 ({error})."
+                ));
             }
         };
 
@@ -233,8 +258,7 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
             RETRO_ENVIRONMENT_SET_PIXEL_FORMAT,
             &pixel_format as *const _ as *mut c_void,
         ) {
-            log::error!("Failed to set pixel format");
-            return false;
+            return fail("Coolbar: this frontend does not support XRGB8888 video.");
         }
 
         register_input_descriptors();
@@ -251,8 +275,9 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
         match load_machine(Path::new(path)) {
             Ok((archive, mut machine)) => {
                 if let Err(error) = machine.boot(DEFAULT_INSTRUCTION_LIMIT) {
-                    log::error!("Failed to boot CBE application: {error:#}");
-                    return false;
+                    return fail(&format!(
+                        "Coolbar: failed to boot this application.\n{error:#}"
+                    ));
                 }
                 log::info!("Game loaded: {path}");
                 let content_crc32 = crc32fast::hash(archive.bytes());
@@ -274,12 +299,21 @@ pub extern "C" fn retro_load_game(info: *const retro_game_info) -> bool {
                 }
                 true
             }
-            Err(error) => {
-                log::error!("Failed to load game: {error:#}");
-                false
-            }
+            Err(error) => fail(&format!(
+                "Coolbar: failed to load this game.\n{error:#}\n\nSupported content: a .cbe application file."
+            )),
         }
-    }
+    })
+}
+
+const MISSING_CONTENT_PATH: &str =
+    "The frontend passed no content path; this core loads content from a file path only.";
+
+/// Report a load failure to both the log and the frontend's on-screen message.
+fn fail(message: &str) -> bool {
+    log::error!("{message}");
+    callbacks::show_message(message, 240);
+    false
 }
 
 #[no_mangle]
@@ -293,15 +327,17 @@ pub extern "C" fn retro_load_game_special(
 
 #[no_mangle]
 pub extern "C" fn retro_unload_game() {
-    unsafe {
-        EMULATOR = None;
-    }
-    log::info!("Game unloaded");
+    guard((), || {
+        unsafe {
+            EMULATOR = None;
+        }
+        log::info!("Game unloaded");
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn retro_run() {
-    unsafe {
+    guard((), || unsafe {
         let Some(emulator) = EMULATOR.as_mut() else {
             log::warn!("retro_run called before loading a game");
             return;
@@ -353,7 +389,7 @@ pub extern "C" fn retro_run() {
         let mut samples = emulator.machine.take_audio_samples(PACING_SAMPLES_PER_RUN);
         samples.resize(PACING_SAMPLES_PER_RUN * 2, 0);
         callbacks::audio_sample_batch(samples.as_ptr(), PACING_SAMPLES_PER_RUN);
-    }
+    })
 }
 
 fn load_machine(path: &Path) -> anyhow::Result<(CbeArchive, CoolbarMachine)> {
@@ -804,7 +840,7 @@ fn update_pointer(emulator: &mut Emulator) {
 
 #[no_mangle]
 pub extern "C" fn retro_reset() {
-    unsafe {
+    guard((), || unsafe {
         let Some(emulator) = EMULATOR.as_mut() else {
             log::warn!("retro_reset called before loading a game");
             return;
@@ -820,7 +856,7 @@ pub extern "C" fn retro_reset() {
             }
             Err(error) => log::error!("Failed to reset game: {error:#}"),
         }
-    }
+    })
 }
 
 #[no_mangle]
@@ -829,43 +865,77 @@ pub extern "C" fn retro_get_region() -> u32 {
 }
 
 // ============================================================
-// Save states (implemented in a later milestone)
+// Save states
 // ============================================================
+
+/// Save-state envelope: 4-byte magic followed by a little-endian format
+/// version. Bump the version whenever the core's state layout changes so stale
+/// states are rejected instead of silently restoring into the wrong fields.
+const SAVE_STATE_MAGIC: [u8; 4] = *b"CBAR";
+const SAVE_STATE_FORMAT: u32 = 1;
+const SAVE_STATE_HEADER_LEN: usize = SAVE_STATE_MAGIC.len() + std::mem::size_of::<u32>();
+
+fn write_save_state_header(buffer: &mut [u8]) {
+    buffer[..SAVE_STATE_MAGIC.len()].copy_from_slice(&SAVE_STATE_MAGIC);
+    buffer[SAVE_STATE_MAGIC.len()..SAVE_STATE_HEADER_LEN]
+        .copy_from_slice(&SAVE_STATE_FORMAT.to_le_bytes());
+}
+
+/// Returns `Some(payload)` when the envelope matches this build's format.
+fn read_save_state_payload(data: &[u8]) -> Option<&[u8]> {
+    if data.len() < SAVE_STATE_HEADER_LEN || data[..SAVE_STATE_MAGIC.len()] != SAVE_STATE_MAGIC {
+        return None;
+    }
+    let version = u32::from_le_bytes(
+        data[SAVE_STATE_MAGIC.len()..SAVE_STATE_HEADER_LEN]
+            .try_into()
+            .ok()?,
+    );
+    (version == SAVE_STATE_FORMAT).then(|| &data[SAVE_STATE_HEADER_LEN..])
+}
 
 #[no_mangle]
 pub extern "C" fn retro_serialize_size() -> usize {
-    unsafe {
+    guard(0, || unsafe {
         if EMULATOR.is_none() {
             0
         } else {
-            SERIALIZED_SIZE
+            SERIALIZED_SIZE + SAVE_STATE_HEADER_LEN
         }
-    }
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn retro_serialize(data: *mut c_void, size: usize) -> bool {
-    unsafe {
+    guard(false, || unsafe {
         let Some(emulator) = EMULATOR.as_ref() else {
             return false;
         };
-        if data.is_null() || size < SERIALIZED_SIZE {
+        if data.is_null() || size < SERIALIZED_SIZE + SAVE_STATE_HEADER_LEN {
             return false;
         }
-        let buffer = std::slice::from_raw_parts_mut(data as *mut u8, SERIALIZED_SIZE);
-        match encode_machine(&emulator.machine, emulator.content_crc32, buffer) {
+        let buffer = std::slice::from_raw_parts_mut(
+            data as *mut u8,
+            SAVE_STATE_HEADER_LEN + SERIALIZED_SIZE,
+        );
+        write_save_state_header(buffer);
+        match encode_machine(
+            &emulator.machine,
+            emulator.content_crc32,
+            &mut buffer[SAVE_STATE_HEADER_LEN..],
+        ) {
             Ok(()) => true,
             Err(error) => {
                 log::error!("Failed to serialize game state: {error:#}");
                 false
             }
         }
-    }
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn retro_unserialize(data: *const c_void, size: usize) -> bool {
-    unsafe {
+    guard(false, || unsafe {
         let Some(emulator) = EMULATOR.as_mut() else {
             return false;
         };
@@ -873,7 +943,11 @@ pub extern "C" fn retro_unserialize(data: *const c_void, size: usize) -> bool {
             return false;
         }
         let buffer = std::slice::from_raw_parts(data as *const u8, size);
-        match decode_machine(buffer, emulator.content_crc32) {
+        let Some(payload) = read_save_state_payload(buffer) else {
+            log::warn!("Rejecting save state with an unknown format or version");
+            return false;
+        };
+        match decode_machine(payload, emulator.content_crc32) {
             Ok(machine) => {
                 emulator.machine = machine;
                 emulator.stopped = false;
@@ -889,7 +963,7 @@ pub extern "C" fn retro_unserialize(data: *const c_void, size: usize) -> bool {
                 false
             }
         }
-    }
+    })
 }
 
 // ============================================================
@@ -908,7 +982,7 @@ pub extern "C" fn retro_cheat_set(_index: u32, _enabled: bool, _code: *const c_c
 
 #[no_mangle]
 pub extern "C" fn retro_get_memory_data(id: u32) -> *mut c_void {
-    unsafe {
+    guard(ptr::null_mut(), || unsafe {
         let Some(emulator) = EMULATOR.as_mut() else {
             return ptr::null_mut();
         };
@@ -925,12 +999,12 @@ pub extern "C" fn retro_get_memory_data(id: u32) -> *mut c_void {
                 .cast(),
             _ => ptr::null_mut(),
         }
-    }
+    })
 }
 
 #[no_mangle]
 pub extern "C" fn retro_get_memory_size(id: u32) -> usize {
-    unsafe {
+    guard(0, || unsafe {
         if EMULATOR.is_none() {
             return 0;
         }
@@ -939,7 +1013,7 @@ pub extern "C" fn retro_get_memory_size(id: u32) -> usize {
             RETRO_MEMORY_VIDEO_RAM => CoolbarMachine::video_ram_size(),
             _ => 0,
         }
-    }
+    })
 }
 
 #[cfg(test)]
@@ -1019,6 +1093,12 @@ mod tests {
                 .to_str()
                 .unwrap(),
             "cbe"
+        );
+        assert_eq!(
+            unsafe { CStr::from_ptr(info.library_version) }
+                .to_str()
+                .unwrap(),
+            env!("CARGO_PKG_VERSION")
         );
         assert!(info.need_fullpath);
         assert!(!info.block_extract);
@@ -1411,6 +1491,45 @@ mod tests {
     }
 
     #[test]
+    fn save_state_envelope_rejects_other_versions() {
+        let mut buffer = [0_u8; SAVE_STATE_HEADER_LEN + 3];
+        buffer[SAVE_STATE_HEADER_LEN..].copy_from_slice(&[1, 2, 3]);
+        write_save_state_header(&mut buffer);
+        assert_eq!(
+            read_save_state_payload(&buffer),
+            Some(&[1_u8, 2, 3][..]),
+            "a freshly written envelope must be accepted"
+        );
+
+        buffer[SAVE_STATE_MAGIC.len()] = 0xFF;
+        assert_eq!(
+            read_save_state_payload(&buffer),
+            None,
+            "a state from another format version must be rejected"
+        );
+
+        let truncated = [0_u8; SAVE_STATE_HEADER_LEN - 1];
+        assert_eq!(
+            read_save_state_payload(&truncated),
+            None,
+            "a buffer shorter than the envelope must be rejected"
+        );
+    }
+
+    #[test]
+    fn android_profile_matches_the_core_identity() {
+        let profile = include_str!("../../android.json");
+
+        // The cdylib is named after the [lib] target, and the profile must
+        // install exactly that file so the frontend can dlopen it.
+        assert!(profile.contains("\"so_name\": \"libcoolbaremu.so\""));
+        // Keep the profile in step with retro_get_system_info() and the state
+        // envelope; both are checked above and in the save-state tests.
+        assert!(profile.contains("\"supported_extensions\": [\"cbe\"]"));
+        assert!(profile.contains(&format!("\"save_state_format\": {SAVE_STATE_FORMAT}")));
+    }
+
+    #[test]
     fn metadata_manifests_match_implemented_features() {
         let core_info = include_str!("../../coolbaremu_libretro.info");
         let libretro_manifest = include_str!("../../Cargo.toml");
@@ -1485,7 +1604,7 @@ mod tests {
         assert!(LAST_VIDEO.lock().unwrap().is_some());
 
         let state_size = retro_serialize_size();
-        assert_eq!(state_size, SERIALIZED_SIZE);
+        assert_eq!(state_size, SERIALIZED_SIZE + SAVE_STATE_HEADER_LEN);
         let mut state = vec![0u8; state_size];
         assert!(retro_serialize(state.as_mut_ptr().cast(), state.len()));
         assert!(retro_unserialize(state.as_ptr().cast(), state.len()));
@@ -1561,7 +1680,7 @@ mod tests {
         // The orientation is presentation state skipped by the save-state codec;
         // restoring a save state must keep presenting rotated frames.
         let state_size = retro_serialize_size();
-        assert_eq!(state_size, SERIALIZED_SIZE);
+        assert_eq!(state_size, SERIALIZED_SIZE + SAVE_STATE_HEADER_LEN);
         let mut state = vec![0u8; state_size];
         assert!(retro_serialize(state.as_mut_ptr().cast(), state.len()));
         assert!(retro_unserialize(state.as_ptr().cast(), state.len()));
