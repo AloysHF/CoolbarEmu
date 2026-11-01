@@ -105,9 +105,11 @@ filesystem, and the core indexes that directory read-only as the guest
 device filesystem. Keep the companion files at the archive root. Guest writes
 stay in memory and are lost when the page is reloaded.
 
-The same directory also accepts `coolbaremu_orientation.csv`, a user
-orientation profile for landscape titles outside the built-in profile. Each
-line is `crc32,length,orientation`:
+The optional orientation profile is a core support file rather than a
+companion resource, so it keeps the fixed layout below the wasm filesystem
+root: put it at `coolbaremu/coolbaremu_orientation.csv` inside the same
+`EJS_biosUrl` archive. The directory and file names are matched
+case-sensitively. Each line is `crc32,length,orientation`:
 
 ```
 a1b2c3d4,341737,landscape

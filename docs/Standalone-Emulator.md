@@ -40,7 +40,7 @@ coolbaremu [OPTIONS] <GAME_PATH>
 | `--scale <SCALE>` | integer 1–8 | `1` | Integer window scale factor. Default 1 matches the active guest LCD dimensions and orientation. |
 | `--filter <FILTER>` | `nearest` \| `bilinear` \| `bicubic` \| `xbrz` | `nearest` | Pixel scaling filter for display output. |
 | `--orientation <ORIENTATION>` | `auto` \| `landscape` \| `portrait` | `auto` | Present the game in landscape or portrait. `auto` uses the built-in landscape-game profile; explicit values override it. |
-| `--orientation-profile <FILE>` | path | — | Load extra display-orientation entries from a CSV file before starting (see [Screen orientation](#screen-orientation)). |
+| `--system-dir <DIR>` | path | `system` | System directory scanned for `coolbaremu/coolbaremu_orientation.csv` (see [Screen orientation](#screen-orientation)). |
 | `--remap <GUEST_KEY:KEY>` | `GUEST_KEY:KEY` | — | Remap a guest key to a host key. Repeatable. |
 | `--show-gamepad` | flag | off | Draw the debug key-state overlay over the game frame (see [Virtual Gamepad Overlay](#virtual-gamepad-overlay)). |
 | `--no-gamepad` | flag | off | Disable physical gamepad input (keyboard remains available). |
@@ -209,12 +209,16 @@ default desktop window is also landscape so the frame fills the window
 instead of sitting in a portrait shell with large black bars. Pass `--scale`
 to open a larger window.
 
-For a landscape game outside the built-in profile, supply extra entries with
-`--orientation-profile <FILE>` instead of waiting for a core update. The file
-is CSV text with one `crc32,length,orientation` entry per line (`crc32` in
-hex with an optional `0x` prefix, `length` in decimal bytes, `orientation` one
-of `landscape`, `portrait`; blank lines and `#` comments are ignored). Compute
-the identity of a game file with any CRC-32 tool:
+For a landscape game outside the built-in profile, place extra entries in
+`<system-dir>/coolbaremu/coolbaremu_orientation.csv` instead of waiting for a
+core update. The default system directory is `system`, so the file is
+`system/coolbaremu/coolbaremu_orientation.csv`; use `--system-dir` to point at
+another directory. The path components and the file name are matched
+case-sensitively. The file is CSV text with one `crc32,length,orientation`
+entry per line (`crc32` in hex with an optional `0x` prefix, `length` in
+decimal bytes, `orientation` one of `landscape`, `portrait`; blank lines and
+`#` comments are ignored). Compute the identity of a game file with any CRC-32
+tool:
 
 ```text
 # crc32,length,orientation

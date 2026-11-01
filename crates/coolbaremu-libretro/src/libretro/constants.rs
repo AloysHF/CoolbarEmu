@@ -45,9 +45,9 @@ pub const RETROK_q: u32 = 113;
 pub const RETROK_s: u32 = 115;
 pub const RETROK_w: u32 = 119;
 pub const RETROK_UP: u32 = 273;
-pub const RETROK_DOWN: u32 = 275;
+pub const RETROK_DOWN: u32 = 274;
+pub const RETROK_RIGHT: u32 = 275;
 pub const RETROK_LEFT: u32 = 276;
-pub const RETROK_RIGHT: u32 = 274;
 
 /// Analog stick identifiers (index selects the stick, id selects the axis).
 pub const RETRO_DEVICE_INDEX_ANALOG_LEFT: u32 = 0;
@@ -62,8 +62,8 @@ pub const RETRO_DEVICE_ID_POINTER_PRESSED: u32 = 2;
 pub const RETRO_DEVICE_ID_POINTER_RELEASED: u32 = 3;
 
 /// Environment callback commands used by this core.
-/// Show a transient on-screen message (has the EXPERIMENTAL flag set).
-pub const RETRO_ENVIRONMENT_SET_MESSAGE: u32 = 1 | 0x1_0000;
+/// Show a transient on-screen message.
+pub const RETRO_ENVIRONMENT_SET_MESSAGE: u32 = 6;
 pub const RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL: u32 = 8;
 pub const RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: u32 = 10;
 pub const RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS: u32 = 11;
@@ -72,11 +72,11 @@ pub const RETRO_ENVIRONMENT_SET_VARIABLES: u32 = 16;
 pub const RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE: u32 = 17;
 pub const RETRO_ENVIRONMENT_GET_LOG_INTERFACE: u32 = 27;
 /// Query the frontend's system directory for core support files.
-pub const RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY: u32 = 45;
+pub const RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY: u32 = 9;
 pub const RETRO_ENVIRONMENT_SET_MEMORY_MAPS: u32 = 36 | 0x1_0000;
 /// Notification that the presented game geometry (base size or aspect)
 /// changed while content is running.
-pub const RETRO_ENVIRONMENT_SET_GEOMETRY: u32 = 59;
+pub const RETRO_ENVIRONMENT_SET_GEOMETRY: u32 = 37;
 
 /// Region identifiers.
 pub const RETRO_REGION_NTSC: u32 = 0;
@@ -90,3 +90,19 @@ pub const RETRO_MEMORY_VIDEO_RAM: u32 = 3;
 /// Memory descriptor flags.
 pub const RETRO_MEMDESC_SYSTEM_RAM: u64 = 1 << 2;
 pub const RETRO_MEMDESC_VIDEO_RAM: u64 = 1 << 4;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn values_match_libretro_h() {
+        assert_eq!(RETRO_ENVIRONMENT_SET_MESSAGE, 6);
+        assert_eq!(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, 9);
+        assert_eq!(RETRO_ENVIRONMENT_SET_GEOMETRY, 37);
+        assert_eq!(RETROK_UP, 273);
+        assert_eq!(RETROK_DOWN, 274);
+        assert_eq!(RETROK_RIGHT, 275);
+        assert_eq!(RETROK_LEFT, 276);
+    }
+}
