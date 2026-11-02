@@ -24,10 +24,67 @@ pub(crate) struct Region {
     pub(crate) read_only: bool,
 }
 
+/// Read up to the first four bytes as a little-endian word, zero-padding the
+/// tail. Watch records only need a comparable snapshot, not guest byte order.
+fn little_endian_word(bytes: &[u8]) -> u32 {
+    let mut word = [0u8; 4];
+    let used = bytes.len().min(4);
+    word[..used].copy_from_slice(&bytes[..used]);
+    u32::from_le_bytes(word)
+}
+
+/// One recorded write into a watched guest memory range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WriteWatchEntry {
+    /// Program counter of the instruction that stored, or the last executed
+    /// instruction when the write came from a host service instead.
+    pub pc: u32,
+    /// Written guest address.
+    pub address: u32,
+    /// Written size in bytes (1, 2, or 4 for stores; more for bulk loads).
+    pub size: usize,
+    /// Bytes written, little-endian normalized into the low bytes.
+    pub value: u32,
+    /// Bytes that were at the address before the write.
+    pub previous: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WriteWatch {
+    pub(crate) start: u32,
+    pub(crate) end: u32,
+    pub(crate) pc: u32,
+    pub(crate) log: Vec<WriteWatchEntry>,
+}
+
+impl WriteWatch {
+    const LOG_CAPACITY: usize = 8192;
+
+    fn covers(&self, address: u32, size: usize) -> bool {
+        address < self.end && address.wrapping_add(size as u32) > self.start
+    }
+
+    fn record(&mut self, pc: u32, address: u32, size: usize, value: u32, previous: u32) {
+        if self.log.len() < Self::LOG_CAPACITY {
+            self.log.push(WriteWatchEntry {
+                pc,
+                address,
+                size,
+                value,
+                previous,
+            });
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct MachineMemory {
     pub(crate) regions: Vec<Region>,
     pub(crate) bad_accesses: BTreeSet<u32>,
+    /// Debug watch over guest writes into one address range. Not serialized:
+    /// it only exists while a diagnosis session is armed.
+    #[serde(skip, default)]
+    pub(crate) watch: Option<WriteWatch>,
     big_endian: bool,
 }
 
@@ -36,7 +93,38 @@ impl MachineMemory {
         Self {
             regions: Vec::new(),
             bad_accesses: BTreeSet::new(),
+            watch: None,
             big_endian,
+        }
+    }
+
+    /// Arm a write watch over `[start, end)`; the CPU loop feeds the current
+    /// program counter through [`Self::set_watch_pc`] so recorded writes can
+    /// name the storing instruction.
+    pub(crate) fn arm_watch(&mut self, start: u32, end: u32) {
+        self.watch = Some(WriteWatch {
+            start,
+            end,
+            pc: 0,
+            log: Vec::new(),
+        });
+    }
+
+    pub(crate) fn disarm_watch(&mut self) {
+        self.watch = None;
+    }
+
+    pub(crate) fn set_watch_pc(&mut self, pc: u32) {
+        if let Some(watch) = &mut self.watch {
+            watch.pc = pc;
+        }
+    }
+
+    /// Take the recorded watch entries, leaving the watch armed.
+    pub(crate) fn take_watch_log(&mut self) -> Vec<WriteWatchEntry> {
+        match &mut self.watch {
+            Some(watch) => std::mem::take(&mut watch.log),
+            None => Vec::new(),
         }
     }
 
@@ -60,7 +148,33 @@ impl MachineMemory {
         self.big_endian
     }
 
+    /// Record an upcoming write into the watched range, if one is armed and
+    /// covers the address. Called before the write lands so the previous
+    /// bytes are captured.
+    fn record_watch(&mut self, address: u32, data: &[u8]) {
+        let covers = self
+            .watch
+            .as_ref()
+            .is_some_and(|watch| watch.covers(address, data.len()));
+        if !covers {
+            return;
+        }
+        let previous = self
+            .region(address, data.len())
+            .map(|region| {
+                let offset = (address - region.base) as usize;
+                little_endian_word(&region.data[offset..offset + data.len()])
+            })
+            .unwrap_or(0);
+        let value = little_endian_word(data);
+        if let Some(watch) = &mut self.watch {
+            let pc = watch.pc;
+            watch.record(pc, address, data.len(), value, previous);
+        }
+    }
+
     pub(crate) fn load(&mut self, address: u32, data: &[u8]) -> Result<()> {
+        self.record_watch(address, data);
         let region = self
             .region_mut(address, data.len())
             .context("load address is not mapped")?;
@@ -70,6 +184,7 @@ impl MachineMemory {
     }
 
     pub(crate) fn write_bytes(&mut self, address: u32, data: &[u8]) -> bool {
+        self.record_watch(address, data);
         let Some(region) = self.region_mut(address, data.len()) else {
             self.bad_accesses.insert(address);
             return false;
@@ -131,22 +246,23 @@ impl MachineMemory {
 
     pub(crate) fn write(&mut self, address: u32, value: u32, size: usize) {
         let big_endian = self.big_endian;
+        let bytes = if big_endian {
+            value.to_be_bytes()
+        } else {
+            value.to_le_bytes()
+        };
+        let source = if big_endian {
+            &bytes[4 - size..]
+        } else {
+            &bytes[..size]
+        };
+        self.record_watch(address, source);
         if let Some(region) = self.region_mut(address, size) {
             if region.read_only {
                 self.bad_accesses.insert(address);
                 return;
             }
             let offset = (address - region.base) as usize;
-            let bytes = if big_endian {
-                value.to_be_bytes()
-            } else {
-                value.to_le_bytes()
-            };
-            let source = if big_endian {
-                &bytes[4 - size..]
-            } else {
-                &bytes[..size]
-            };
             region.data[offset..offset + size].copy_from_slice(source);
         } else {
             self.bad_accesses.insert(address);

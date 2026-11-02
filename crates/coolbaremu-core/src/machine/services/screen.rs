@@ -154,11 +154,39 @@ impl CoolbarMachine {
         Ok(())
     }
 
+    /// Queue the outgoing screen's destroy callback (screen slot +4, pairing
+    /// the initializer) so its resources are released before the incoming
+    /// screen initializes. `incoming` suppresses the call when the guest
+    /// re-selects the screen it is already on. No-op when the slot is unset
+    /// or there is no outgoing screen.
+    pub(crate) fn queue_screen_destroy(&mut self, outgoing: u32, incoming: u32) {
+        if outgoing == 0 || outgoing == incoming {
+            return;
+        }
+        let destroy = self.memory.r32(outgoing + 4);
+        if destroy == 0 {
+            return;
+        }
+        let parameter = self.screen_call_parameter(outgoing);
+        self.pending_callbacks
+            .push_back((destroy, vec![parameter], "screenDestroy"));
+    }
+
     pub(crate) fn handle_screen_service(&mut self, index: u32) {
         match index {
             0 | 2 | 3 => {
                 let screen = self.register(0);
                 if screen != 0 {
+                    // Switching away from a screen must release what its load
+                    // callback built: the engine's second screen slot is the
+                    // destroy callback pairing the initializer. Without it a
+                    // re-entered screen keeps its previous life's state —
+                    // B/碰嘭球.CBE (issue #189) carried stale bubble records
+                    // across a level re-entry, and the level's search-table
+                    // rebuild then wrote their out-of-board coordinates past
+                    // its table into the guest's callback records, faulting
+                    // the machine on the next dispatch.
+                    self.queue_screen_destroy(self.pending_screen, screen);
                     if let Some(current) = self.screen_stack.last_mut() {
                         *current = screen;
                     } else {

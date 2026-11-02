@@ -28,7 +28,7 @@ mod virtual_fs;
 
 use display::DisplaySurface;
 use memory::MachineMemory;
-pub use memory::MemoryRegionInfo;
+pub use memory::{MemoryRegionInfo, WriteWatchEntry};
 use packages::{
     grouped_package_resources, named_package_resources, native_package_resources, HostResource,
     HostResourcePackage,
@@ -1326,6 +1326,23 @@ impl CoolbarMachine {
                 read_only: region.read_only,
             })
             .collect()
+    }
+
+    /// Arm a write watch over the guest address range `[start, end)` so every
+    /// subsequent write into the range is recorded with the storing program
+    /// counter. Overwrites the previous watch if one is armed.
+    pub fn arm_write_watch(&mut self, start: u32, end: u32) {
+        self.memory.arm_watch(start, end);
+    }
+
+    /// Disarm the write watch; the recorded log stays until taken.
+    pub fn clear_write_watch(&mut self) {
+        self.memory.disarm_watch();
+    }
+
+    /// Take the write watch entries recorded so far, leaving the watch armed.
+    pub fn take_write_watch_log(&mut self) -> Vec<WriteWatchEntry> {
+        self.memory.take_watch_log()
     }
 
     /// Mutable pointer to guest memory at a mapped address, if any.
@@ -2843,6 +2860,59 @@ mod tests {
 
             assert_eq!(machine.state(), MachineState::Ready, "{game} faulted");
         }
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_level_reentry_releases_previous_level_resources() {
+        // B/碰嘭球.CBE (issue #189): re-entering the level kept the previous
+        // life's bubble records alive because the outgoing screen's destroy
+        // callback never ran; the level's search-table rebuild then wrote
+        // their risen coordinates below its table into the guest's callback
+        // records and the machine faulted on an unmapped fetch right after
+        // the next shot. The replay below is that exact path.
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(game_dir).join("碰嘭球.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+        // Enter the level, open the menu, pick "choose level", confirm both
+        // dialogs, re-enter, and fire one shot.
+        const CONFIRMS: [u32; 6] = [30, 51, 102, 106, 112, 153];
+        const TOUCHES: [(u32, i32, i32); 2] = [(92, 28, 377), (98, 194, 220)];
+        for frame in 0..204u32 {
+            let confirm = CONFIRMS.contains(&frame);
+            let touch = TOUCHES.iter().find(|(event, _, _)| *event == frame);
+            if confirm {
+                machine.set_key(14, true);
+            }
+            if let Some(&(_, x, y)) = touch {
+                machine.set_pointer(x, y, true);
+            }
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            if confirm {
+                machine.set_key(14, false);
+            }
+            if let Some(&(_, x, y)) = touch {
+                machine.set_pointer(x, y, false);
+            }
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready, "re-entry faulted");
+        // Keep playing after the re-entry so the fix covers continued play,
+        // not just the previously crashing frame.
+        for frame in 0..60u32 {
+            if frame == 20 {
+                machine.set_key(14, true);
+            }
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            if frame >= 20 {
+                machine.set_key(14, false);
+            }
+        }
+        assert_eq!(machine.state(), MachineState::Ready);
     }
 
     #[test]
@@ -5027,6 +5097,47 @@ mod tests {
             restored.handle_screen_service(4);
             assert_eq!(restored.screen_call_parameter(screen), default);
         }
+    }
+
+    #[test]
+    fn screen_switch_runs_the_outgoing_screens_destroy_callback() {
+        let mut machine = machine_from_minimal_archive();
+        // Any harmless dispatched service doubles as an observable callback:
+        // system service 15 only writes r0, and handle_service records the
+        // (group, index) pair so the test can count invocations.
+        let destroy = SERVICE_BASE + TABLE_STRIDE + 15 * 4;
+        let first = machine.allocate(32);
+        machine.memory.w32(first + 4, destroy);
+        let second = machine.allocate(32);
+        machine.memory.w32(second + 4, destroy);
+        let dispatched = |machine: &CoolbarMachine| {
+            machine
+                .service_calls()
+                .get(&(1, 15))
+                .copied()
+                .unwrap_or_default()
+        };
+
+        // Entering the first screen has no outgoing screen to destroy, and
+        // re-selecting the screen already on top must not destroy it either.
+        machine.set_user_register(0, first);
+        machine.handle_screen_service(2);
+        machine.set_user_register(0, first);
+        machine.handle_screen_service(2);
+        machine
+            .dispatch_pending_callbacks(crate::DEFAULT_INSTRUCTION_LIMIT)
+            .unwrap();
+        assert_eq!(dispatched(&machine), 0);
+
+        // Switching away queues the first screen's destroy, which runs on the
+        // pending-callback pump before the new screen's own startup.
+        machine.set_user_register(0, second);
+        machine.handle_screen_service(2);
+        assert_eq!(machine.pending_callbacks.len(), 1);
+        machine
+            .dispatch_pending_callbacks(crate::DEFAULT_INSTRUCTION_LIMIT)
+            .unwrap();
+        assert_eq!(dispatched(&machine), 1);
     }
 
     #[test]

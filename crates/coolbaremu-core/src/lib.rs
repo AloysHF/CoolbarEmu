@@ -24,7 +24,8 @@ pub use audio_engine::{AudioDiagnostics, AudioEngine, AUDIO_SAMPLE_RATE};
 pub use cbe::{CbeArchive, ResourceEntry, ResourceType};
 pub use image_decoder::DecodedImage;
 pub use machine::{
-    CbeExecutable, CoolbarMachine, DisplayOrientation, MachineState, FRAME_HEIGHT, FRAME_WIDTH,
+    CbeExecutable, CoolbarMachine, DisplayOrientation, MachineState, WriteWatchEntry, FRAME_HEIGHT,
+    FRAME_WIDTH,
 };
 pub use orientation_profile::{
     load_orientation_overrides, orientation_for_archive, parse_orientation_overrides,

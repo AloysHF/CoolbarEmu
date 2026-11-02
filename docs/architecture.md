@@ -139,6 +139,19 @@ registered beneath an overlay also initialize and load their resources. Closing
 an overlay resumes the underlying screen without repeating its initialization
 or resource loading.
 
+Screens driven through the screen service (group 14) release their resources
+when they are replaced: a set-screen call queues the outgoing screen's destroy
+callback (slot +4, pairing the initializer at slot +0) on the pending-callback
+pump, so it runs before the incoming screen initializes. Re-selecting the
+screen that is already current destroys nothing. Without this release a
+re-entered screen keeps its previous life's dynamic state alongside the fresh
+one, which corrupted games that index level data by position
+(B/碰嘭球.CBE, issue #189). Closing a screen with the pop service and the
+fixed-manager screen change (game service 60) intentionally perform no
+release: pop must keep suspended overlay state intact, and the fixed-manager
+ABI keeps screens alive across switches, with a slot +4 that is not a destroy
+callback.
+
 ## Guest memory
 
 The machine uses checked sparse regions rather than reserving the entire 32-bit address space. Guest reads and writes honor the executable's byte order. Initialized data, stack, heap, service-manager state, and framebuffer storage are writable. Unmapped accesses are recorded for diagnostics, and an unmapped instruction fetch stops execution with an error.
