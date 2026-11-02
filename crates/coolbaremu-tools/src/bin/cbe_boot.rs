@@ -40,6 +40,10 @@ struct Cli {
     key_hold: Vec<(u32, u32, u8)>,
     #[arg(long, value_parser = parse_pointer_event)]
     pointer_event: Vec<(u32, i32, i32)>,
+    #[arg(long, value_parser = parse_pointer_hold)]
+    pointer_hold: Vec<(u32, u32, i32, i32)>,
+    #[arg(long, value_parser = parse_pointer_drag)]
+    pointer_drag: Vec<(u32, u32, i32, i32, i32, i32)>,
     #[arg(long, value_enum, default_value_t = OrientationArg::Auto)]
     orientation: OrientationArg,
     #[arg(long)]
@@ -110,6 +114,58 @@ fn parse_pointer_event(value: &str) -> Result<(u32, i32, i32), String> {
     Ok((frame, x, y))
 }
 
+fn parse_pointer_hold(value: &str) -> Result<(u32, u32, i32, i32), String> {
+    let parts: Vec<&str> = value.split(':').collect();
+    if parts.len() != 4 {
+        return Err("pointer hold must use START:END:X:Y syntax".to_string());
+    }
+    let start = parts[0]
+        .parse()
+        .map_err(|_| "pointer hold start must be an unsigned integer".to_string())?;
+    let end = parts[1]
+        .parse()
+        .map_err(|_| "pointer hold end must be an unsigned integer".to_string())?;
+    let x = parts[2]
+        .parse()
+        .map_err(|_| "pointer hold x must be an integer".to_string())?;
+    let y = parts[3]
+        .parse()
+        .map_err(|_| "pointer hold y must be an integer".to_string())?;
+    if start >= end {
+        return Err("pointer hold end must be greater than start".to_string());
+    }
+    Ok((start, end, x, y))
+}
+
+fn parse_pointer_drag(value: &str) -> Result<(u32, u32, i32, i32, i32, i32), String> {
+    let parts: Vec<&str> = value.split(':').collect();
+    if parts.len() != 6 {
+        return Err("pointer drag must use START:END:X1:Y1:X2:Y2 syntax".to_string());
+    }
+    let start = parts[0]
+        .parse()
+        .map_err(|_| "pointer drag start must be an unsigned integer".to_string())?;
+    let end = parts[1]
+        .parse()
+        .map_err(|_| "pointer drag end must be an unsigned integer".to_string())?;
+    let x1 = parts[2]
+        .parse()
+        .map_err(|_| "pointer drag x1 must be an integer".to_string())?;
+    let y1 = parts[3]
+        .parse()
+        .map_err(|_| "pointer drag y1 must be an integer".to_string())?;
+    let x2 = parts[4]
+        .parse()
+        .map_err(|_| "pointer drag x2 must be an integer".to_string())?;
+    let y2 = parts[5]
+        .parse()
+        .map_err(|_| "pointer drag y2 must be an integer".to_string())?;
+    if start >= end {
+        return Err("pointer drag end must be greater than start".to_string());
+    }
+    Ok((start, end, x1, y1, x2, y2))
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let archive = CbeArchive::load(&cli.file)?;
@@ -141,6 +197,22 @@ fn main() -> Result<()> {
             for &(event_frame, x, y) in &cli.pointer_event {
                 if event_frame == frame {
                     machine.set_pointer(x, y, true);
+                }
+            }
+            for &(start, end, x, y) in &cli.pointer_hold {
+                if frame == start {
+                    machine.set_pointer(x, y, true);
+                } else if frame == end {
+                    machine.set_pointer(x, y, false);
+                }
+            }
+            for &(start, end, x1, y1, x2, y2) in &cli.pointer_drag {
+                if frame == start {
+                    machine.set_pointer(x1, y1, true);
+                } else if frame == end {
+                    machine.set_pointer(x2, y2, false);
+                } else if frame == (start + end) / 2 {
+                    machine.set_pointer(x2, y2, true);
                 }
             }
             let before_frame_instructions = machine.instruction_count();
@@ -288,6 +360,36 @@ mod tests {
         assert!(parse_key_hold("20:20:16").is_err());
         assert!(parse_key_hold("40:20:16").is_err());
         assert!(parse_key_hold("20:40").is_err());
+    }
+
+    #[test]
+    fn parses_pointer_hold_range() {
+        assert_eq!(
+            parse_pointer_hold("120:140:42:322"),
+            Ok((120, 140, 42, 322))
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_pointer_hold_range() {
+        assert!(parse_pointer_hold("120:120:42:322").is_err());
+        assert!(parse_pointer_hold("140:120:42:322").is_err());
+        assert!(parse_pointer_hold("120:140:42").is_err());
+    }
+
+    #[test]
+    fn parses_pointer_drag_path() {
+        assert_eq!(
+            parse_pointer_drag("150:180:60:300:120:330"),
+            Ok((150, 180, 60, 300, 120, 330))
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_pointer_drag_range() {
+        assert!(parse_pointer_drag("150:150:60:300:120:330").is_err());
+        assert!(parse_pointer_drag("180:150:60:300:120:330").is_err());
+        assert!(parse_pointer_drag("150:180:60:300:120").is_err());
     }
 
     #[test]

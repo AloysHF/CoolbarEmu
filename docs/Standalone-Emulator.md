@@ -298,12 +298,24 @@ The `cbe_boot` tool runs the same machine core without opening a window. A key
 event uses `FRAME:PHONE_KEY` syntax. A held range uses
 `START_FRAME:END_FRAME:PHONE_KEY`, with the end frame excluded.
 
+Touch input uses raw framebuffer coordinates (counter-rotate landscape
+presentations). A tap uses `--pointer-event FRAME:X:Y`, pressing and releasing
+around that frame's callbacks. Games that react to presses and drags need the
+held forms: `--pointer-hold START:END:X:Y` keeps the pointer down from the
+start frame to the end frame, and `--pointer-drag
+START:END:X1:Y1:X2:Y2` presses at `X1:Y1`, moves to `X2:Y2` at the midpoint
+and releases at the end frame.
+
 ```bash
 cargo run --release -p coolbaremu-tools --bin cbe_boot -- \
   path/to/game.CBE --frames 120 --key-event 1:14 --screenshot frame.png
 
 cargo run --release -p coolbaremu-tools --bin cbe_boot -- \
   path/to/game.CBE --frames 120 --key-hold 30:60:16 --screenshot held.png
+
+cargo run --release -p coolbaremu-tools --bin cbe_boot -- \
+  path/to/game.CBE --frames 240 --pointer-drag 150:180:139:200:100:160 \
+  --pointer-hold 185:215:24:370 --screenshot shot.png
 ```
 
 Set `CBE_TRACE=all` to trace every bridged service, or provide comma-separated
