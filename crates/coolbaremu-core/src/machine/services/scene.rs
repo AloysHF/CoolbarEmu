@@ -520,6 +520,29 @@ impl CoolbarMachine {
             self.set_result(0);
             return;
         }
+        // The native scene movement query both resolves the requested
+        // displacement and keeps the viewport origin (`scene+0x640/0x642`)
+        // following the queried point so the level scrolls.  The guest draws
+        // actors relative to this origin (it subtracts it from world
+        // coordinates), and for titles that never call the scroll stubs
+        // (`0x670`/`0x674`) this side effect is the only thing that drives the
+        // camera.  Only follow when the level is actually larger than the
+        // viewport: single-screen scenes fit without scrolling and must keep
+        // the origin at zero, so games that already render correctly are
+        // untouched.
+        let vp_w = self.memory.r16(scene + 0x644) as i16 as i32;
+        let vp_h = self.memory.r16(scene + 0x646) as i16 as i32;
+        let map_w = self.memory.r32(map) as i32;
+        let map_h = self.memory.r32(map + 4) as i32;
+        if offset == 0x680 && map_w > vp_w && vp_w > 0 {
+            let target = (self.register(1) as i16 as i32).saturating_sub(vp_w / 2);
+            let cam_x = target.clamp(0, (map_w - vp_w).max(0)) as u16;
+            self.memory.w16(scene + 0x640, cam_x);
+        } else if offset == 0x684 && map_h > vp_h && vp_h > 0 {
+            let target = (self.register(2) as i16 as i32).saturating_sub(vp_h / 2);
+            let cam_y = target.clamp(0, (map_h - vp_h).max(0)) as u16;
+            self.memory.w16(scene + 0x642, cam_y);
+        }
         let x = self.register(1) as i16 as i32 - self.memory.r16(map + 0x40) as i16 as i32;
         let y = self.register(2) as i16 as i32 - self.memory.r16(map + 0x42) as i16 as i32;
         let delta = self.register(3) as i16 as i32;
@@ -616,6 +639,57 @@ mod tests {
         machine.cpu.reg_set(Mode::User, 0, 0);
         machine.scroll_scene_window(0x670);
         assert_eq!(machine.register(0), 0);
+    }
+
+    /// Titles driven through the native scene engine never call the scroll
+    /// stubs; their level camera only advances because the movement query
+    /// keeps the viewport origin on the queried point.  超级玛丽V10 (#152)
+    /// walks its player past several screens of World 1-1 through this
+    /// side effect alone.
+    #[test]
+    fn scene_movement_query_keeps_the_viewport_origin_on_the_queried_point() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        let scene = machine.allocate(0x700);
+        let map = machine.allocate(0x100);
+        // Map twice as wide as the viewport: 64x32 pixels of 16x16 tiles.
+        machine.memory.w32(map, 64);
+        machine.memory.w32(map + 4, 32);
+        machine.memory.w32(map + 8, 16);
+        machine.memory.w32(map + 12, 16);
+        machine.memory.w32(scene + 0x61c, map);
+        machine.memory.w16(scene + 0x640, 0);
+        machine.memory.w16(scene + 0x642, 0);
+        machine.memory.w16(scene + 0x644, 32);
+        machine.memory.w16(scene + 0x646, 32);
+
+        let query = |machine: &mut CoolbarMachine, x: u32, y: u32, delta: u32| {
+            machine.cpu.reg_set(Mode::User, 0, scene);
+            machine.cpu.reg_set(Mode::User, 1, x);
+            machine.cpu.reg_set(Mode::User, 2, y);
+            machine.cpu.reg_set(Mode::User, 3, delta);
+            machine.handle_method_stub(
+                CoolbarMachine::method_stub_address(
+                    super::super::super::METHOD_KIND_GAMEOLD,
+                    0x680,
+                ) & !1,
+            );
+        };
+
+        // Walking right past the viewport centre scrolls the origin so the
+        // queried point stays centred, clamped to the map bounds.
+        query(&mut machine, 48, 20, 4);
+        assert_eq!(
+            machine.memory.r16(scene + 0x640),
+            32,
+            "origin follows the queried point minus half the viewport"
+        );
+
+        // A map no larger than the viewport must keep the origin untouched:
+        // single-screen scenes fit without scrolling.
+        machine.memory.w32(map, 32);
+        machine.memory.w16(scene + 0x640, 0);
+        query(&mut machine, 24, 20, 4);
+        assert_eq!(machine.memory.r16(scene + 0x640), 0);
     }
 
     #[test]
