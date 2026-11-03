@@ -410,6 +410,12 @@ Horizontal and vertical movement queries return signed distances, checking the
 map bounds and the directional edge bits on both source and destination cells.
 Both native scene layouts bind the movement pair: offsets +0x678/+0x67c and
 +0x680/+0x684 use the same horizontal/vertical query implementations.
+The origin pair also serves as the scene window's screen rectangle, so a query
+follows the queried point only on an axis whose current origin still lies inside
+that axis' `0..=map - viewport` scroll range; a window positioned at a screen
+offset keeps its rectangle. Double Dragon V10 places its world window at y=62
+below the HUD, and treating that position as a scroll offset moved the world
+layer over the HUD and left the band it vacated unrepainted (#96).
 The shared game service slot 72 initializes a native tile map into a
 caller-provided object: the destination arrives in r0 and the picture library in
 r3, the map resource name through the fifth AAPCS argument and the tile capacity
