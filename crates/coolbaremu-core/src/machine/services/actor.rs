@@ -176,7 +176,20 @@ impl CoolbarMachine {
                 }
                 actor
             }
-            0x24 if action_pointer != 0 => self.memory.r16(action_pointer) as u32,
+            0x24 if action_pointer != 0 => {
+                // DF_Actor+0x24 reports the duration of the action's last
+                // frame, not its frame count.  Guests use it as the "action
+                // finished" delay (e.g. recovering from a hit), so a frame
+                // count makes short actions look longer than they last and
+                // the actor never leaves its hurt state.
+                let frames = self.memory.r16(action_pointer) as u32;
+                if frames == 0 {
+                    0
+                } else {
+                    let pointer = self.memory.r32(action_pointer + 4);
+                    self.memory.r16(pointer + (frames - 1) * 8) as u32
+                }
+            }
             0x1c if action_pointer != 0 => {
                 let frames = self.memory.r16(action_pointer) as u32;
                 let current = self.memory.r16(actor + 8) as u32;

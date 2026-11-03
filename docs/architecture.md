@@ -354,8 +354,10 @@ Registered screens take over the frame lifecycle after resource loading, and
 native idle logic can poll a press edge within the same frame. Record files use
 bounded sections with little-endian headers and values. Window callbacks receive
 stack-passed contexts and paint queued dirty rectangles. Animation resources load
-image references and cumulative frame timing; mirrored parts and collision
-methods remain unsupported.
+image references and cumulative frame timing; the actor's last-frame duration
+query reports that timing rather than the action's frame count, because guests
+use it as the action-finished delay and a hit reaction would otherwise never
+clear its stun. Mirrored parts and collision methods remain unsupported.
 
 Native registration stores startup and exit callbacks separately; boot invokes
 only startup. Registered screen logic polls key and pointer state once per
