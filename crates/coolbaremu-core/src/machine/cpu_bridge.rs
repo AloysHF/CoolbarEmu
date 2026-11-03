@@ -75,6 +75,10 @@ impl CoolbarMachine {
                 }));
             }
             self.last_pc = pc;
+            // Keep the write watch's idea of "current instruction" current so
+            // recorded stores name the storing instruction (no-op when no
+            // watch is armed).
+            self.memory.set_watch_pc(pc);
             if self.recent_pcs.len() == 32 {
                 self.recent_pcs.pop_front();
             }

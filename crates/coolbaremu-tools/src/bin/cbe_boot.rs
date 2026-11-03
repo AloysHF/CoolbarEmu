@@ -51,6 +51,13 @@ struct Cli {
     /// Dump a guest memory range as u32 words: START:END in hex.
     #[arg(long, value_parser = parse_range)]
     dump: Vec<(u32, u32)>,
+    /// Trace guest writes into a memory range: START:END in hex. Every write
+    /// is reported with the storing program counter.
+    #[arg(long, value_parser = parse_range)]
+    watch: Option<(u32, u32)>,
+    /// Only arm the write watch from this frame onward.
+    #[arg(long)]
+    watch_from_frame: Option<u32>,
 }
 
 fn parse_range(value: &str) -> Result<(u32, u32), String> {
@@ -216,7 +223,22 @@ fn main() -> Result<()> {
                 }
             }
             let before_frame_instructions = machine.instruction_count();
+            if let Some((start, end)) = cli.watch {
+                if cli.watch_from_frame.is_none_or(|from| frame >= from) {
+                    machine.arm_write_watch(start, end);
+                } else {
+                    machine.clear_write_watch();
+                }
+            }
             result = machine.run_frame(cli.instruction_limit);
+            if cli.watch.is_some() {
+                for entry in machine.take_write_watch_log() {
+                    eprintln!(
+                        "watch frame={frame} pc=0x{:08X} addr=0x{:08X} size={} value=0x{:08X} previous=0x{:08X}",
+                        entry.pc, entry.address, entry.size, entry.value, entry.previous
+                    );
+                }
+            }
             if std::env::var_os("CBE_FRAME_STATS").is_some() {
                 eprintln!(
                     "frame {frame} instructions={} pc=0x{:08X}",
