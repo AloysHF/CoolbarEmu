@@ -694,6 +694,30 @@ impl CoolbarMachine {
     }
 
     pub(super) fn repaint_fixed_gameold_windows(&mut self, root: u32) -> anyhow::Result<()> {
+        // A dirty rectangle is only the clip while its painter runs.  Save the
+        // caller's clip so the repaint does not leak the last rectangle into
+        // the guest's later drawing: 双截龙(新品) (#95) repaints its life bar
+        // with a 63x4 rectangle when Confirm is pressed, and every character
+        // blit afterwards was clipped away, leaving the players invisible.
+        let clip = self.oldlib_clip;
+        let memory_clip = [
+            self.memory.r16(super::super::SCREEN_IMAGE_STRUCT + 12),
+            self.memory.r16(super::super::SCREEN_IMAGE_STRUCT + 14),
+            self.memory.r16(super::super::SCREEN_IMAGE_STRUCT + 16),
+            self.memory.r16(super::super::SCREEN_IMAGE_STRUCT + 18),
+        ];
+        let result = self.repaint_fixed_gameold_windows_inner(root);
+        self.oldlib_clip = clip;
+        for (index, value) in memory_clip.into_iter().enumerate() {
+            self.memory.w16(
+                super::super::SCREEN_IMAGE_STRUCT + 12 + index as u32 * 2,
+                value,
+            );
+        }
+        result
+    }
+
+    fn repaint_fixed_gameold_windows_inner(&mut self, root: u32) -> anyhow::Result<()> {
         let mut pending = vec![root];
         let mut visited = std::collections::BTreeSet::new();
         while let Some(object) = pending.pop() {
@@ -2246,6 +2270,42 @@ mod tests {
             machine.handle_game_service(52);
             assert_eq!(machine.register(0), expected);
         }
+    }
+
+    #[test]
+    fn fixed_window_repaint_restores_the_calling_clip() {
+        use crate::machine::{CoolbarMachine, SCREEN_IMAGE_STRUCT};
+        use armv4t_emu::Memory;
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.oldlib_clip = [0, 0, 240, 320];
+        for (offset, value) in [(12, 0), (14, 0), (16, 240), (18, 320)] {
+            machine.memory.w16(SCREEN_IMAGE_STRUCT + offset, value);
+        }
+
+        // A fixed window with one dirty rectangle; a null painter only
+        // installs the rectangle as the clip, which is what the test checks.
+        let region = machine.allocate(0x50);
+        let entries = machine.allocate(4);
+        let rectangle = machine.allocate(8);
+        for (offset, value) in [(0, 33u16), (2, 45), (4, 63), (6, 4)] {
+            machine.memory.w16(rectangle + offset, value);
+        }
+        machine.memory.w32(entries, rectangle);
+        machine.memory.w32(region + 4, 1);
+        machine.memory.w32(region + 8, 1);
+        machine.memory.w32(region + 12, entries);
+        machine.memory.w32(region + 48, 0);
+
+        machine.repaint_fixed_gameold_windows(region).unwrap();
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE_STRUCT + 12),
+            0,
+            "the repaint must not leave its dirty rectangle installed as the clip"
+        );
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE_STRUCT + 14), 0);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE_STRUCT + 16), 240);
+        assert_eq!(machine.memory.r16(SCREEN_IMAGE_STRUCT + 18), 320);
+        assert_eq!(machine.oldlib_clip, [0, 0, 240, 320]);
     }
 
     #[test]

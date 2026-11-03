@@ -4773,15 +4773,31 @@ mod tests {
         machine.cpu.reg_set(Mode::User, 0, parent);
         machine.cpu.reg_set(Mode::User, 4, 0xdeadbeef);
         machine.cpu.reg_set(Mode::User, reg::LR, 0x12345679);
+        let clip = machine.oldlib_clip;
+        let memory_clip = [
+            machine.memory.r16(SCREEN_IMAGE_STRUCT + 12),
+            machine.memory.r16(SCREEN_IMAGE_STRUCT + 14),
+            machine.memory.r16(SCREEN_IMAGE_STRUCT + 16),
+            machine.memory.r16(SCREEN_IMAGE_STRUCT + 18),
+        ];
         machine.handle_fixed_gameold_region_service(4).unwrap();
         assert_eq!(machine.memory.r32(context), 3);
         assert_eq!(machine.memory.r32(parent + 4), 0);
         assert_eq!(machine.memory.r32(child + 4), 0);
         assert_eq!(machine.register(4), 0xdeadbeef);
         assert_eq!(machine.register(reg::LR), 0x12345679);
-        assert_eq!(machine.memory.r16(SCREEN_IMAGE_STRUCT + 12), 10);
-        assert_eq!(machine.memory.r16(SCREEN_IMAGE_STRUCT + 18), 40);
-        assert_eq!(machine.oldlib_clip, [10, 20, 40, 60]);
+        // Each dirty rectangle is the clip only while its painter runs; the
+        // caller's clip must survive the repaint.
+        assert_eq!(
+            [
+                machine.memory.r16(SCREEN_IMAGE_STRUCT + 12),
+                machine.memory.r16(SCREEN_IMAGE_STRUCT + 14),
+                machine.memory.r16(SCREEN_IMAGE_STRUCT + 16),
+                machine.memory.r16(SCREEN_IMAGE_STRUCT + 18),
+            ],
+            memory_clip
+        );
+        assert_eq!(machine.oldlib_clip, clip);
     }
 
     #[test]
