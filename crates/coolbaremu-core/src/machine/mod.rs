@@ -6177,6 +6177,47 @@ mod tests {
         assert_ne!(machine.register(0), 0, "vscroll buffer allocated");
     }
 
+    /// DF_Actor+0x24 reports the duration of the action's last frame, not
+    /// its frame count.  Guests use it as the "action finished" delay, so a
+    /// frame count makes short actions look longer than they last and a
+    /// hurt actor never recovers (#96).
+    #[test]
+    fn actor_last_method_reports_the_last_frame_duration() {
+        let mut machine = machine_from_minimal_archive();
+
+        // actor+12 -> animation head; head+8 = action count,
+        // head+12 -> action table.  Each action entry is an 8-byte record
+        // (frame count, frame data pointer) and a frame's duration is the
+        // first word of its 8-byte record.
+        let actor = machine.allocate(0x40);
+        let head = machine.allocate(20);
+        let actions = machine.allocate(16);
+        let frames = machine.allocate(24);
+        for (index, duration) in [0u16, 1, 2].into_iter().enumerate() {
+            machine.memory.w16(frames + index as u32 * 8, duration);
+        }
+        machine.memory.w16(actions, 3);
+        machine.memory.w32(actions + 4, frames);
+        machine.memory.w16(actions + 8, 0);
+        machine.memory.w16(head + 8, 2);
+        machine.memory.w32(head + 12, actions);
+        machine.memory.w32(actor + 12, head);
+        machine.memory.w16(actor + 6, 0);
+
+        machine.cpu.reg_set(Mode::User, 0, actor);
+        machine.handle_actor_method(0x24);
+        assert_eq!(
+            machine.register(0),
+            2,
+            "0x24 reports the last frame's duration (2), not the frame count (3)"
+        );
+
+        // A zero-frame action has no last frame to report.
+        machine.memory.w16(actor + 6, 1);
+        machine.handle_actor_method(0x24);
+        assert_eq!(machine.register(0), 0, "empty action reports nothing");
+    }
+
     /// Per-slot method stubs must be distinguishable by address, and the
     /// memory-manager table's memset slot must actually clear memory.
     #[test]
