@@ -527,21 +527,32 @@ impl CoolbarMachine {
         // coordinates), and for titles that never call the scroll stubs
         // (`0x670`/`0x674`) this side effect is the only thing that drives the
         // camera.  Only follow when the level is actually larger than the
-        // viewport: single-screen scenes fit without scrolling and must keep
-        // the origin at zero, so games that already render correctly are
-        // untouched.
+        // viewport and the stored origin is a valid camera value: a pane
+        // origin outside `0..=map-viewport` is the window's screen placement,
+        // not a scroll offset (双截龙 positions the viewport at y=62 below the
+        // HUD, while its map is only one pixel taller than the viewport).
+        // Moving such a placement would drag the scene over the HUD and leave
+        // sprite pixels outside the repainted area.
         let vp_w = self.memory.r16(scene + 0x644) as i16 as i32;
         let vp_h = self.memory.r16(scene + 0x646) as i16 as i32;
         let map_w = self.memory.r32(map) as i32;
         let map_h = self.memory.r32(map + 4) as i32;
         if offset == 0x680 && map_w > vp_w && vp_w > 0 {
-            let target = (self.register(1) as i16 as i32).saturating_sub(vp_w / 2);
-            let cam_x = target.clamp(0, (map_w - vp_w).max(0)) as u16;
-            self.memory.w16(scene + 0x640, cam_x);
+            let current = self.memory.r16(scene + 0x640) as i16 as i32;
+            let span = (map_w - vp_w).max(0);
+            if (0..=span).contains(&current) {
+                let target = (self.register(1) as i16 as i32).saturating_sub(vp_w / 2);
+                let cam_x = target.clamp(0, span) as u16;
+                self.memory.w16(scene + 0x640, cam_x);
+            }
         } else if offset == 0x684 && map_h > vp_h && vp_h > 0 {
-            let target = (self.register(2) as i16 as i32).saturating_sub(vp_h / 2);
-            let cam_y = target.clamp(0, (map_h - vp_h).max(0)) as u16;
-            self.memory.w16(scene + 0x642, cam_y);
+            let current = self.memory.r16(scene + 0x642) as i16 as i32;
+            let span = (map_h - vp_h).max(0);
+            if (0..=span).contains(&current) {
+                let target = (self.register(2) as i16 as i32).saturating_sub(vp_h / 2);
+                let cam_y = target.clamp(0, span) as u16;
+                self.memory.w16(scene + 0x642, cam_y);
+            }
         }
         let x = self.register(1) as i16 as i32 - self.memory.r16(map + 0x40) as i16 as i32;
         let y = self.register(2) as i16 as i32 - self.memory.r16(map + 0x42) as i16 as i32;
@@ -690,6 +701,54 @@ mod tests {
         machine.memory.w16(scene + 0x640, 0);
         query(&mut machine, 24, 20, 4);
         assert_eq!(machine.memory.r16(scene + 0x640), 0);
+    }
+
+    /// A viewport origin outside the map's scroll range is the scene window's
+    /// screen placement, not a camera offset: 双截龙(新品) (#95) places its
+    /// viewport at y=62 under the HUD while the map is one pixel taller than
+    /// the viewport.  The vertical query used to overwrite that placement with
+    /// the clamped camera (y=1), dragging the level over the HUD and leaving
+    /// sprite trails outside the repainted area.
+    #[test]
+    fn scene_movement_query_preserves_a_window_placement_origin() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        let scene = machine.allocate(0x700);
+        let map = machine.allocate(0x100);
+        // 240x216 map and a 240x215 viewport: one pixel of scroll range.
+        machine.memory.w32(map, 240);
+        machine.memory.w32(map + 4, 216);
+        machine.memory.w32(map + 8, 24);
+        machine.memory.w32(map + 12, 24);
+        machine.memory.w32(scene + 0x61c, map);
+        machine.memory.w16(scene + 0x640, 0);
+        machine.memory.w16(scene + 0x642, 62);
+        machine.memory.w16(scene + 0x644, 240);
+        machine.memory.w16(scene + 0x646, 215);
+
+        let query_vertical = |machine: &mut CoolbarMachine, y: u32, delta: u32| {
+            machine.cpu.reg_set(Mode::User, 0, scene);
+            machine.cpu.reg_set(Mode::User, 1, 0);
+            machine.cpu.reg_set(Mode::User, 2, y);
+            machine.cpu.reg_set(Mode::User, 3, delta);
+            machine.handle_method_stub(
+                CoolbarMachine::method_stub_address(
+                    super::super::super::METHOD_KIND_GAMEOLD,
+                    0x684,
+                ) & !1,
+            );
+        };
+
+        query_vertical(&mut machine, 120, 4);
+        assert_eq!(
+            machine.memory.r16(scene + 0x642),
+            62,
+            "a placement origin outside the scroll range must not be overwritten"
+        );
+
+        // An origin already inside the scroll range keeps following.
+        machine.memory.w16(scene + 0x642, 0);
+        query_vertical(&mut machine, 120, 4);
+        assert_eq!(machine.memory.r16(scene + 0x642), 1);
     }
 
     #[test]
