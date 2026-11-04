@@ -2048,6 +2048,14 @@ impl CoolbarMachine {
                 let image = self.create_image_from_stream(self.register(0), 0);
                 self.set_result(image);
             }
+            5 => {
+                // IMG_GetColorDepth: the battle UI polls the display color
+                // depth before creating its placement views; a zero result
+                // left the views uncreated and the whole placement chain
+                // inert (僵尸先生 battle, issue #89).  Mirror the group-4
+                // sibling: LCD 0 is 8-bit, anything else is 16-bit.
+                self.set_result(if self.register(0) == 0 { 8 } else { 16 });
+            }
             10 => {
                 // IMG_DrawChar: some engine builds render text one character
                 // at a time into a dedicated glyph-cell image and blit the
