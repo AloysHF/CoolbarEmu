@@ -6748,6 +6748,33 @@ mod tests {
         assert_eq!(machine.read_file_path(addr), "./x.dat");
     }
 
+    /// Some little-endian installers hand the firmware UCS2-LE paths (a zero
+    /// high byte per character).  Reading those as single-byte stopped at the
+    /// NUL after the leading character, so the 僵尸先生 installer opened "."
+    /// and created "." as a directory for all 341 files: it completed with no
+    /// installed tree and halted instead of starting the game (issue #167).
+    /// The encoding has to be detected per string, not per machine, and
+    /// single-byte paths on the same machine must keep working.
+    #[test]
+    fn little_endian_file_path_detects_ucs2() {
+        let mut machine = machine_from_minimal_archive();
+        let addr = machine.allocate(128);
+        let mut units = Vec::new();
+        for unit in "./\\PlantsZombies\\title1.gif".encode_utf16() {
+            units.extend_from_slice(&unit.to_le_bytes());
+        }
+        units.extend_from_slice(&[0, 0]);
+        machine.memory.write_bytes(addr, &units);
+        assert_eq!(
+            machine.read_file_path(addr),
+            "./\\PlantsZombies\\title1.gif",
+            "UCS2-LE path truncated at the first character"
+        );
+
+        machine.memory.write_bytes(addr, b"./x.dat\0");
+        assert_eq!(machine.read_file_path(addr), "./x.dat");
+    }
+
     /// The firmware open ABI carries an open-mode enum in r0 and an optional
     /// mode string in r2.  A stale r2 pointing at code must fall back to the
     /// enum instead of being read as an fopen string.
