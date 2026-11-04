@@ -2253,8 +2253,7 @@ impl CoolbarMachine {
 mod tests {
     use super::{
         df_degree, df_sin, packed_rectangles_overlap, read_little_endian_int,
-        read_little_endian_short, rect_contains_point, CoolbarMachine, METHOD_KIND_GAMEOLD,
-        METHOD_KIND_MEMORY,
+        read_little_endian_short, rect_contains_point, METHOD_KIND_GAMEOLD, METHOD_KIND_MEMORY,
     };
     use crate::machine::memory::MachineMemory;
 
