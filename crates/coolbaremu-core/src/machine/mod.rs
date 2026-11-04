@@ -2095,6 +2095,25 @@ mod tests {
     }
 
     #[test]
+    fn ucs2_expand_strcpy_widens_narrow_paths() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        let source = HEAP_BASE + 0x100;
+        let destination = HEAP_BASE + 0x200;
+        machine.memory.write_bytes(source, b"\\ldj\\gldja.dat\0");
+        machine.set_user_register(0, destination);
+        machine.set_user_register(1, source);
+        machine.handle_ucs2_service(11);
+        assert_eq!(machine.register(0), destination);
+        for (index, byte) in b"\\ldj\\gldja.dat".iter().enumerate() {
+            assert_eq!(
+                machine.memory.r16(destination + index as u32 * 2),
+                *byte as u16
+            );
+        }
+        assert_eq!(machine.memory.r16(destination + 14 * 2), 0);
+    }
+
+    #[test]
     fn network_connect_registers_attempt_and_queues_offline_error() {
         let mut machine = CoolbarMachine::new_blank_for_tests();
         machine.set_user_register(2, 0x0100_1235);

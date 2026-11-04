@@ -66,6 +66,7 @@ Landlord round, War Chess's menu/help/purchase panels, Westward Journey's title
 menu, the QCIF Ebook bookshelf, and Love Assistant V10 list menus and article
 selection/back navigation, plus IM login rendering and field-focus navigation.
 Fish Classic title/menu and help navigation are also checked.
+鹿鼎记's new-game confirmation, prologue and free-roam movement are checked.
 Zombie Master (recommended variant) title/menu, touch selection, help text and
 return navigation are checked with its supplied companion resources.
 1943 V101 reaches aircraft/equipment selection and battle through local point-play
@@ -223,7 +224,7 @@ not provide the original server's content or a real carrier payment service.
 | 119 | `A/魔幻英雄(新品).CBE` | 240×320 | <img src="images/A/魔幻英雄(新品).png" width="120" alt="魔幻英雄(新品) idle frame"> | Not assessed | Ready | Playable: 150-frame confirm-key run reaches gameplay (76541 px / 80 colors) and returns cleanly through `EXIT_ADDRESS`; slots that name no routine are treated as unimplemented calls; complete gameplay unverified
 | 120 | `A/魔幻英雄(新品)V10.CBE` | 240×320 | <img src="images/A/魔幻英雄(新品)V10.png" width="120" alt="魔幻英雄(新品)V10 idle frame"> | Not assessed | Ready | Offline continuation frame captured; interaction/gameplay unverified |
 | 121 | `A/魔幻英雄V101.CBE` | 240×320 | <img src="images/A/魔幻英雄V101.png" width="120" alt="魔幻英雄V101 idle frame"> | Blocked: dead server | Ready | Online title: the guest requests the retired Coolbar platform service (vmt.51coolbar.com) and the offline error page is the firmware-faithful result; emulator-side fix is not possible (see issue #163) |
-| 122 | `A/鹿鼎记(新品推荐)V10.CBE` | 240×320 | <img src="images/A/鹿鼎记(新品推荐)V10.png" width="120" alt="鹿鼎记(新品推荐)V10 idle frame"> | Not assessed | Ready | The startup decode is a legitimate one-shot of about 39.5M instructions, after which the run settles to 7,487 per frame and reaches 76,350 px / 151 colours; a second Confirm at frame 50 then runs away (>100M in one frame) inside a memset loop whose end pointer walks past the 4 MiB heap pool (issue #164) |
+| 122 | `A/鹿鼎记(新品推荐)V10.CBE` | 240×320 | <img src="images/A/鹿鼎记(新品推荐)V10.png" width="120" alt="鹿鼎记(新品推荐)V10 idle frame"> | Not assessed | Ready | Playable (issue #164): the startup decode is a legitimate one-shot of about 39.5M instructions, after which the title idles at 7,487 per frame. The missing UCS2 expand-strcpy service (13:11) made the guest widen the save path from garbage, and a guest delete left the host save sidecar visible, so the "no save record" dialog re-armed forever. The confirm dialog now deletes the stale save, starts a new game and writes `gldja.rec`; 121 Confirm presses finish the prologue at about 340k instructions per frame and reach the free-roam map with 菜单/系统 soft keys, and held Right/Down moves the player into a new area and triggers a story event. Full story and save/load unverified |
 | 123 | `A/龙王战士V101.CBE` | 240×320 | <img src="images/A/龙王战士V101.png" width="120" alt="龙王战士V101 idle frame"> | Blocked: dead server | Ready | Online title: the guest requests the retired Coolbar platform service (vmt.51coolbar.com) and the offline error page is the firmware-faithful result; emulator-side fix is not possible (see issue #165) |
 
 ### Group B

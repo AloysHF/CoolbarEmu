@@ -104,6 +104,17 @@ impl CoolbarMachine {
                 }
                 self.set_result(result as u32);
             }
+            11 => {
+                // Expand a NUL-terminated narrow string into UCS2 in place.
+                let destination = self.register(0);
+                let bytes = self.read_c_bytes(self.register(1), 0x8000);
+                for (offset, byte) in bytes.iter().enumerate() {
+                    self.memory
+                        .w16(destination + offset as u32 * 2, *byte as u16);
+                }
+                self.memory.w16(destination + bytes.len() as u32 * 2, 0);
+                self.set_result(destination);
+            }
             _ => self.set_result(0),
         }
     }
