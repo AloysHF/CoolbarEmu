@@ -149,7 +149,7 @@ impl CoolbarMachine {
             1 if self.uses_native_dispatch_abi() => self.draw_image_with_clip(false),
             2 if self.uses_native_dispatch_abi() => self.draw_image_with_clip(true),
             3 if self.uses_native_dispatch_abi() => self.draw_full_screen(),
-            4 if self.uses_native_dispatch_abi() => self.draw_number_service(),
+            4 if gameold_abi || self.uses_native_dispatch_abi() => self.draw_number_service(),
             5 if self.uses_native_dispatch_abi() => self.draw_ui(),
             6 if self.uses_native_dispatch_abi() => self.draw_ui_four_x_repeat(),
             7 if self.uses_native_dispatch_abi() => self.draw_ui_single_repeat(),
@@ -2264,6 +2264,59 @@ mod tests {
             machine.handle_game_service(index);
             assert_eq!(machine.register(0), expected as u32, "service {index}");
         }
+    }
+
+    #[test]
+    fn gameold_draw_number_blits_digit_glyphs_instead_of_polluting_the_image() {
+        use crate::machine::{CoolbarMachine, SCREEN_IMAGE};
+        use armv4t_emu::{reg, Memory};
+
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        // Fixed-manager games reach DrawNumber through the shared game-manager
+        // table (group 3 slot 4); 金刚大战's HUD (issue #153) is the corpus
+        // case.  Before the slot was routed, the constructor-shaped fallback
+        // returned the image and filled its zero words with method stubs.
+        machine.executable.big_endian = true;
+        machine.executable.preferred_code_address = 0x01000000;
+        machine.executable.code_image_size = 0x2000;
+        assert!(machine.uses_fixed_manager_abi());
+        machine.initialize_screen();
+
+        // Ten 8x12 digit cells; digit 1's cell carries a solid marker color.
+        let image = machine.allocate(12);
+        let pixels = machine.allocate(10 * 8 * 12 * 2);
+        machine.memory.w32(image, pixels);
+        machine.write_image_dims(image, 80, 12);
+        machine.memory.w8(image + machine.image_kind_offset(), 1);
+        machine.memory.w32(image + 16, 0);
+        for y in 0..12u32 {
+            for x in 0..8u32 {
+                machine.memory.w16(pixels + (8 + x + y * 8) * 2, 0xf800);
+            }
+        }
+
+        // DrawNumber(image, 1, cw=8, ch=12, gap=0, x=20, y=30, align=0):
+        // align 0 right-aligns the number, so the digit's cell sits at x=20.
+        for (index, value) in [image, 1, 8, 12].into_iter().enumerate() {
+            machine.set_user_register(index as u8, value);
+        }
+        let stack = machine.allocate(16);
+        machine.set_user_register(reg::SP, stack);
+        for (index, value) in [0u32, 20, 30, 0].into_iter().enumerate() {
+            machine.memory.w32(stack + index as u32 * 4, value);
+        }
+        machine.handle_game_service(4);
+
+        // The glyph lands on the framebuffer...
+        assert_eq!(
+            machine.memory.r16(SCREEN_IMAGE + (30 * 240 + 20) * 2),
+            0xf800
+        );
+        // ...the header stays intact...
+        assert_eq!(machine.memory.r32(image), pixels);
+        assert_eq!(machine.image_dims(image), (80, 12));
+        // ...and the tail of the image struct receives no method-slot stubs.
+        assert_eq!(machine.memory.r32(image + 16), 0);
     }
 
     #[test]

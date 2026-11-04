@@ -200,7 +200,9 @@ layout while each initializer writes only its declared number of slots.
 ## Rendering
 
 Fixed GameManager image services route to GameLCD: indices 1-3 draw images,
-14 sets the clip, 24 returns it, and 32/33 draw opaque/transparent image targets.
+4 draws a decimal number from a glyph strip (the same gameold DrawNumber the
+native dispatch reaches at slot 4), 14 sets the clip, 24 returns it, and
+32/33 draw opaque/transparent image targets.
 Both tables use the same source offsets and clip state.
 
 Native dispatch sid 82 copies the v3 gameold table into the caller's buffer:
