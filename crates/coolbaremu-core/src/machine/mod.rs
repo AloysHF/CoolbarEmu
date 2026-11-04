@@ -738,6 +738,12 @@ pub struct CoolbarMachine {
     recent_services: VecDeque<(u32, u32, u32, u32)>,
     instruction_count: u64,
     frame_count: u64,
+    /// Frame that `tick_polls` belongs to; see the get_tick service.
+    #[serde(skip, default)]
+    tick_poll_frame: u64,
+    /// Polls already served from the current frame's 100 ms tick window.
+    #[serde(skip, default)]
+    tick_polls: u32,
     last_pc: u32,
     recent_pcs: VecDeque<u32>,
     /// Recent non-fallthrough control transfers (from, to), newest last.
@@ -934,6 +940,8 @@ impl CoolbarMachine {
             recent_services: VecDeque::with_capacity(16),
             instruction_count: 0,
             frame_count: 0,
+            tick_poll_frame: 0,
+            tick_polls: 0,
             last_pc: 0,
             recent_pcs: VecDeque::with_capacity(32),
             recent_branches: VecDeque::with_capacity(16),
@@ -2003,6 +2011,8 @@ impl CoolbarMachine {
             recent_services: VecDeque::new(),
             instruction_count: 0,
             frame_count: 0,
+            tick_poll_frame: 0,
+            tick_polls: 0,
             last_pc: 0,
             recent_pcs: VecDeque::new(),
             recent_branches: VecDeque::new(),
@@ -4985,9 +4995,26 @@ mod tests {
         machine.frame_count = 3;
         machine.handle_game_service(44);
         assert_eq!(machine.register(0), 300);
+        // Polls from the same frame advance by 1 ms so wait loops progress.
+        machine.handle_game_service(44);
+        assert_eq!(machine.register(0), 301);
+        machine.handle_game_service(44);
+        assert_eq!(machine.register(0), 302);
+        // A heavily polled frame stays inside its own 100 ms window instead
+        // of accelerating the clock ahead of virtual time.
+        for _ in 0..120 {
+            machine.handle_game_service(44);
+        }
+        assert_eq!(machine.register(0), 399);
+        // The offset belongs to the frame's window and must reset;
+        // carrying it across frames corrupts same-frame countdown
+        // comparisons.
         machine.frame_count = 4;
         machine.handle_game_service(44);
         assert_eq!(machine.register(0), 400);
+        machine.frame_count = 5;
+        machine.handle_game_service(44);
+        assert_eq!(machine.register(0), 500);
     }
 
     #[test]

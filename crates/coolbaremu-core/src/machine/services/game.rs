@@ -161,16 +161,23 @@ impl CoolbarMachine {
             38 | 40 if gameold_abi || self.uses_native_dispatch_abi() => self.free_big_service(),
             44 if gameold_abi || self.uses_native_dispatch_abi() => {
                 // OldLib_0b0: get_tick — the guest's millisecond clock.
-                // The guest also polls it in wait loops, so the value has
-                // to keep moving within a frame (mirrors the reference's
-                // same-slot repeat acceleration).
-                let repeats = self.service_calls.get(&(3, 44)).copied().unwrap_or(0);
-                let mut tick = (self.frame_count as u32).wrapping_mul(100);
-                if repeats > 64 {
-                    tick = tick.wrapping_add(16 * (repeats - 64) as u32);
-                } else if repeats > 8 {
-                    tick = tick.wrapping_add((repeats - 8) as u32);
-                }
+                // One frame is exactly 100 ms, so repeated polls inside
+                // the same frame advance by 1 ms each (busy-wait loops
+                // must see progress) without leaving the frame's tick
+                // window. The offset resets on the next frame: carrying
+                // polls across frames lets the clock drift ahead of the
+                // 100 ms/frame virtual time, which corrupts countdowns
+                // that compare timestamps sampled in the same frame.
+                let polls = if self.tick_poll_frame == self.frame_count {
+                    self.tick_polls
+                } else {
+                    0
+                };
+                let tick = (self.frame_count as u32)
+                    .wrapping_mul(100)
+                    .wrapping_add(polls.min(99));
+                self.tick_poll_frame = self.frame_count;
+                self.tick_polls = polls.saturating_add(1);
                 self.set_result(tick);
             }
             45 if self.uses_native_dispatch_abi() => {
