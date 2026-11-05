@@ -52,6 +52,11 @@ allocation, so returning to the title leaked every decoded picture and a later
 re-entry found the heap pool full and rendered black; the slot now frees the
 allocation (b75283f), and re-entry across three cycles plus a scoring swap is
 verified (issue #192).
+Crazy Landlord (A group, rows 80–81) left the table blank after a resumed deal
+because `get_tick` advanced the guest clock faster than the 100 ms frame, which
+corrupted the countdown shared by the AI ready timers; the clock now stays
+inside each frame's tick window, and the resumed deal, settlement prompt and
+exit/re-entry menu render with every glyph (issues #137, #138).
 
 ## Summary
 
@@ -62,7 +67,7 @@ verified (issue #192).
 | C | 48 | 48 | 0 | 0 |
 
 Verified interaction includes Wulin's menus and battle actions, one Crazy
-Landlord round, War Chess's menu/help/purchase panels, Westward Journey's title
+Landlord round plus resumed deals in both variants, War Chess's menu/help/purchase panels, Westward Journey's title
 menu, the QCIF Ebook bookshelf, and Love Assistant V10 list menus and article
 selection/back navigation, plus IM login rendering and field-focus navigation.
 Fish Classic title/menu and help navigation are also checked.
@@ -180,8 +185,8 @@ not provide the original server's content or a real carrier payment service.
 | 77 | `A/生化危机V101.CBE` | 320×240 | <img src="images/A/生化危机V101.png" width="120" alt="生化危机V101 idle frame"> | Touch / keys | Ready | Playable at the reported path: NIGHT1 spawns enemy characters that close on the player and drop the health counter to 41, and the field clears by 1,200 frames; in a 5,000-frame replay the character still moves, weapon selection works, and the pause menu opens and returns (issue #135) |
 | 78 | `A/生肖宝贝(新品).CBE` | 240×320 | <img src="images/A/生肖宝贝(新品).png" width="120" alt="生肖宝贝(新品) idle frame"> | Not assessed | Ready | Startup stays on a blue tiled loading screen with a moving progress bar and the challenge-failed / renewal text is overlaid on that same loading art before any playable screen appears (issue #136) |
 | 79 | `A/生肖运程V10.CBE` | 240×320 | <img src="images/A/生肖运程V10.png" width="120" alt="生肖运程V10 idle frame"> | Not assessed | Ready | Image palette colors checked; interaction/gameplay unverified |
-| 80 | `A/疯狂斗地主(新品).CBE` | 240×320 | <img src="images/A/疯狂斗地主(新品).png" width="120" alt="疯狂斗地主(新品) idle frame"> | Not assessed | Ready | Menu, help, card actions and one round result checked; a resumed deal then ends with no hand, kitty, timer or score at 2,200 frames, and the exit/re-entry path shows a loading caption with three missing-glyph buttons (issue #137) |
-| 81 | `A/疯狂斗地主V10.CBE` | 240×320 | <img src="images/A/疯狂斗地主V10.png" width="120" alt="疯狂斗地主V10 idle frame"> | Not assessed | Ready | Billing return, character select and a real deal work — cards can be played and the opponent responds — but by 2,200 frames only the characters and empty frames remain, with no hand, kitty, timer, score or settlement prompt (issue #138) |
+| 80 | `A/疯狂斗地主(新品).CBE` | 240×320 | <img src="images/A/疯狂斗地主(新品).png" width="120" alt="疯狂斗地主(新品) idle frame"> | Not assessed | Ready | Playable: menu, help, card actions and one round result checked; the resumed deal now renders the hand, kitty, timer and score at 2,200 frames, and the exit/re-entry path draws the full main menu with every glyph (issue #137; the guest clock no longer runs ahead of the 100 ms frame) |
+| 81 | `A/疯狂斗地主V10.CBE` | 240×320 | <img src="images/A/疯狂斗地主V10.png" width="120" alt="疯狂斗地主V10 idle frame"> | Not assessed | Ready | Playable: billing return, character select and a real deal work — cards can be played and the opponent responds — and the resumed deal still shows the hand, kitty, timer and score at 2,200 frames instead of an empty table (issue #138; the guest clock no longer runs ahead of the 100 ms frame) |
 | 82 | `A/移动书城V10.CBE` | 240×320 | <img src="images/A/移动书城V10.png" width="120" alt="移动书城V10 idle frame"> | Not assessed | Ready | Offline continuation frame captured; interaction/gameplay unverified |
 | 83 | `A/穿越火线V101.CBE` | 240×320 | <img src="images/A/穿越火线V101.png" width="120" alt="穿越火线V101 idle frame"> | Not assessed | Ready | Offline continuation frame captured; interaction/gameplay unverified |
 | 84 | `A/绝密宝藏(新品).CBE` | 240×320 | <img src="images/A/绝密宝藏(新品).png" width="120" alt="绝密宝藏(新品) idle frame"> | Not assessed | Ready | The reported invalid-address jump no longer reproduces: Ready with 76,741 non-empty pixels on both the pre-fix and post-fix builds; full exploration is unverified (issue #139) |
