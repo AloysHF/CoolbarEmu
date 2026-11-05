@@ -1352,7 +1352,13 @@ impl CoolbarMachine {
                             .region(self.register(1), self.image_header_len() as usize)
                             .is_some()) =>
             {
-                let result = self.create_image_from_stream(self.register(0), self.register(1));
+                let source = self.register(0);
+                let output = self.register(1);
+                let result = if index == 49 && self.is_image_id_call(source, output) {
+                    self.create_image_from_data_package(source, output, self.register(2))
+                } else {
+                    self.create_image_from_stream(source, output)
+                };
                 self.set_result(result);
             }
             57 => self.set_result(0),
@@ -1370,6 +1376,18 @@ impl CoolbarMachine {
             90..=92 => self.set_result(0),
             _ => self.set_result(0),
         }
+    }
+
+    /// Some fixed-manager titles are linked against an LCD table whose
+    /// IMG_CreateImageFormIdEx sits at 0xC4 instead of 0xC0. Its call shape
+    /// (a resource id plus a data package) is distinguishable from
+    /// IMG_CreateImageFormStream, which passes an encoded stream pointer in
+    /// the same register.
+    fn is_image_id_call(&mut self, source: u32, package: u32) -> bool {
+        source < 0x10000
+            && self.memory.region(package, 0x20).is_some()
+            && self.memory.r8(package) == 1
+            && self.memory.r16(package + 8) != 0
     }
 
     pub(crate) fn create_image_from_stream(&mut self, source: u32, output: u32) -> u32 {
@@ -3172,6 +3190,48 @@ mod alpha_storage_tests {
                 assert_eq!(&restored.frame_pixels()[..2], &[0, 0x0000ff]);
             }
         }
+    }
+
+    #[test]
+    fn lcd_slot_49_creates_an_image_from_a_data_package_id() {
+        // The v3 fixed-manager LCD table reaches IMG_CreateImageFormIdEx at
+        // slot 49 as (resource id, DF_DataPackage *, output image). Treating
+        // that call as a stream decode left every image header zeroed, so the
+        // guest blitted NULL images and the reported title only ever showed
+        // its loading overlay.
+        let mut machine = image_machine(false, true);
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(
+                &[255, 0, 0, 255, 0, 255, 0, 255],
+                2,
+                1,
+                image::ExtendedColorType::Rgba8,
+            )
+            .unwrap();
+        let stream = machine.allocate(png.len() as u32);
+        machine.memory.write_bytes(stream, &png);
+        let package = machine.allocate(0x40);
+        machine.memory.write_bytes(package, &[0; 0x40]);
+        let ids = machine.allocate(2);
+        let data = machine.allocate(4);
+        machine.memory.w8(package, 1);
+        machine.memory.w16(package + 8, 1);
+        machine.memory.w32(package + 16, data);
+        machine.memory.w32(package + 20, ids);
+        machine.memory.w16(ids, 0);
+        machine.memory.w32(data, stream);
+        let output = machine.allocate(machine.image_header_len());
+        machine.set_user_register(0, 0);
+        machine.set_user_register(1, package);
+        machine.set_user_register(2, output);
+        machine.handle_lcd_service(49);
+        assert_ne!(
+            machine.memory.r32(output),
+            0,
+            "image-id calls must decode the packaged resource into the output header"
+        );
+        assert_eq!(machine.image_dims(output), (2, 1));
     }
 
     #[test]
