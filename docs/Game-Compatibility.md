@@ -51,7 +51,11 @@ the game LCD slot that clears an image header never reclaimed the pixel
 allocation, so returning to the title leaked every decoded picture and a later
 re-entry found the heap pool full and rendered black; the slot now frees the
 allocation (b75283f), and re-entry across three cycles plus a scoring swap is
-verified (issue #192).
+verified (issue #192). Fruit Master (B group, row 43) hit the same leaked-pixel
+path on every menu/gameplay switch, and its classic-mode soft-float loop also
+needed the ARMv5 CLZ implementation (29235df); both repairs are merged, and the
+issue's full replay, four game modes, ten re-entry loops and a 4,993-frame run
+are now verified (issue #183).
 Crazy Landlord (A group, rows 80–81) left the table blank after a resumed deal
 because `get_tick` advanced the guest clock faster than the 100 ms frame, which
 corrupted the countdown shared by the AI ready timers; the clock now stays
@@ -71,6 +75,9 @@ Landlord round plus resumed deals in both variants, War Chess's menu/help/purcha
 menu, the QCIF Ebook bookshelf, and Love Assistant V10 list menus and article
 selection/back navigation, plus IM login rendering and field-focus navigation.
 Fish Classic title/menu and help navigation are also checked.
+Fruit Master's four modes, slicing/scoring, pause/resume, settlement, retry and
+ten return-to-title/re-entry loops are checked; a 4,993-frame run stayed Ready
+with non-zero PCM on 4,938 frames and no heap exhaustion.
 鹿鼎记's new-game confirmation, prologue and free-roam movement are checked.
 Zombie Master (recommended variant) title/menu, touch selection, help text and
 return navigation are checked with its supplied companion resources.
@@ -87,8 +94,8 @@ Variant-specific coverage is listed below.
 Fifteen embedded-program variants restore normal title/menu rendering and basic
 selection through 2,000-frame input checks. Active but blank/loading variants
 remain incomplete, as specified in their individual rows.
-Complete playthroughs and all audio paths remain unverified; billing and network
-callbacks are local offline simulations.
+Complete playthroughs and the full set of audio paths remain unverified; billing
+and network callbacks are local offline simulations.
 
 ## Application List
 
@@ -278,7 +285,7 @@ not provide the original server's content or a real carrier payment service.
 | 40 | `B/武林外传(新品).CBE` | 240×320 | <img src="images/B/武林外传(新品).png" width="120" alt="武林外传(新品) idle frame"> | No known requirement | Ready | Compact alpha masks prevent first-battle heap exhaustion; left/right movement, heavy-hit input, score acknowledgement and return to battle checked through 1,016 frames. Full campaign, battle exit and audio unverified |
 | 41 | `B/武林外传V10.CBE` | 240×320 | <img src="images/B/武林外传V10.png" width="120" alt="武林外传V10 idle frame"> | No known requirement | Ready | Image palette colors checked; interaction/gameplay unverified |
 | 42 | `B/歪歪猫发条城历险记V100.CBE` | 176×220 | <img src="images/B/歪歪猫发条城历险记V100.png" width="120" alt="歪歪猫发条城历险记V100 idle frame"> | Required | Ready | Scalar rectangle outlines fix vertical streaks in the inventory; platform movement/scrolling, weapon firing (ammo 10→9), inventory selection and return to the stage checked. Full playthrough and audio unverified |
-| 43 | `B/水果达人.CBE` | 400×240 | <img src="images/B/水果达人.png" width="120" alt="水果达人 idle frame"> | No known requirement | Ready | The arithmetic loop faults: a 110-frame replay exceeds the 20M instruction budget at 0x0101BB1C, so the classic mode and the later scene switch cannot be reached (issue #183). Needs a held drag, not repeated taps |
+| 43 | `B/水果达人.CBE` | 400×240 | <img src="images/B/水果达人.png" width="120" alt="水果达人 idle frame"> | No known requirement | Ready | Playable: the classic-mode arithmetic loop and the scene-switch heap exhaustion of issue #183 no longer reproduce on current master — ARMv5 CLZ (29235df) fixes the non-converging soft-float Newton loop, and the game-LCD slot 11 image destructor reclaims pixel buffers (b75283f). Verified with held drags (not taps): fruit spawning and slicing (score 0→3, best score 0→12), pause/resume, settlement, retry and a complete title menu after 10 return/re-entry loops (1,599 frames); the issue's 696-frame script and a 4,993-frame long run stay Ready with zero heap-exhaustion warnings. Zen (1:28 countdown), Arcade (1:00→0:46 countdown) and the achievements list all open and exit cleanly; the audio pipeline delivered non-zero PCM on 4,938 of 4,993 frames. Achievement unlock progression and audio fidelity against original hardware remain unverified |
 | 44 | `B/江湖Online.CBE` | 240×400 | <img src="images/B/江湖Online.png" width="120" alt="江湖Online idle frame"> | Required | Ready | After installation the right soft key enters 获取版本信息 / 正在和服务器通讯请稍候 and it is still there at 2,701 frames; cancelling leaves only a green background (issue #184) |
 | 45 | `B/法老祖玛2.CBE` | 400×240 | <img src="images/B/法老祖玛2.png" width="120" alt="法老祖玛2 idle frame"> | No known requirement | Ready | Menus reach 1-1 and a held drag moves the tray from x80 to x300 with 5 switching the shot colour, but the bead chain is uniformly dark grey and the pause menu is an empty red-brown frame (issue #185) |
 | 46 | `B/涂鸦跳跃.CBE` | 240×352 | <img src="images/B/涂鸦跳跃.png" width="120" alt="涂鸦跳跃 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
