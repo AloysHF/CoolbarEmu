@@ -305,6 +305,14 @@ impl CoolbarMachine {
                 if screen != 0 && self.uses_fixed_manager_abi() {
                     self.screen_contexts.insert(screen, 0);
                 }
+                // Re-selecting the current screen is how the guest restarts a
+                // round: it expects the screen's initializer to run again.
+                // Screen entry normally clears screen_initialized only when the
+                // target changes, so an unchanged target would leave the round
+                // stuck on its result screen.
+                if screen != 0 && screen == self.active_screen {
+                    self.screen_initialized = false;
+                }
                 self.pending_screen = screen;
                 self.memory.w32(SCREEN_IS_IN_QUIT, 0);
                 self.set_result(SCREEN_IS_IN_QUIT);

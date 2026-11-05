@@ -5819,6 +5819,48 @@ mod tests {
     }
 
     #[test]
+    fn reselecting_the_active_screen_reruns_its_initializer() {
+        for big_endian in [false, true] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_screen();
+            machine.state = MachineState::Ready;
+            machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+            let object = machine.allocate(64);
+            let screen = object + 24;
+            let load = machine.allocate(6);
+            let init = machine.allocate(6);
+            for (callback, words) in [
+                (load, [0x212a, 0x6141, 0x4770]), // Store the loaded resource.
+                (init, [0x2107, 0x6141, 0x4770]), // Position the entity for play.
+            ] {
+                for (i, word) in words.into_iter().enumerate() {
+                    machine.memory.w16(callback + i as u32 * 2, word);
+                }
+            }
+            machine.memory.w32(screen, init | 1);
+            machine.memory.w32(screen + 24, load | 1);
+            machine.pending_screen = screen;
+            machine.run_frame(100).unwrap();
+            assert_eq!(machine.memory.r32(object + 20), 7);
+            assert!(machine.screen_initialized);
+
+            // A finished round overwrites the initialized state, then the guest
+            // re-selects the very same screen to restart. The initializer has
+            // to run again without replaying the resource load callback.
+            machine.memory.w32(object + 20, 99);
+            machine.set_user_register(0, screen);
+            machine.handle_game_service(60);
+            assert!(!machine.screen_initialized);
+            machine.run_frame(100).unwrap();
+            assert_eq!(machine.memory.r32(object + 20), 7);
+            assert!(!machine.resource_load_pending);
+        }
+    }
+
+    #[test]
     fn paused_screen_preserves_frame_and_resumes_after_callback() {
         let mut machine = machine_from_minimal_archive();
         machine.initialize_screen();
