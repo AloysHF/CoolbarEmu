@@ -571,12 +571,14 @@ impl CoolbarMachine {
             }
             138 => {
                 // rand() — deterministic LCG so guest code that seeds and
-                // samples the generator gets a stable stream.
+                // samples the generator gets a stable stream. Same 31-bit
+                // width as the stdio rand (see the note there): guests scale
+                // the value by 1/2^31 to build uniform picks.
                 self.rand_state = self
                     .rand_state
                     .wrapping_mul(1_103_515_245)
                     .wrapping_add(12_345);
-                self.set_result((self.rand_state >> 16) & 0x7fff);
+                self.set_result(self.rand_state & 0x7fff_ffff);
             }
             // Firmware exports at F_0 offsets 0x224..0x274 (indices 137..157).
             // Falling through to the object-constructor default here corrupts
@@ -1721,12 +1723,14 @@ impl CoolbarMachine {
                 }
             }
             (METHOD_KIND_GAMEOLD, 0x228) => {
-                // VmGetRand()
+                // VmGetRand() — same 31-bit width as the stdio rand (see the
+                // note there): guests scale the value by 1/2^31 to build
+                // uniform picks.
                 self.rand_state = self
                     .rand_state
                     .wrapping_mul(1_103_515_245)
                     .wrapping_add(12_345);
-                self.set_result((self.rand_state >> 16) & 0x7fff);
+                self.set_result(self.rand_state & 0x7fff_ffff);
             }
             // Slots of an auto-created result object always return zero:
             // the point of the object is that the call lands on a stub
