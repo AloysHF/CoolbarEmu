@@ -57,6 +57,13 @@ because `get_tick` advanced the guest clock faster than the 100 ms frame, which
 corrupted the countdown shared by the AI ready timers; the clock now stays
 inside each frame's tick window, and the resumed deal, settlement prompt and
 exit/re-entry menu render with every glyph (issues #137, #138).
+Scarab 2 (B group, row 45) drew its 1-1 bead chain uniformly dark grey and
+opened the pause menu as an empty red-brown frame. The screen lifecycle
+replayed a screen's load callback after initialization, and that replay reset
+setup the initializer had just positioned; entry now runs the initializer and
+uses the load callback only for screens without one (67bbb6f). The verified
+620-frame replay renders the coloured chain and all three pause actions, and
+exit plus the continue-progress restart return to a playable level (issue #185).
 
 ## Summary
 
@@ -280,7 +287,7 @@ not provide the original server's content or a real carrier payment service.
 | 42 | `B/歪歪猫发条城历险记V100.CBE` | 176×220 | <img src="images/B/歪歪猫发条城历险记V100.png" width="120" alt="歪歪猫发条城历险记V100 idle frame"> | Required | Ready | Scalar rectangle outlines fix vertical streaks in the inventory; platform movement/scrolling, weapon firing (ammo 10→9), inventory selection and return to the stage checked. Full playthrough and audio unverified |
 | 43 | `B/水果达人.CBE` | 400×240 | <img src="images/B/水果达人.png" width="120" alt="水果达人 idle frame"> | No known requirement | Ready | The arithmetic loop faults: a 110-frame replay exceeds the 20M instruction budget at 0x0101BB1C, so the classic mode and the later scene switch cannot be reached (issue #183). Needs a held drag, not repeated taps |
 | 44 | `B/江湖Online.CBE` | 240×400 | <img src="images/B/江湖Online.png" width="120" alt="江湖Online idle frame"> | Required | Ready | After installation the right soft key enters 获取版本信息 / 正在和服务器通讯请稍候 and it is still there at 2,701 frames; cancelling leaves only a green background (issue #184) |
-| 45 | `B/法老祖玛2.CBE` | 400×240 | <img src="images/B/法老祖玛2.png" width="120" alt="法老祖玛2 idle frame"> | No known requirement | Ready | Menus reach 1-1 and a held drag moves the tray from x80 to x300 with 5 switching the shot colour, but the bead chain is uniformly dark grey and the pause menu is an empty red-brown frame (issue #185) |
+| 45 | `B/法老祖玛2.CBE` | 400×240 | <img src="images/B/法老祖玛2.png" width="120" alt="法老祖玛2 idle frame"> | No known requirement | Ready | Playable: level 1-1 renders the bead chain in colour, a held drag moves the tray while 5 switches the shot colour, and a held press fires a projectile that flies and collides with the chain. The pause menu's 帮助/主菜单/继续 actions, the exit dialog and the continue-progress restart all respond; the 620-frame replay ends `Ready` at exit 0 with no heap-exhaustion warnings. Matching/popping, scoring and later chapters remain unverified (issue #185) |
 | 46 | `B/涂鸦跳跃.CBE` | 240×352 | <img src="images/B/涂鸦跳跃.png" width="120" alt="涂鸦跳跃 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 47 | `B/消息盒子.CBE` | 240×400 | <img src="images/B/消息盒子.png" width="120" alt="消息盒子 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 48 | `B/激情砖块.CBE` | 240×400 | <img src="images/B/激情砖块.png" width="120" alt="激情砖块 idle frame"> | No known requirement | Ready | Touch Game → map → level 1 and dismiss the loading/story prompts; drag the paddle left/right. Ball motion, pause/continue, retry and return to map verified. Full levels, boss, shop and audio unverified |
