@@ -100,11 +100,15 @@ streams retain their RGB components for opaque drawing; alpha drawing uses the
 separate mask, including for opaque black pixels.
 
 Decoded sprite-sized transparent images are handed to the guest in the layout
-its sprite blitter reads: the UCS-2 codec name `coolbar_png`, a tightly packed
-RGB565 plane, and one alpha byte per pixel at `name_bytes + 2 * pitch * height`
-(`pitch` is the width rounded up to four). Larger transparent images and opaque
-images use the host bit-packed mask instead, keeping titles with many live
-images inside the guest heap.
+its sprite blitter reads: the UCS-2 codec name `coolbar_png`, an RGB565 plane
+whose rows follow the rounded-up pitch, and one raw alpha byte per pixel at
+`name_bytes + 2 * pitch * height` (`pitch` is the width rounded up to four;
+both planes advance by `pitch - width` bytes per row, so widths that are not a
+multiple of four must not be stored tightly packed). Alpha bytes keep the
+decoded 0–255 range; the guest blitter skips 0, copies 255, and blends the rest
+through its 5-bit level table. Larger transparent images and opaque images use
+the host bit-packed mask instead, keeping titles with many live images inside
+the guest heap.
 
 - **Pixel format**: RGB565 (16-bit, 5-6-5 bit layout)
 - **Resolution**: Active LCD dimensions; supported portrait modes are 176×220,
