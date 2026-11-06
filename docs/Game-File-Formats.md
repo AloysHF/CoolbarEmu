@@ -99,6 +99,13 @@ image transforms copy pixel words without the host transparency mask. Other
 streams retain their RGB components for opaque drawing; alpha drawing uses the
 separate mask, including for opaque black pixels.
 
+Decoded sprite-sized transparent images are handed to the guest in the layout
+its sprite blitter reads: the UCS-2 codec name `coolbar_png`, a tightly packed
+RGB565 plane, and one alpha byte per pixel at `name_bytes + 2 * pitch * height`
+(`pitch` is the width rounded up to four). Larger transparent images and opaque
+images use the host bit-packed mask instead, keeping titles with many live
+images inside the guest heap.
+
 - **Pixel format**: RGB565 (16-bit, 5-6-5 bit layout)
 - **Resolution**: Active LCD dimensions; supported portrait modes are 176×220,
   240×320, 240×352 and 240×400, with matching landscape variants. Unknown

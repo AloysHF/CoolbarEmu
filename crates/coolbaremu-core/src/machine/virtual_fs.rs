@@ -35,6 +35,9 @@ pub(crate) struct VirtualFileSystem {
     /// The firmware resolves these through the device filesystem; the host
     /// directory stands in for it.
     host_files: HashMap<String, PathBuf>,
+    /// Paths the guest deleted. Host sidecars still exist on disk, so the
+    /// companion fallback must not resurrect a file after a guest delete.
+    deleted: BTreeSet<String>,
 }
 
 impl Default for VirtualFileSystem {
@@ -46,6 +49,7 @@ impl Default for VirtualFileSystem {
             directories,
             handles: vec![None; 16],
             host_files: HashMap::new(),
+            deleted: BTreeSet::new(),
         }
     }
 }
@@ -101,6 +105,9 @@ impl VirtualFileSystem {
     /// Load a sidecar file that exists next to the CBE into the in-memory
     /// table.  Read-only: host bytes are never modified by guest writes.
     fn materialize_host_file(&self, path: &str) -> Option<Vec<u8>> {
+        if self.deleted.contains(path) {
+            return None;
+        }
         // Firmware prefixes its working root; corpus sidecars start below it.
         let host = self.host_files.get(path).or_else(|| {
             let (_, relative) = path.split_once('/')?;
@@ -145,7 +152,11 @@ impl VirtualFileSystem {
         }
         if mode.starts_with('w') {
             self.files.insert(path.clone(), Vec::new());
+            self.deleted.remove(&path);
         } else if writable {
+            if !self.files.contains_key(&path) {
+                self.deleted.remove(&path);
+            }
             self.files.entry(path.clone()).or_default();
         }
         let Some(handle) = self.handles.iter().position(Option::is_none) else {
@@ -238,6 +249,9 @@ impl VirtualFileSystem {
 
     pub(crate) fn file_exists(&self, path: &str) -> bool {
         normalize_path(path).is_some_and(|path| {
+            if self.deleted.contains(&path) {
+                return false;
+            }
             self.files.contains_key(&path)
                 || self.host_files.contains_key(&path)
                 || path
@@ -256,6 +270,7 @@ impl VirtualFileSystem {
         let Some(path) = normalize_path(path) else {
             return false;
         };
+        self.deleted.remove(&path);
         self.files.insert(path, data);
         true
     }
@@ -287,7 +302,15 @@ impl VirtualFileSystem {
     }
 
     pub(crate) fn remove_file(&mut self, path: &str) -> bool {
-        normalize_path(path).is_some_and(|path| self.files.remove(&path).is_some())
+        normalize_path(path).is_some_and(|path| {
+            let existed = self.files.remove(&path).is_some()
+                || self.host_files.contains_key(&path)
+                || path
+                    .split_once('/')
+                    .is_some_and(|(_, relative)| self.host_files.contains_key(relative));
+            self.deleted.insert(path);
+            existed
+        })
     }
 
     pub(crate) fn rename(&mut self, old_path: &str, new_path: &str) -> bool {
@@ -299,6 +322,8 @@ impl VirtualFileSystem {
             return false;
         };
         self.files.insert(new_path.clone(), data);
+        self.deleted.insert(old_path.clone());
+        self.deleted.remove(&new_path);
         for open in self.handles.iter_mut().flatten() {
             if open.path == old_path {
                 open.path = new_path.clone();
@@ -383,6 +408,36 @@ mod tests {
         );
         assert_eq!(fs.open("data.bin", "r", 0), -1);
         assert_eq!(fs.open("../firmware/assets/data.bin", "r", 0), -1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_a_host_sidecar_hides_it_from_later_opens() {
+        let dir =
+            std::env::temp_dir().join(format!("coolbaremu-vfs-delete-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("ldj")).unwrap();
+        std::fs::write(dir.join("ldj/gldja.dat"), b"save").unwrap();
+        let mut fs = VirtualFileSystem::default();
+        fs.set_host_dir(Some(&dir));
+
+        assert!(fs.file_exists("\\ldj\\gldja.dat"));
+        let handle = fs.open("\\ldj\\gldja.dat", "r", 0);
+        assert_eq!(fs.read(handle as u32, 16), Some(b"save".to_vec()));
+        assert_eq!(fs.close(handle as u32), 0);
+
+        assert!(fs.remove_file("\\ldj\\gldja.dat"));
+        assert!(!fs.file_exists("\\ldj\\gldja.dat"));
+        assert_eq!(fs.open("\\ldj\\gldja.dat", "r", 0), -1);
+        assert!(
+            dir.join("ldj/gldja.dat").exists(),
+            "guest deletes must not touch host bytes"
+        );
+
+        let handle = fs.open("\\ldj\\gldja.dat", "w", 0);
+        assert!(handle >= 0);
+        assert_eq!(fs.write(handle as u32, b"new"), Some(3));
+        assert_eq!(fs.close(handle as u32), 0);
+        assert!(fs.file_exists("\\ldj\\gldja.dat"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

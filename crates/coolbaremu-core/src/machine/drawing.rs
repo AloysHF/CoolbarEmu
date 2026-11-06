@@ -13,7 +13,25 @@ use crate::image_decoder;
 
 const IMAGE_ALPHA_TAG: u32 = 0x414c5048;
 const IMAGE_ALPHA_BITS_TAG: u32 = 0x414c5031;
+/// Decoded transparent images keep the firmware's data layout: a UCS-2 codec
+/// name followed by a tightly packed RGB565 plane and one alpha byte per
+/// pixel. The guest-side sprite blitter skips `2 * strlen(name)` bytes and
+/// reads the alpha plane at that offset plus `2 * pitch * height`.
+const IMAGE_CODEC_NAME: &str = "coolbar_png";
+const IMAGE_ALPHA_BYTE_KIND: u8 = 3;
+const IMAGE_ALPHA_KIND_ALT: u8 = 0x17;
+/// Image resources above this many pixels keep the compact bit mask. Only
+/// sprite-sized images go through the guest's rotated sprite blitter; decoded
+/// full-screen backgrounds and overlays are drawn through the host image
+/// services, which understand the compact mask. Giving every large transparent
+/// image a byte alpha plane exhausts the 4 MiB guest heap once a title reloads
+/// its image set.
+const IMAGE_FIRMWARE_ALPHA_MAX_PIXELS: u32 = 16 * 1024;
 const LCD_EMPTY_TEXT: u32 = MANAGER_BASE + 0x7f00;
+
+fn image_codec_name_bytes() -> u32 {
+    IMAGE_CODEC_NAME.encode_utf16().count() as u32 * 2
+}
 
 impl CoolbarMachine {
     // ---- old-lib drawing API (F_0 0x00..0x3c) ----
@@ -145,6 +163,15 @@ impl CoolbarMachine {
         let height = height.clamp(0, self.display_surface.height as i32);
         self.oldlib_clip = [0, 0, width, height];
         let pixels = self.memory.r32(image);
+        let pixels = if pixels != 0
+            && matches!(
+                self.memory.r8(image + self.image_kind_offset()),
+                IMAGE_ALPHA_BYTE_KIND | IMAGE_ALPHA_KIND_ALT
+            ) {
+            pixels + image_codec_name_bytes()
+        } else {
+            pixels
+        };
         if pixels != 0 {
             for y in 0..height {
                 for x in 0..width {
@@ -1352,7 +1379,13 @@ impl CoolbarMachine {
                             .region(self.register(1), self.image_header_len() as usize)
                             .is_some()) =>
             {
-                let result = self.create_image_from_stream(self.register(0), self.register(1));
+                let source = self.register(0);
+                let output = self.register(1);
+                let result = if index == 49 && self.is_image_id_call(source, output) {
+                    self.create_image_from_data_package(source, output, self.register(2))
+                } else {
+                    self.create_image_from_stream(source, output)
+                };
                 self.set_result(result);
             }
             57 => self.set_result(0),
@@ -1370,6 +1403,18 @@ impl CoolbarMachine {
             90..=92 => self.set_result(0),
             _ => self.set_result(0),
         }
+    }
+
+    /// Some fixed-manager titles are linked against an LCD table whose
+    /// IMG_CreateImageFormIdEx sits at 0xC4 instead of 0xC0. Its call shape
+    /// (a resource id plus a data package) is distinguishable from
+    /// IMG_CreateImageFormStream, which passes an encoded stream pointer in
+    /// the same register.
+    fn is_image_id_call(&mut self, source: u32, package: u32) -> bool {
+        source < 0x10000
+            && self.memory.region(package, 0x20).is_some()
+            && self.memory.r8(package) == 1
+            && self.memory.r16(package + 8) != 0
     }
 
     pub(crate) fn create_image_from_stream(&mut self, source: u32, output: u32) -> u32 {
@@ -1450,42 +1495,89 @@ impl CoolbarMachine {
         }
         let pitch = decoded.width.next_multiple_of(4);
         let pixel_count = pitch.saturating_mul(decoded.height);
-        // Keep alpha in the allocation tail to preserve opaque black pixels.
-        // The guest-memory tail also survives save-state restoration.
-        let mut alpha_mask = vec![0u8; pixel_count.div_ceil(8) as usize];
-        let pixels = self.allocate(
-            pixel_count
-                .saturating_mul(2)
-                .saturating_add(alpha_mask.len() as u32)
-                .saturating_add(8),
-        );
+        let transparent = decoded
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[3] < 128);
+        let firmware_alpha = transparent && pixel_count <= IMAGE_FIRMWARE_ALPHA_MAX_PIXELS;
+        let name_bytes = image_codec_name_bytes();
+        let alpha_bytes = if firmware_alpha {
+            decoded.width.saturating_mul(decoded.height)
+        } else {
+            pixel_count.div_ceil(8)
+        };
+        let pixels = if firmware_alpha {
+            self.allocate(
+                name_bytes
+                    .saturating_add(pixel_count.saturating_mul(2))
+                    .saturating_add(alpha_bytes),
+            )
+        } else {
+            self.allocate(
+                pixel_count
+                    .saturating_mul(2)
+                    .saturating_add(alpha_bytes)
+                    .saturating_add(8),
+            )
+        };
         if pixels == 0 {
             return 0;
         }
-        let mask = pixels + pixel_count * 2 + 8;
-        self.memory.w32(mask - 8, IMAGE_ALPHA_BITS_TAG);
-        self.memory.w32(mask - 4, !IMAGE_ALPHA_BITS_TAG);
-        for y in 0..decoded.height {
-            for x in 0..decoded.width {
-                let offset = ((y * decoded.width + x) * 4) as usize;
-                let red = decoded.data[offset] as u16;
-                let green = decoded.data[offset + 1] as u16;
-                let blue = decoded.data[offset + 2] as u16;
-                let alpha = decoded.data[offset + 3];
-                // Guest PNG transforms copy RGB565 pixels without the host mask.
-                let color = if native_png && alpha == 0 {
-                    0
-                } else {
-                    ((red & 0xf8) << 8) | ((green & 0xfc) << 3) | (blue >> 3)
-                };
-                self.memory.w16(pixels + (y * pitch + x) * 2, color);
-                if alpha < 128 {
-                    let index = (y * pitch + x) as usize;
-                    alpha_mask[index / 8] |= 1 << (index % 8);
+        if firmware_alpha {
+            for (index, unit) in IMAGE_CODEC_NAME.encode_utf16().enumerate() {
+                self.memory.w16(pixels + index as u32 * 2, unit);
+            }
+            let plane = pixels + name_bytes;
+            let alpha_plane = plane + pixel_count * 2;
+            for y in 0..decoded.height {
+                for x in 0..decoded.width {
+                    let offset = ((y * decoded.width + x) * 4) as usize;
+                    let alpha = decoded.data[offset + 3];
+                    // Guest PNG transforms copy RGB565 pixels without the host mask.
+                    let color = if native_png && alpha == 0 {
+                        0
+                    } else {
+                        let red = decoded.data[offset] as u16;
+                        let green = decoded.data[offset + 1] as u16;
+                        let blue = decoded.data[offset + 2] as u16;
+                        ((red & 0xf8) << 8) | ((green & 0xfc) << 3) | (blue >> 3)
+                    };
+                    let index = y * decoded.width + x;
+                    self.memory.w16(plane + index * 2, color);
+                    self.memory
+                        .w8(alpha_plane + index, if alpha < 128 { 0 } else { u8::MAX });
                 }
             }
+        } else {
+            // Keep alpha in the allocation tail to preserve opaque black pixels.
+            // The guest-memory tail also survives save-state restoration.
+            let mut alpha_mask = vec![0u8; alpha_bytes as usize];
+            let mask = pixels + pixel_count * 2 + 8;
+            self.memory.w32(mask - 8, IMAGE_ALPHA_BITS_TAG);
+            self.memory.w32(mask - 4, !IMAGE_ALPHA_BITS_TAG);
+            for y in 0..decoded.height {
+                for x in 0..decoded.width {
+                    let offset = ((y * decoded.width + x) * 4) as usize;
+                    let red = decoded.data[offset] as u16;
+                    let green = decoded.data[offset + 1] as u16;
+                    let blue = decoded.data[offset + 2] as u16;
+                    let alpha = decoded.data[offset + 3];
+                    let color = if native_png && alpha == 0 {
+                        0
+                    } else {
+                        ((red & 0xf8) << 8) | ((green & 0xfc) << 3) | (blue >> 3)
+                    };
+                    self.memory.w16(pixels + (y * pitch + x) * 2, color);
+                    if alpha < 128 {
+                        let index = (y * pitch + x) as usize;
+                        alpha_mask[index / 8] |= 1 << (index % 8);
+                    }
+                }
+            }
+            self.memory.write_bytes(mask, &alpha_mask);
         }
-        self.memory.write_bytes(mask, &alpha_mask);
         let header = self.image_header_len();
         let image = if output == 0 {
             self.allocate(header)
@@ -1496,7 +1588,12 @@ impl CoolbarMachine {
         let (width, height) = (decoded.width, decoded.height);
         self.write_image_dims(image, width, height);
         let kind = self.image_kind_offset();
-        self.memory.w8(image + kind, 1);
+        let kind_byte = if firmware_alpha {
+            IMAGE_ALPHA_BYTE_KIND
+        } else {
+            1
+        };
+        self.memory.w8(image + kind, kind_byte);
         image
     }
 
@@ -1667,41 +1764,64 @@ impl CoolbarMachine {
         let source_pitch = ((source_width + 3) & !3) as u32;
         let destination_pitch = ((destination_width + 3) & !3) as u32;
         let pixel_count = source_pitch.saturating_mul(source_height as u32);
+        let kind = self.memory.r8(source + self.image_kind_offset());
+        let firmware_alpha = kind == IMAGE_ALPHA_BYTE_KIND || kind == IMAGE_ALPHA_KIND_ALT;
+        let name_bytes = image_codec_name_bytes();
+        let (source_base, source_stride, alpha_plane) = if firmware_alpha {
+            (
+                source_pixels + name_bytes,
+                source_width as u32,
+                source_pixels + name_bytes + pixel_count * 2,
+            )
+        } else {
+            (source_pixels, source_pitch, 0)
+        };
         let mask_tag = source_pixels.saturating_add(pixel_count.saturating_mul(2));
-        let mask_kind = if transparent && self.memory.region(mask_tag, 8).is_some() {
-            let tag = self.memory.r32(mask_tag);
-            let bytes = match tag {
-                IMAGE_ALPHA_TAG => pixel_count,
-                IMAGE_ALPHA_BITS_TAG => pixel_count.div_ceil(8),
-                _ => 0,
-            };
-            if bytes != 0
-                && self.memory.r32(mask_tag + 4) == !tag
-                && self
-                    .memory
-                    .region(mask_tag, bytes.saturating_add(8) as usize)
-                    .is_some()
-            {
-                tag
+        let mask_kind =
+            if transparent && !firmware_alpha && self.memory.region(mask_tag, 8).is_some() {
+                let tag = self.memory.r32(mask_tag);
+                let bytes = match tag {
+                    IMAGE_ALPHA_TAG => pixel_count,
+                    IMAGE_ALPHA_BITS_TAG => pixel_count.div_ceil(8),
+                    _ => 0,
+                };
+                if bytes != 0
+                    && self.memory.r32(mask_tag + 4) == !tag
+                    && self
+                        .memory
+                        .region(mask_tag, bytes.saturating_add(8) as usize)
+                        .is_some()
+                {
+                    tag
+                } else {
+                    0
+                }
             } else {
                 0
-            }
-        } else {
-            0
-        };
+            };
         for row in 0..height as u32 {
             for column in 0..width as u32 {
                 let source_offset =
-                    ((source_y as u32 + row) * source_pitch + source_x as u32 + column) * 2;
-                let color = self.memory.r16(source_pixels + source_offset);
+                    ((source_y as u32 + row) * source_stride + source_x as u32 + column) * 2;
+                let color = self.memory.r16(source_base + source_offset);
                 let pixel_index = source_offset / 2;
-                let masked = match mask_kind {
-                    IMAGE_ALPHA_TAG => self.memory.r8(mask_tag + 8 + pixel_index) != 0,
-                    IMAGE_ALPHA_BITS_TAG => {
-                        self.memory.r8(mask_tag + 8 + pixel_index / 8) & (1 << (pixel_index % 8))
-                            != 0
+                let masked = if firmware_alpha {
+                    transparent
+                        && self.memory.r8(alpha_plane
+                            + (source_y as u32 + row) * source_width as u32
+                            + source_x as u32
+                            + column)
+                            < 128
+                } else {
+                    match mask_kind {
+                        IMAGE_ALPHA_TAG => self.memory.r8(mask_tag + 8 + pixel_index) != 0,
+                        IMAGE_ALPHA_BITS_TAG => {
+                            self.memory.r8(mask_tag + 8 + pixel_index / 8)
+                                & (1 << (pixel_index % 8))
+                                != 0
+                        }
+                        _ => transparent && color == 0,
                     }
-                    _ => transparent && color == 0,
                 };
                 if !masked {
                     let destination_offset = ((destination_y as u32 + row) * destination_pitch
@@ -2443,7 +2563,8 @@ mod tests {
                 machine.initialize_screen();
                 let source = machine.create_image_from_bytes(&resource, "firmware PNG", 0);
                 let source_pixels = machine.memory.r32(source);
-                assert_eq!(machine.memory.r16(source_pixels), 0);
+                let plane = source_pixels + image_codec_name_bytes();
+                assert_eq!(machine.memory.r16(plane), 0);
                 let mut state = vec![0; crate::save_state::SERIALIZED_SIZE];
                 crate::save_state::encode_machine(&machine, 123, &mut state).unwrap();
                 let mut restored = crate::save_state::decode_machine(&state, 123).unwrap();
@@ -2453,7 +2574,7 @@ mod tests {
                 restored.write_image_dims(mirrored, 3, 1);
                 // Native transforms copy only RGB565 words, not host mask metadata.
                 for x in 0..3 {
-                    let color = restored.memory.r16(source_pixels + (2 - x) * 2);
+                    let color = restored.memory.r16(plane + (2 - x) * 2);
                     restored.memory.w16(pixels + x * 2, color);
                 }
                 restored.fill_screen_rect(0, 0, 3, 1, 0x001f);
@@ -3108,13 +3229,13 @@ mod alpha_storage_tests {
     }
 
     #[test]
-    fn compact_alpha_fits_guest_heap_and_preserves_clipped_pixels_after_save() {
+    fn opaque_alpha_fits_guest_heap_and_preserves_clipped_pixels_after_save() {
         let mut rgba = Vec::new();
         let mut expected = Vec::new();
         for y in 0..2 {
             for x in 0..9 {
                 let (pixel, color) = if [(0, 0), (8, 0), (1, 1)].contains(&(x, y)) {
-                    ([255, 255, 255, 0], 0x0000ff)
+                    ([255, 255, 255, 255], 0xffffff)
                 } else if [(7, 0), (0, 1)].contains(&(x, y)) {
                     ([0, 0, 0, 255], 0)
                 } else {
@@ -3159,6 +3280,103 @@ mod alpha_storage_tests {
     }
 
     #[test]
+    fn transparent_sprites_expose_the_firmware_blitter_layout() {
+        let mut rgba = Vec::new();
+        for y in 0..2 {
+            for x in 0..3 {
+                let alpha = if (x, y) == (0, 0) { 0 } else { 255 };
+                rgba.extend_from_slice(&[255, 0, 0, alpha]);
+            }
+        }
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(&rgba, 3, 2, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        for wide in [false, true] {
+            for big_endian in [false, true] {
+                let mut machine = image_machine(wide, big_endian);
+                let image = machine.create_image_from_bytes(&png, "firmware sprite", 0);
+                assert_ne!(image, 0);
+                assert_eq!(
+                    machine.memory.r8(image + machine.image_kind_offset()),
+                    IMAGE_ALPHA_BYTE_KIND,
+                    "the guest sprite blitter only blends images with this kind"
+                );
+                let pixels = machine.memory.r32(image);
+                let name: String = (0..IMAGE_CODEC_NAME.encode_utf16().count())
+                    .map(|index| machine.memory.r16(pixels + index as u32 * 2))
+                    .map(|unit| char::from_u32(unit as u32).unwrap())
+                    .collect();
+                assert_eq!(name, IMAGE_CODEC_NAME);
+                let pitch = 4;
+                let plane = pixels + image_codec_name_bytes();
+                for y in 0..2 {
+                    for x in 0..3 {
+                        assert_eq!(
+                            machine.memory.r16(plane + (y * 3 + x) * 2),
+                            0xf800,
+                            "color plane must stay tightly packed"
+                        );
+                    }
+                }
+                let alpha_plane = plane + 2 * pitch * 2;
+                assert_eq!(machine.memory.r8(alpha_plane), 0);
+                for index in 1..6 {
+                    assert_eq!(machine.memory.r8(alpha_plane + index), u8::MAX);
+                }
+                assert_eq!(machine.allocation_size(pixels), Some(48));
+                machine.fill_screen_rect(0, 0, 3, 2, 0x001f);
+                machine.blit_image(SCREEN_IMAGE_STRUCT, image, 0, 0, 3, 2, 0, 0, true);
+                let frame = machine.frame_pixels();
+                assert_eq!(&frame[..3], &[0x0000ff, 0xff0000, 0xff0000]);
+                assert_eq!(&frame[240..243], &[0xff0000, 0xff0000, 0xff0000]);
+            }
+        }
+    }
+
+    #[test]
+    fn large_transparent_images_keep_the_compact_mask() {
+        let (width, height) = (200u32, 100u32);
+        let mut rgba = Vec::new();
+        for y in 0..height {
+            for x in 0..width {
+                let alpha = if (x, y) == (0, 0) { 0 } else { 255 };
+                rgba.extend_from_slice(&[0, 255, 0, alpha]);
+            }
+        }
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(&rgba, width, height, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        let mut machine = image_machine(false, false);
+        let image = machine.create_image_from_bytes(&png, "large overlay", 0);
+        assert_ne!(image, 0);
+        assert_eq!(machine.memory.r8(image + machine.image_kind_offset()), 1);
+        let pixels = machine.memory.r32(image);
+        let pixel_count = width * height;
+        assert_eq!(
+            machine.memory.r32(pixels + pixel_count * 2),
+            IMAGE_ALPHA_BITS_TAG,
+            "large images keep the compact bit mask to spare the guest heap"
+        );
+        machine.fill_screen_rect(0, 0, width as i32, height as i32, 0x001f);
+        machine.blit_image(
+            SCREEN_IMAGE_STRUCT,
+            image,
+            0,
+            0,
+            width as i32,
+            height as i32,
+            0,
+            0,
+            true,
+        );
+        let frame = machine.frame_pixels();
+        assert_eq!(&frame[..2], &[0x0000ff, 0x00ff00]);
+        assert_eq!(&frame[240..242], &[0x00ff00, 0x00ff00]);
+    }
+
+    #[test]
     fn legacy_byte_alpha_remains_readable_after_save() {
         for wide in [false, true] {
             for big_endian in [false, true] {
@@ -3180,6 +3398,48 @@ mod alpha_storage_tests {
                 assert_eq!(&restored.frame_pixels()[..2], &[0, 0x0000ff]);
             }
         }
+    }
+
+    #[test]
+    fn lcd_slot_49_creates_an_image_from_a_data_package_id() {
+        // The v3 fixed-manager LCD table reaches IMG_CreateImageFormIdEx at
+        // slot 49 as (resource id, DF_DataPackage *, output image). Treating
+        // that call as a stream decode left every image header zeroed, so the
+        // guest blitted NULL images and the reported title only ever showed
+        // its loading overlay.
+        let mut machine = image_machine(false, true);
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(
+                &[255, 0, 0, 255, 0, 255, 0, 255],
+                2,
+                1,
+                image::ExtendedColorType::Rgba8,
+            )
+            .unwrap();
+        let stream = machine.allocate(png.len() as u32);
+        machine.memory.write_bytes(stream, &png);
+        let package = machine.allocate(0x40);
+        machine.memory.write_bytes(package, &[0; 0x40]);
+        let ids = machine.allocate(2);
+        let data = machine.allocate(4);
+        machine.memory.w8(package, 1);
+        machine.memory.w16(package + 8, 1);
+        machine.memory.w32(package + 16, data);
+        machine.memory.w32(package + 20, ids);
+        machine.memory.w16(ids, 0);
+        machine.memory.w32(data, stream);
+        let output = machine.allocate(machine.image_header_len());
+        machine.set_user_register(0, 0);
+        machine.set_user_register(1, package);
+        machine.set_user_register(2, output);
+        machine.handle_lcd_service(49);
+        assert_ne!(
+            machine.memory.r32(output),
+            0,
+            "image-id calls must decode the packaged resource into the output header"
+        );
+        assert_eq!(machine.image_dims(output), (2, 1));
     }
 
     #[test]

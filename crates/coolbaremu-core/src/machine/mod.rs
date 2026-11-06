@@ -738,6 +738,12 @@ pub struct CoolbarMachine {
     recent_services: VecDeque<(u32, u32, u32, u32)>,
     instruction_count: u64,
     frame_count: u64,
+    /// Frame that `tick_polls` belongs to; see the get_tick service.
+    #[serde(skip, default)]
+    tick_poll_frame: u64,
+    /// Polls already served from the current frame's 100 ms tick window.
+    #[serde(skip, default)]
+    tick_polls: u32,
     last_pc: u32,
     recent_pcs: VecDeque<u32>,
     /// Recent non-fallthrough control transfers (from, to), newest last.
@@ -934,6 +940,8 @@ impl CoolbarMachine {
             recent_services: VecDeque::with_capacity(16),
             instruction_count: 0,
             frame_count: 0,
+            tick_poll_frame: 0,
+            tick_polls: 0,
             last_pc: 0,
             recent_pcs: VecDeque::with_capacity(32),
             recent_branches: VecDeque::with_capacity(16),
@@ -2003,6 +2011,8 @@ impl CoolbarMachine {
             recent_services: VecDeque::new(),
             instruction_count: 0,
             frame_count: 0,
+            tick_poll_frame: 0,
+            tick_polls: 0,
             last_pc: 0,
             recent_pcs: VecDeque::new(),
             recent_branches: VecDeque::new(),
@@ -2092,6 +2102,25 @@ mod tests {
         // remain visible instead of silently reading zeros.
         assert_eq!(memory.r32(0x0000_0004), 0);
         assert!(memory.bad_accesses.contains(&0x0000_0004));
+    }
+
+    #[test]
+    fn ucs2_expand_strcpy_widens_narrow_paths() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        let source = HEAP_BASE + 0x100;
+        let destination = HEAP_BASE + 0x200;
+        machine.memory.write_bytes(source, b"\\ldj\\gldja.dat\0");
+        machine.set_user_register(0, destination);
+        machine.set_user_register(1, source);
+        machine.handle_ucs2_service(11);
+        assert_eq!(machine.register(0), destination);
+        for (index, byte) in b"\\ldj\\gldja.dat".iter().enumerate() {
+            assert_eq!(
+                machine.memory.r16(destination + index as u32 * 2),
+                *byte as u16
+            );
+        }
+        assert_eq!(machine.memory.r16(destination + 14 * 2), 0);
     }
 
     #[test]
@@ -2913,6 +2942,118 @@ mod tests {
             }
         }
         assert_eq!(machine.state(), MachineState::Ready);
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_fruit_ninja_replays_classic_rounds_without_leaking_images() {
+        // B/水果达人.CBE (issue #183): the title's image destructor (game LCD
+        // slot 11) used to clear an image header without reclaiming its pixel
+        // buffer. After a few return-to-menu / re-enter cycles the 4 MiB heap
+        // was full, later decodes failed and the menu degraded into a wood
+        // background with stray bars. This replays the issue's exact 696-frame
+        // acceptance script (two held drags, one slice, pause/resume, retry,
+        // return, then three full re-entry loops) and checks the resource
+        // state as well as the rendered title menu.
+        fn step(machine: &mut CoolbarMachine, count: u32) {
+            for _ in 0..count {
+                machine.run_frame(20_000_000).unwrap();
+                let _ = machine.take_audio_samples(4410);
+            }
+        }
+        fn swipe(machine: &mut CoolbarMachine, points: &[(i32, i32)]) {
+            for &(x, y) in points {
+                machine.set_pointer(x, y, true);
+                step(machine, 1);
+            }
+            let &(x, y) = points.last().unwrap();
+            machine.set_pointer(x, y, false);
+        }
+        fn tap(machine: &mut CoolbarMachine, x: i32, y: i32) {
+            machine.set_pointer(x, y, true);
+            step(machine, 1);
+            machine.set_pointer(x, y, false);
+        }
+
+        const TITLE: &[(i32, i32)] = &[(120, 100), (120, 140), (110, 180), (100, 220), (90, 260)];
+        const CLASSIC: &[(i32, i32)] =
+            &[(200, 160), (190, 180), (180, 200), (170, 220), (160, 240)];
+        const SLICE: &[(i32, i32)] = &[(50, 250), (60, 270), (70, 290), (80, 310), (90, 330)];
+        const RETRY: &[(i32, i32)] = &[(70, 100), (60, 120), (50, 140), (40, 160), (30, 180)];
+
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let nested = std::path::PathBuf::from(&game_dir)
+            .join("B")
+            .join("水果达人.CBE");
+        let flat = std::path::PathBuf::from(&game_dir).join("水果达人.CBE");
+        let game_path = if nested.is_file() { nested } else { flat };
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(20_000_000).unwrap();
+
+        step(&mut machine, 20);
+        swipe(&mut machine, TITLE);
+        step(&mut machine, 50);
+        swipe(&mut machine, CLASSIC);
+        step(&mut machine, 8);
+        step(&mut machine, 25);
+        swipe(&mut machine, SLICE);
+        step(&mut machine, 10);
+        tap(&mut machine, 11, 12);
+        step(&mut machine, 3);
+        tap(&mut machine, 106, 157);
+        step(&mut machine, 2);
+        step(&mut machine, 100);
+        swipe(&mut machine, RETRY);
+        step(&mut machine, 35);
+        tap(&mut machine, 11, 12);
+        step(&mut machine, 2);
+        tap(&mut machine, 26, 367);
+        step(&mut machine, 30);
+        for _ in 0..3 {
+            swipe(&mut machine, TITLE);
+            step(&mut machine, 50);
+            swipe(&mut machine, CLASSIC);
+            step(&mut machine, 35);
+            tap(&mut machine, 11, 12);
+            step(&mut machine, 2);
+            tap(&mut machine, 26, 367);
+            step(&mut machine, 30);
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready, "replay faulted");
+        let live: u32 = machine.heap_allocations.values().sum();
+        assert!(
+            live < 2_500_000,
+            "scene switches leaked image pixels: {live} bytes still live in the 4 MiB heap"
+        );
+
+        // A full title menu has thousands of saturated bright pixels in this
+        // corner (the 水果达人 logo and the mode rings); the heap-exhausted
+        // menu was a flat brown panel with a couple of slash marks.
+        let (width, height) = machine.display_size();
+        assert_eq!((width, height), (400, 240));
+        let pixels = machine.frame_pixels();
+        let mut title_pixels = 0u32;
+        for y in 0..110usize {
+            for x in 0..250usize {
+                let pixel = pixels[y * width as usize + x];
+                let red = (pixel >> 16) & 0xff;
+                let green = (pixel >> 8) & 0xff;
+                let blue = pixel & 0xff;
+                let high = red.max(green).max(blue);
+                let low = red.min(green).min(blue);
+                if high > 190 && high - low > 60 {
+                    title_pixels += 1;
+                }
+            }
+        }
+        assert!(
+            title_pixels > 1000,
+            "title menu was not drawn after the re-entry loops: {title_pixels} colored pixels"
+        );
     }
 
     #[test]
@@ -4985,9 +5126,26 @@ mod tests {
         machine.frame_count = 3;
         machine.handle_game_service(44);
         assert_eq!(machine.register(0), 300);
+        // Polls from the same frame advance by 1 ms so wait loops progress.
+        machine.handle_game_service(44);
+        assert_eq!(machine.register(0), 301);
+        machine.handle_game_service(44);
+        assert_eq!(machine.register(0), 302);
+        // A heavily polled frame stays inside its own 100 ms window instead
+        // of accelerating the clock ahead of virtual time.
+        for _ in 0..120 {
+            machine.handle_game_service(44);
+        }
+        assert_eq!(machine.register(0), 399);
+        // The offset belongs to the frame's window and must reset;
+        // carrying it across frames corrupts same-frame countdown
+        // comparisons.
         machine.frame_count = 4;
         machine.handle_game_service(44);
         assert_eq!(machine.register(0), 400);
+        machine.frame_count = 5;
+        machine.handle_game_service(44);
+        assert_eq!(machine.register(0), 500);
     }
 
     #[test]
@@ -5769,6 +5927,48 @@ mod tests {
             assert_eq!(machine.memory.r32(object + 20), 7);
             assert!(!machine.resource_load_pending);
             assert!(machine.screen_initialized);
+        }
+    }
+
+    #[test]
+    fn reselecting_the_active_screen_reruns_its_initializer() {
+        for big_endian in [false, true] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            let mut memory = MachineMemory::new(big_endian);
+            memory.regions = std::mem::take(&mut machine.memory.regions);
+            machine.memory = memory;
+            machine.initialize_screen();
+            machine.state = MachineState::Ready;
+            machine.cpu.reg_set(Mode::User, reg::CPSR, 0x10);
+            let object = machine.allocate(64);
+            let screen = object + 24;
+            let load = machine.allocate(6);
+            let init = machine.allocate(6);
+            for (callback, words) in [
+                (load, [0x212a, 0x6141, 0x4770]), // Store the loaded resource.
+                (init, [0x2107, 0x6141, 0x4770]), // Position the entity for play.
+            ] {
+                for (i, word) in words.into_iter().enumerate() {
+                    machine.memory.w16(callback + i as u32 * 2, word);
+                }
+            }
+            machine.memory.w32(screen, init | 1);
+            machine.memory.w32(screen + 24, load | 1);
+            machine.pending_screen = screen;
+            machine.run_frame(100).unwrap();
+            assert_eq!(machine.memory.r32(object + 20), 7);
+            assert!(machine.screen_initialized);
+
+            // A finished round overwrites the initialized state, then the guest
+            // re-selects the very same screen to restart. The initializer has
+            // to run again without replaying the resource load callback.
+            machine.memory.w32(object + 20, 99);
+            machine.set_user_register(0, screen);
+            machine.handle_game_service(60);
+            assert!(!machine.screen_initialized);
+            machine.run_frame(100).unwrap();
+            assert_eq!(machine.memory.r32(object + 20), 7);
+            assert!(!machine.resource_load_pending);
         }
     }
 
