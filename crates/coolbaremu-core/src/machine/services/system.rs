@@ -1,6 +1,7 @@
 //! System, root and control manager services (groups 0, 1 and 8).
 
 use armv4t_emu::Memory;
+use log::info;
 
 use super::super::{
     fixed_manager_specs, manager_initializer_count, CoolbarMachine, DL_IMAGE_MANAGER,
@@ -12,6 +13,17 @@ impl CoolbarMachine {
     pub(crate) fn handle_system_service(&mut self, index: u32) {
         match index {
             3 => self.set_result(3),
+            14 => {
+                // Firmware application exit: after confirming a "确定退出游戏?"
+                // dialog or a menu's quit item, the guest saves its state
+                // (Storage_Date) and calls this service to hand control back
+                // to the launcher firmware. The native-dispatch convention
+                // models the same hand-over as id 4, so halt the machine here
+                // too; the frame pump then reports the app as ended.
+                info!("guest requested application exit through system service 14");
+                self.state = super::super::MachineState::Halted;
+                self.set_result(1);
+            }
             15 => self.set_result(1),
             17 => {
                 let destination = self.register(0);
@@ -459,5 +471,23 @@ impl CoolbarMachine {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::machine::CoolbarMachine;
+    use crate::MachineState;
+
+    #[test]
+    fn system_service_14_is_the_application_exit_request() {
+        // B/疯狂捕鸟.CBE (issue #188): the "确定退出游戏?" dialog saves the
+        // game record and calls system service 14 to hand control back to
+        // the launcher firmware. An unimplemented stub returned zero and let
+        // the guest keep polling forever, so the confirm button looked dead.
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.handle_system_service(14);
+        assert_eq!(machine.state, MachineState::Halted);
+        assert_eq!(machine.register(0), 1);
     }
 }
