@@ -2247,12 +2247,63 @@ impl CoolbarMachine {
                 self.register(2),
                 self.register(3),
             ))),
+            36 => {
+                // Firmware `GetResName(const char *format, int index)`: the
+                // caller passes a printf-style resource-name pattern such as
+                // "s%d.png" plus a 1-based index and receives a pointer to
+                // the formatted name, which it feeds straight into the
+                // id-by-name lookup (slot 14). Returning zero made every
+                // formatted lookup resolve to id -1, so the dice game's 18
+                // frame images all decoded to NULL and its desktop never
+                // showed a die.
+                let pattern_address = self.register(0);
+                let index = self.register(1);
+                let pattern = self.read_c_bytes(pattern_address, 256);
+                let index_text = index.to_string();
+                // Substitute every %d with the index, printf-style.
+                let mut bytes = Vec::with_capacity(pattern.len() + index_text.len());
+                let mut cursor = 0;
+                while cursor + 2 <= pattern.len() {
+                    if pattern[cursor] == b'%' && pattern[cursor + 1] == b'd' {
+                        bytes.extend_from_slice(index_text.as_bytes());
+                        cursor += 2;
+                    } else {
+                        bytes.push(pattern[cursor]);
+                        cursor += 1;
+                    }
+                }
+                bytes.extend_from_slice(&pattern[cursor.min(pattern.len())..]);
+                let pointer = self.scratch_formatted_name(&bytes);
+                self.set_result(pointer);
+            }
             37 => {
                 let result = self.storage_date();
                 self.set_result(result);
             }
             _ => self.set_result(0),
         }
+    }
+
+    /// Backing store for the formatted-resource-name service: a small ring
+    /// of NUL-terminated scratch buffers whose pointers stay valid until the
+    /// ring wraps, mirroring the firmware's static name buffers.
+    fn scratch_formatted_name(&mut self, bytes: &[u8]) -> u32 {
+        const SLOTS: usize = 16;
+        const CAPACITY: usize = 256;
+        if self.formatted_name_buffers.is_empty() {
+            let mut buffers = Vec::with_capacity(SLOTS);
+            for _ in 0..SLOTS {
+                buffers.push(self.allocate(CAPACITY as u32));
+            }
+            self.formatted_name_buffers = buffers;
+        }
+        let slot = self.formatted_name_cursor % SLOTS;
+        self.formatted_name_cursor = self.formatted_name_cursor.wrapping_add(1);
+        let address = self.formatted_name_buffers[slot];
+        let length = bytes.len().min(CAPACITY - 1);
+        self.memory.write_bytes(address, &bytes[..length]);
+        self.memory.w8(address + length as u32, 0);
+        address
     }
 
     /// Firmware `Storage_Date(char *name, u8 *buffer, int size, bool write,
@@ -2348,6 +2399,59 @@ mod tests {
         machine.set_user_register(1, right);
         machine.handle_game_util_service(18);
         assert_eq!(machine.register(0), 1);
+    }
+
+    #[test]
+    fn game_util_formatted_name_service_feeds_the_resource_id_lookup() {
+        use crate::machine::packages::HostResource;
+        use crate::machine::{CoolbarMachine, SERVICE_BASE, TABLE_STRIDE};
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.resources.push(HostResource {
+            name: "s3.png".into(),
+            data: vec![1, 2, 3],
+        });
+        machine.resources.push(HostResource {
+            name: "s12.png".into(),
+            data: vec![4, 5],
+        });
+        let pattern = machine.allocate(16);
+        machine.memory.write_bytes(pattern, b"s%d.png\0");
+        let service = SERVICE_BASE + TABLE_STRIDE * 10 + 36 * 4;
+        machine
+            .invoke_callback(service, pattern, 3, 0, 1000)
+            .unwrap();
+        let name = machine.register(0);
+        assert_ne!(name, 0);
+        assert_eq!(machine.read_c_string(name, 256), "s3.png");
+        assert_eq!(machine.resource_id_by_name(name), Some(0));
+        // A second call must hand out a fresh buffer while the previous one
+        // stays intact (ring of 16, the guest reads the name immediately).
+        machine
+            .invoke_callback(service, pattern, 12, 0, 1000)
+            .unwrap();
+        let second = machine.register(0);
+        assert_ne!(second, name);
+        assert_eq!(machine.read_c_string(second, 256), "s12.png");
+        assert_eq!(machine.resource_id_by_name(second), Some(1));
+        assert_eq!(machine.read_c_string(name, 256), "s3.png");
+    }
+
+    #[test]
+    fn game_util_formatted_name_service_leaves_non_pattern_text_intact() {
+        use crate::machine::{CoolbarMachine, SERVICE_BASE, TABLE_STRIDE};
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        let pattern = machine.allocate(32);
+        machine.memory.write_bytes(pattern, b"fixed.png\0");
+        machine
+            .invoke_callback(
+                SERVICE_BASE + TABLE_STRIDE * 10 + 36 * 4,
+                pattern,
+                7,
+                0,
+                1000,
+            )
+            .unwrap();
+        assert_eq!(machine.read_c_string(machine.register(0), 256), "fixed.png");
     }
 
     #[test]
