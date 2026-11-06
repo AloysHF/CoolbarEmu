@@ -391,7 +391,12 @@ mod tests {
         // frame, so the push must be idempotent: the render loop walks the
         // whole stack every frame, and duplicates redraw the scene once per
         // stacked copy.
+        //
+        // The guest reloads r0 before every service call, and the handler
+        // clobbers r0 with its result value, so restore the argument each
+        // iteration — otherwise only the first call reaches the push path.
         for _ in 0..4 {
+            machine.set_user_register(0, screen);
             machine.handle_screen_service(4);
         }
 
