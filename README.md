@@ -48,7 +48,9 @@ signatures and configuration keys are not supported.
 - **Login fields** — basic numeric account/password controls with focus,
   password masking and save-state preservation; online authentication is not implemented
 - **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction
-  and format-specific palette byte order with compact persistent transparency masks;
+  and format-specific palette byte order; transparent sprites use the guest
+  sprite blitter's firmware layout so they no longer draw black boxes, while
+  full-screen images keep compact persistent transparency masks;
   firmware PNG transparency survives guest
   RGB565 image transforms; picture-library numeric glyphs support HUD
   counters and selected targets, with LCD clipping for fixed-manager sprite-sheet digits

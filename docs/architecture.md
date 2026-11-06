@@ -277,14 +277,22 @@ palettes use big-endian RGB565; firmware PNG palettes use little-endian RGB565
 while PNG chunk lengths remain big-endian. Firmware-wrapped PNG images expose
 fully transparent pixels as RGB565 zero so guest transforms that copy only pixel
 words retain color-key transparency. Other decoded streams preserve their RGB
-components for opaque drawing. A separate bit-packed transparency mask follows the
-pixel data in the same allocation, with a host tag; alpha blits consult it to
-preserve opaque black pixels. It uses one bit per pixel instead of one byte,
-reducing image overhead within the existing 4 MiB general-heap boundary without
-overlapping the dedicated memory-block pool. Legacy byte-mask tags remain readable
-in otherwise compatible save states. Guest-created images without
-this metadata retain zero-color transparency. The mask is part of guest-memory
-save states, so no serialized field layout change is required.
+components for opaque drawing. Sprite-sized images with transparency are laid out
+the way the guest firmware sprite blitter expects them: a UCS-2 codec name
+(`coolbar_png`), a tightly packed RGB565 plane, and one alpha byte per pixel at
+the offset the blitter derives from the rounded-up row pitch. Their image kind
+selects the blitter's per-pixel blend path, so transparent pixels no longer turn
+black when the guest draws a sprite itself. Larger transparent images keep the
+host-side representation: a separate bit-packed transparency mask after the pixel
+data in the same allocation, marked with a host tag. Alpha blits consult either
+representation and preserve opaque black pixels. Opaque images and full-screen
+overlays retain the bit-packed mask, using one bit per pixel instead of one byte,
+so titles that keep many images alive stay within the existing 4 MiB general-heap
+boundary without overlapping the dedicated memory-block pool. Legacy byte-mask
+tags remain readable in otherwise compatible save states. Guest-created images
+without this metadata retain zero-color transparency. Both representations are
+part of guest-memory save states, so no serialized field layout change is
+required.
 
 Image streams may reside in guest static buffers as well as host heap
 allocations. Decoding stays within the mapped memory region and, when known,
