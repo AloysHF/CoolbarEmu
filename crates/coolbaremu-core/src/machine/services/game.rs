@@ -341,7 +341,7 @@ impl CoolbarMachine {
             65 => self.set_result(u32::from(self.pointer.dragging())),
             66 => self.set_result(self.pointer.x as u32),
             67 => self.set_result(self.pointer.y as u32),
-            68 => self.set_result(self.key_down),
+            68 => self.set_result(self.key_down | self.key_held_physical),
             71 => {
                 self.handle_method_stub(Self::method_stub_address(METHOD_KIND_GAMEOLD, 0x11c) & !1);
             }
