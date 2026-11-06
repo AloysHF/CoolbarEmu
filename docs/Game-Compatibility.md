@@ -86,6 +86,9 @@ Landlord round plus resumed deals in both variants, War Chess's menu/help/purcha
 menu, the QCIF Ebook bookshelf, and Love Assistant V10 list menus and article
 selection/back navigation, plus IM login rendering and field-focus navigation.
 Fish Classic title/menu and help navigation are also checked.
+Fishing Hunter's 达人 and 挑战 modes, net firing, scoring and pause/tutorial
+navigation are checked; its two remaining guest-side gaps are listed in the
+Group B table.
 Fruit Master's four modes, slicing/scoring, pause/resume, settlement, retry and
 ten return-to-title/re-entry loops are checked; a 4,993-frame run stayed Ready
 with non-zero PCM on 4,938 frames and no heap exhaustion.
@@ -284,7 +287,7 @@ not provide the original server's content or a real carrier payment service.
 | 28 | `B/战争机器.CBE` | 240×400 | <img src="images/B/战争机器.png" width="120" alt="战争机器 idle frame"> | No known requirement | Ready | Title, menus and several story segments render, but the formal input sequence stops on the HELLFIRE icon and auto-aim prompt and the guest halts around frame 156 (Ready at the 240-frame checkpoint, exit 0); no shooting scene is reachable (issue #178) |
 | 29 | `B/打地鼠.CBE` | 240×400 | <img src="images/B/打地鼠.png" width="120" alt="打地鼠 idle frame"> | No known requirement | Ready | Playable — help, mode select and nine hole positions render, moles pop up visibly from the holes, scoring works correctly (confirmed score 6 on the canonical replay), timer counts down to 00 and transitions to the fully rendered RESULT page with score, best score and menu/replay buttons; survives through 800 frames without halting (issue #179, fixed by PR #209) |
 | 30 | `B/打火机.CBE` | 240×400 | <img src="images/B/打火机.png" width="120" alt="打火机 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
-| 31 | `B/捕鱼猎人.CBE` | 400×240 | <img src="images/B/捕鱼猎人.png" width="120" alt="捕鱼猎人 idle frame"> | No known requirement | Ready | Title, mode select and tutorial text render, but 达人 mode stays on LOADING at 260 and 900 frames and 挑战 mode at 600; a mixed-input path ends on a fully black frame at 1,000 frames (issue #180) |
+| 31 | `B/捕鱼猎人.CBE` | 400×240 | <img src="images/B/捕鱼猎人.png" width="120" alt="捕鱼猎人 idle frame"> | No known requirement | Ready | Playable. 达人 and 挑战 modes both leave `LOADING` and reach the underwater scene with the fish, cannon and HUD painted; firing a net bills one coin (`00200`→`00199`), 挑战's countdown runs (`10:00`→`09:41`), scoring works, and pause/教学/`返回菜单` navigation is checked. The reported mixed-input path now renders a full frame instead of a black one. Two guest-side gaps remain: 达人's HUD clock stays at `01:00` because the guest seeds it with `0x3c` and never decrements it (挑战's countdown is driven separately), and the exit dialog's `确定` writes the save state, stops audio and calls system service `1:14`, then leaves the dialog on screen instead of closing the screen (issue #180) |
 | 32 | `B/新闻.CBE` | 240×400 | <img src="images/B/新闻.png" width="120" alt="新闻 idle frame"> | Required | Ready | Idle frame captured; interaction/gameplay unverified |
 | 33 | `B/时间同步.CBE` | 240×400 | <img src="images/B/时间同步.png" width="120" alt="时间同步 idle frame"> | Required | Ready | Top icon/title missing; prompt renders |
 | 34 | `B/暴力摩托.CBE` | 400×240 | <img src="images/B/暴力摩托.png" width="120" alt="暴力摩托 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
