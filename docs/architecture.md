@@ -150,7 +150,12 @@ one, which corrupted games that index level data by position
 fixed-manager screen change (game service 60) intentionally perform no
 release: pop must keep suspended overlay state intact, and the fixed-manager
 ABI keeps screens alive across switches, with a slot +4 that is not a destroy
-callback.
+callback. A fixed-manager guest re-selecting the screen that is already active
+through game service 60 is requesting a round restart: the host clears that
+screen's initialized flag so its initializer runs again on the next tick,
+without releasing the screen or replaying its resource load callback
+(B/机场指挥部.CBE, issue #181). An idle corpus scan found no other title
+re-selecting its active screen in the first 200 frames.
 
 ## Guest memory
 
