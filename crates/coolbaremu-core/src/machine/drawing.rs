@@ -1504,7 +1504,9 @@ impl CoolbarMachine {
         let firmware_alpha = transparent && pixel_count <= IMAGE_FIRMWARE_ALPHA_MAX_PIXELS;
         let name_bytes = image_codec_name_bytes();
         let alpha_bytes = if firmware_alpha {
-            decoded.width.saturating_mul(decoded.height)
+            // The alpha plane is pitch-strided like the color plane, so it
+            // needs pitch * height bytes, not width * height.
+            pixel_count
         } else {
             pixel_count.div_ceil(8)
         };
@@ -1544,10 +1546,15 @@ impl CoolbarMachine {
                         let blue = decoded.data[offset + 2] as u16;
                         ((red & 0xf8) << 8) | ((green & 0xfc) << 3) | (blue >> 3)
                     };
-                    let index = y * decoded.width + x;
+                    // The guest sprite blitter strides both planes by the
+                    // rounded-up pitch (it advances by pitch-width per row),
+                    // so rows must be stored pitch-strided, not tight-packed.
+                    // The blend loop quantizes raw alpha bytes through a
+                    // 5-bit level table, so the decoded alpha is handed over
+                    // unchanged instead of a hard 0/255 threshold.
+                    let index = y * pitch + x;
                     self.memory.w16(plane + index * 2, color);
-                    self.memory
-                        .w8(alpha_plane + index, if alpha < 128 { 0 } else { u8::MAX });
+                    self.memory.w8(alpha_plane + index, alpha);
                 }
             }
         } else {
@@ -1767,10 +1774,12 @@ impl CoolbarMachine {
         let kind = self.memory.r8(source + self.image_kind_offset());
         let firmware_alpha = kind == IMAGE_ALPHA_BYTE_KIND || kind == IMAGE_ALPHA_KIND_ALT;
         let name_bytes = image_codec_name_bytes();
+        // Firmware-alpha images store both planes pitch-strided, matching the
+        // guest sprite blitter's row advance (see create_image_from_bytes).
         let (source_base, source_stride, alpha_plane) = if firmware_alpha {
             (
                 source_pixels + name_bytes,
-                source_width as u32,
+                source_pitch,
                 source_pixels + name_bytes + pixel_count * 2,
             )
         } else {
@@ -1805,29 +1814,42 @@ impl CoolbarMachine {
                     ((source_y as u32 + row) * source_stride + source_x as u32 + column) * 2;
                 let color = self.memory.r16(source_base + source_offset);
                 let pixel_index = source_offset / 2;
-                let masked = if firmware_alpha {
-                    transparent
-                        && self.memory.r8(alpha_plane
-                            + (source_y as u32 + row) * source_width as u32
-                            + source_x as u32
-                            + column)
-                            < 128
-                } else {
-                    match mask_kind {
-                        IMAGE_ALPHA_TAG => self.memory.r8(mask_tag + 8 + pixel_index) != 0,
-                        IMAGE_ALPHA_BITS_TAG => {
-                            self.memory.r8(mask_tag + 8 + pixel_index / 8)
-                                & (1 << (pixel_index % 8))
-                                != 0
-                        }
-                        _ => transparent && color == 0,
+                let destination_offset = ((destination_y as u32 + row) * destination_pitch
+                    + destination_x as u32
+                    + column)
+                    * 2;
+                if firmware_alpha {
+                    // Mirror the guest blend loop: 0 skips the pixel, 255
+                    // copies it, anything between blends at the quantized
+                    // 5-bit level the guest's lookup table produces.
+                    let alpha = self.memory.r8(alpha_plane
+                        + (source_y as u32 + row) * source_pitch
+                        + source_x as u32
+                        + column);
+                    let blended = if !transparent || alpha == u8::MAX {
+                        color
+                    } else if alpha == 0 {
+                        continue;
+                    } else {
+                        blend565_with_alpha(
+                            self.memory.r16(destination_pixels + destination_offset),
+                            color,
+                            alpha,
+                        )
+                    };
+                    self.memory
+                        .w16(destination_pixels + destination_offset, blended);
+                    continue;
+                }
+                let masked = match mask_kind {
+                    IMAGE_ALPHA_TAG => self.memory.r8(mask_tag + 8 + pixel_index) != 0,
+                    IMAGE_ALPHA_BITS_TAG => {
+                        self.memory.r8(mask_tag + 8 + pixel_index / 8) & (1 << (pixel_index % 8))
+                            != 0
                     }
+                    _ => transparent && color == 0,
                 };
                 if !masked {
-                    let destination_offset = ((destination_y as u32 + row) * destination_pitch
-                        + destination_x as u32
-                        + column)
-                        * 2;
                     self.memory
                         .w16(destination_pixels + destination_offset, color);
                 }
@@ -2580,6 +2602,30 @@ mod tests {
     }
 }
 
+/// Blend an RGB565 source over a destination at an 8-bit alpha, mirroring the
+/// guest sprite blitter: the alpha is quantized to the 5-bit level its lookup
+/// table produces (level = round(alpha * 32 / 255)) and the packed green / red
+/// -blue halves are interpolated independently before being recombined.
+fn blend565_with_alpha(destination: u16, source: u16, alpha: u8) -> u16 {
+    let level = (u32::from(alpha) * 32 + 128) >> 8;
+    if level == 0 {
+        return destination;
+    }
+    if level >= 32 {
+        return source;
+    }
+    let green_mask = 0x07e0u32;
+    let red_blue_mask = 0xf81fu32;
+    let destination_packed =
+        ((u32::from(destination) & green_mask) << 16) | (u32::from(destination) & red_blue_mask);
+    let source_packed =
+        ((u32::from(source) & green_mask) << 16) | (u32::from(source) & red_blue_mask);
+    let combined = (32 - level) * destination_packed + level * source_packed;
+    let green = (combined >> 21) & green_mask;
+    let red_blue = (combined >> 5) & red_blue_mask;
+    (green | red_blue) as u16
+}
+
 #[cfg(test)]
 mod rendering_tests {
     use super::*;
@@ -3273,10 +3319,17 @@ mod alpha_storage_tests {
 
     #[test]
     fn transparent_sprites_expose_the_firmware_blitter_layout() {
+        // Row 0: transparent red, opaque red, half-alpha red. Row 1: opaque.
+        // Width 3 keeps pitch at 4, which exercises the pitch-strided rows
+        // the guest sprite blitter reads (it advances by pitch-width per row).
         let mut rgba = Vec::new();
         for y in 0..2 {
             for x in 0..3 {
-                let alpha = if (x, y) == (0, 0) { 0 } else { 255 };
+                let alpha = match (x, y) {
+                    (0, _) => 0,
+                    (2, 0) => 128,
+                    _ => 255,
+                };
                 rgba.extend_from_slice(&[255, 0, 0, alpha]);
             }
         }
@@ -3305,23 +3358,33 @@ mod alpha_storage_tests {
                 for y in 0..2 {
                     for x in 0..3 {
                         assert_eq!(
-                            machine.memory.r16(plane + (y * 3 + x) * 2),
+                            machine.memory.r16(plane + (y * pitch + x) * 2),
                             0xf800,
-                            "color plane must stay tightly packed"
+                            "color plane rows must follow the rounded-up pitch"
                         );
                     }
                 }
                 let alpha_plane = plane + 2 * pitch * 2;
                 assert_eq!(machine.memory.r8(alpha_plane), 0);
-                for index in 1..6 {
-                    assert_eq!(machine.memory.r8(alpha_plane + index), u8::MAX);
+                assert_eq!(machine.memory.r8(alpha_plane + 1), u8::MAX);
+                assert_eq!(machine.memory.r8(alpha_plane + 2), 128);
+                assert_eq!(machine.memory.r8(alpha_plane + pitch), 0);
+                for offset in 1..3 {
+                    assert_eq!(machine.memory.r8(alpha_plane + pitch + offset), u8::MAX);
                 }
-                assert_eq!(machine.allocation_size(pixels), Some(48));
                 machine.fill_screen_rect(0, 0, 3, 2, 0x001f);
                 machine.blit_image(SCREEN_IMAGE_STRUCT, image, 0, 0, 3, 2, 0, 0, true);
                 let frame = machine.frame_pixels();
-                assert_eq!(&frame[..3], &[0x0000ff, 0xff0000, 0xff0000]);
-                assert_eq!(&frame[240..243], &[0xff0000, 0xff0000, 0xff0000]);
+                assert_eq!(
+                    &frame[..3],
+                    &[0x0000ff, 0xff0000, 0x7b007b],
+                    "transparent pixels skip, opaque copy, half alpha blends"
+                );
+                assert_eq!(
+                    &frame[240..243],
+                    &[0x0000ff, 0xff0000, 0xff0000],
+                    "row 1 keeps the same transparent/opaque pattern"
+                );
             }
         }
     }

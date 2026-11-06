@@ -284,10 +284,14 @@ fully transparent pixels as RGB565 zero so guest transforms that copy only pixel
 words retain color-key transparency. Other decoded streams preserve their RGB
 components for opaque drawing. Sprite-sized images with transparency are laid out
 the way the guest firmware sprite blitter expects them: a UCS-2 codec name
-(`coolbar_png`), a tightly packed RGB565 plane, and one alpha byte per pixel at
-the offset the blitter derives from the rounded-up row pitch. Their image kind
+(`coolbar_png`), an RGB565 plane whose rows follow the rounded-up pitch, and one
+raw alpha byte per pixel at the offset the blitter derives from that pitch. Both
+planes advance by the pitch-width delta per row, so sprites whose width is not a
+multiple of four are stored pitch-strided, not tightly packed. Their image kind
 selects the blitter's per-pixel blend path, so transparent pixels no longer turn
-black when the guest draws a sprite itself. Larger transparent images keep the
+black when the guest draws a sprite itself, and the decoded 0–255 alpha reaches
+the blitter unchanged, letting its 5-bit level table reproduce soft light and
+shadow gradients. Larger transparent images keep the
 host-side representation: a separate bit-packed transparency mask after the pixel
 data in the same allocation, marked with a host tag. Alpha blits consult either
 representation and preserve opaque black pixels. Opaque images and full-screen
