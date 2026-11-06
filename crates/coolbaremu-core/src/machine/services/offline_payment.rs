@@ -1,5 +1,32 @@
 //! Local consumption receipts for the legacy payment service.
 
+/// Returns a fabricated offline response when the game asks the Coolbar
+/// platform for something other than a known payment check.  Games that
+/// bootstrap with a `CongfigInfo` or download request should observe the
+/// same callback shape as a successful fetch so they continue into play
+/// rather than retrying forever on error.
+pub(super) fn coolbar_offline_payload(url: &str) -> Option<Vec<u8>> {
+    let (authority, _) = url.strip_prefix("http://")?.split_once('/')?;
+    let (host, _) = authority.split_once(':').unwrap_or((authority, "80"));
+    // Cover every Coolbar-hosted endpoint the firmware might query during
+    // boot: download servers, config probes, payment gateways, and the
+    // legacy 51coolbar and kvbar subdomains.
+    let is_coolbar = host.eq_ignore_ascii_case("res.51coolbar.com")
+        || host.eq_ignore_ascii_case("vmt.51coolbar.com")
+        || host.eq_ignore_ascii_case("api.51coolbar.com")
+        || host.eq_ignore_ascii_case("cdn.51coolbar.com")
+        || host.ends_with(".51coolbar.com")
+        || host.eq_ignore_ascii_case("116.228.32.84")
+        // kvbar.com mirrors the 51coolbar.com fleet for menu and app-down
+        // endpoints that older Coolbar titles still reference.
+        || host.ends_with(".kvbar.com");
+    if !is_coolbar {
+        return None;
+    }
+    // Zero-length payload: a successful download that carried no body.
+    Some(Vec::new())
+}
+
 pub(super) fn consumption_receipt(url: &str) -> Option<Vec<u8>> {
     let (authority, path) = url.strip_prefix("http://")?.split_once('/')?;
     let (host, port) = authority.split_once(':').unwrap_or((authority, "80"));

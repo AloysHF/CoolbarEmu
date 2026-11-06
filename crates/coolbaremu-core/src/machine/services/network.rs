@@ -168,6 +168,9 @@ impl CoolbarMachine {
         if out != 0 {
             self.memory.w32(out, self.next_net_connect_id);
         }
+        // Known payment requests get a full offline receipt; every other
+        // Coolbar-hosted request still succeeds with an empty payload so
+        // games do not retry an unavailable config/download endpoint forever.
         if let Some(response) = super::offline_payment::consumption_receipt(&self.net_last_http_url)
         {
             if self.net_events.len() > MAX_NET_EVENTS - 2 {
@@ -183,6 +186,21 @@ impl CoolbarMachine {
             let length = response.len() as u32;
             self.net_downlink_bytes = self.net_downlink_bytes.saturating_add(length as u64);
             self.queue_net_event(0, pointer, length, length, callback, 0, 1, false, false);
+            self.queue_net_event(1, 0, 0, 0, callback, 0, 2, false, false);
+            self.set_result(1);
+            return;
+        }
+        if super::offline_payment::coolbar_offline_payload(&self.net_last_http_url).is_some() {
+            if self.net_events.len() > MAX_NET_EVENTS - 2 {
+                self.set_result(0);
+                return;
+            }
+            // Hand out an empty-but-non-null buffer so guest-side code that
+            // validates the payload pointer does not treat a `0` as a fetch
+            // failure and retry the endpoint forever.
+            let pointer = self.allocate(0);
+            self.net_downlink_bytes = self.net_downlink_bytes.saturating_add(0);
+            self.queue_net_event(0, pointer, 0, 0, callback, 0, 1, false, false);
             self.queue_net_event(1, 0, 0, 0, callback, 0, 2, false, false);
             self.set_result(1);
             return;
