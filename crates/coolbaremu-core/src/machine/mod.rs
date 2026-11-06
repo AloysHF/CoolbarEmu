@@ -3058,6 +3058,133 @@ mod tests {
 
     #[test]
     #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_three_kingdoms_v101_battle_responds_after_receipt() {
+        // A/三国志V101.CBE (issue #86): acknowledging the local point-play
+        // receipt used to leave the guest with nothing to draw because its
+        // grouped resource package was not parsed, so the battle map never
+        // appeared. This replays the issue's script into the palace map, then
+        // opens the unit command menu, moves the highlight, previews an attack
+        // and returns to the menu.
+        fn image(machine: &mut CoolbarMachine) -> Vec<u32> {
+            machine.frame_pixels().to_vec()
+        }
+        fn diff(a: &[u32], b: &[u32]) -> usize {
+            a.iter()
+                .zip(b)
+                .filter(|(left, right)| left != right)
+                .count()
+        }
+        fn drawn(pixels: &[u32]) -> usize {
+            pixels.iter().filter(|&&pixel| pixel != 0).count()
+        }
+
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let nested = std::path::PathBuf::from(&game_dir)
+            .join("A")
+            .join("三国志V101.CBE");
+        let flat = std::path::PathBuf::from(&game_dir).join("三国志V101.CBE");
+        let game_path = if nested.is_file() { nested } else { flat };
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+
+        // Title dialogs and the receipt use Confirm (14) and the left soft key
+        // (12); the right soft key (13) closes the last dialog into the palace
+        // map. On the map, 13 opens the unit command menu, 16 moves the
+        // highlight to the attack entry, 14 previews the attack range and 13
+        // returns to the menu.
+        const EVENTS: &[(u32, u8)] = &[
+            (200, 14),
+            (240, 14),
+            (280, 12),
+            (320, 13),
+            (340, 13),
+            (380, 13),
+            (420, 14),
+            (460, 14),
+            (500, 14),
+            (540, 14),
+            (580, 14),
+            (620, 13),
+            (660, 16),
+            (700, 14),
+            (740, 13),
+        ];
+        let mut map = Vec::new();
+        let mut menu = Vec::new();
+        let mut navigated = Vec::new();
+        let mut action = Vec::new();
+        let mut returned = Vec::new();
+        for frame in 0..790 {
+            let event = EVENTS
+                .iter()
+                .find(|&&(event_frame, _)| event_frame == frame)
+                .map(|&(_, key)| key);
+            if let Some(key) = event {
+                machine.set_key(key, true);
+            }
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            if let Some(key) = event {
+                machine.set_key(key, false);
+            }
+            match frame + 1 {
+                600 => map = image(&mut machine),
+                640 => menu = image(&mut machine),
+                700 => navigated = image(&mut machine),
+                // Capture the attack preview before the return key at frame
+                // 740 so the checkpoints share one continuous replay.
+                730 => action = image(&mut machine),
+                790 => returned = image(&mut machine),
+                _ => {}
+            }
+        }
+
+        assert_eq!(machine.state(), MachineState::Ready, "battle flow faulted");
+        assert_eq!(machine.display_size(), (240, 320));
+
+        // Before the fix the frame went blank right after the receipt; the
+        // palace map must cover the whole portrait LCD.
+        assert!(drawn(&map) >= 76_000, "battle map went blank");
+        for (name, frame) in [
+            ("menu", &menu),
+            ("navigated", &navigated),
+            ("action", &action),
+            ("returned", &returned),
+        ] {
+            assert!(drawn(frame) >= 76_000, "{name} frame went blank");
+        }
+
+        let menu_delta = diff(&map, &menu);
+        assert!(
+            menu_delta >= 5_000,
+            "opening the unit menu changed only {menu_delta} pixels"
+        );
+        let nav_delta = diff(&menu, &navigated);
+        assert!(
+            nav_delta >= 1_000,
+            "moving the highlight changed only {nav_delta} pixels"
+        );
+        let action_delta = diff(&navigated, &action);
+        assert!(
+            action_delta >= 4_000,
+            "confirming attack changed only {action_delta} pixels"
+        );
+        let return_delta = diff(&action, &returned);
+        assert!(
+            return_delta >= 4_000,
+            "leaving the attack preview changed only {return_delta} pixels"
+        );
+        let back_to_menu = diff(&menu, &returned);
+        assert!(
+            back_to_menu <= 500,
+            "returning to the menu differed by {back_to_menu} pixels"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
     fn real_content_installs_and_enters_zombie_game() {
         let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
         let game_path = std::path::PathBuf::from(game_dir).join("僵尸先生.CBE");
