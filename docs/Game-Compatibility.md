@@ -103,6 +103,8 @@ with non-zero PCM on 4,938 frames and no heap exhaustion.
 Three Kingdoms Brawl's title menu, world map, level briefing, loading screen,
 tutorial overlay and battle are checked: tiles select, units are bought (gold
 180→145) and placed, and the wave counter runs to 2/20 with hearts 20→13.
+Star Treasure's LEVEL1 gem board, cursor selection/movement and one completed
+swap/match with a score update are checked.
 Zombie Master (recommended variant) title/menu, touch selection, help text and
 return navigation are checked with its supplied companion resources.
 Dynamic Dice's tap-to-bet throws on both regions, roll totals on the chip
@@ -195,7 +197,7 @@ not provide the original server's content or a real carrier payment service.
 | 53 | `A/拆弹专家V101.CBE` | 240×320 | <img src="images/A/拆弹专家V101.png" width="120" alt="拆弹专家V101 idle frame"> | Blocked: dead server | Ready | Online title: the guest requests the retired Coolbar platform service (vmt.51coolbar.com) and the offline error page is the firmware-faithful result; emulator-side fix is not possible (see issue #120) |
 | 54 | `A/掌上书城V10.CBE` | 240×320 | <img src="images/A/掌上书城V10.png" width="120" alt="掌上书城V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 55 | `A/掌上地图V10.CBE` | 240×320 | <img src="images/A/掌上地图V10.png" width="120" alt="掌上地图V10 idle frame"> | Not assessed | Ready | Offline continuation frame captured; interaction/gameplay unverified |
-| 56 | `A/星际宝藏(新品).CBE` | 240×320 | <img src="images/A/星际宝藏(新品).png" width="120" alt="星际宝藏(新品) idle frame"> | Not assessed | Ready | Normal mode reaches LEVEL1, but the play area is only a grey industrial backdrop with no gems or interactive objects; the tutorial text and part of the HUD do update (issue #121) |
+| 56 | `A/星际宝藏(新品).CBE` | 240×320 | <img src="images/A/星际宝藏(新品).png" width="120" alt="星际宝藏(新品) idle frame"> | Not assessed | Ready | Normal mode and LEVEL1 render the 8×8 gem board; a scripted cursor select/move plus a right-neighbour swap completes a three-gem match, clears and refills those cells and advances the score readout, while the play area previously showed only the grey industrial backdrop (issue #121) |
 | 57 | `A/星际宝藏V10.CBE` | 240×320 | <img src="images/A/星际宝藏V10.png" width="120" alt="星际宝藏V10 idle frame"> | Not assessed | Ready | Level-initialisation null indirect call fixed by f7ba663: Ready with 76,772 px / 75 colours where it used to fault; gameplay beyond the fixed path is unverified (issue #122) |
 | 58 | `A/暴力摩托(新品).CBE` | 240×320 | <img src="images/A/暴力摩托(新品).png" width="120" alt="暴力摩托(新品) idle frame"> | Not assessed | Ready | Scene reached after the repair (76800 px / 211 colors) and the run halts at `EXIT_ADDRESS` as it did before it; the previous null request during boot is gone; controls unverified
 | 59 | `A/暴力摩托V10.CBE` | 240×320 | <img src="images/A/暴力摩托V10.png" width="120" alt="暴力摩托V10 idle frame"> | Not assessed | Ready | Scene reached after the repair (76800 px / 209 colors) and the run halts at `EXIT_ADDRESS` as it did before it; the previous null request during boot is gone; controls unverified
