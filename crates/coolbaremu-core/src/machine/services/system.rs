@@ -282,9 +282,14 @@ impl CoolbarMachine {
             self.defer_callback(callback, vec![1], "smsResult");
             self.set_result(1);
         } else {
-            self.handle_billing_service(u32::from(
-                address == super::super::NATIVE_BILLING_REMAIN_DAY,
-            ));
+            let index = if address == super::super::NATIVE_BILLING_REMAIN_DAY {
+                1
+            } else if address == super::super::NATIVE_BILLING_PAYNUM {
+                0
+            } else {
+                2 // Unknown — treat as Pay
+            };
+            self.handle_billing_service(index);
         }
     }
 
@@ -294,8 +299,8 @@ impl CoolbarMachine {
     /// callback the firmware delivers after the service returns.
     pub(crate) fn handle_billing_service(&mut self, index: u32) {
         match index {
-            0 => self.set_result(0),                                // GetPayNumByAppId
-            1 => self.set_result(u32::from(self.register(1) == 3)), // GetRemainDay
+            0 => self.set_result(self.register(1)), // GetPayNumByAppId — offline: return the pay type itself
+            1 => self.set_result(0x0000001E),       // GetRemainDay — offline: 30 days remaining
             2 | 3 | 26 | 30 => {
                 // Pay / PayMoreTimes / Pay2 / Pay3 — succeed through the
                 // callback; the callback travels in r2 for every variant.
@@ -303,12 +308,7 @@ impl CoolbarMachine {
                 self.defer_callback(callback, vec![1], "payResult");
                 self.set_result(0);
             }
-            4 => {
-                // IsRegisterBillingInfo — never pre-registered offline.
-                let id = self.register(0) as u16;
-                let used = self.billing_reg.get(&id).map(|e| e.1).unwrap_or(0);
-                self.set_result(u32::from(used != 0));
-            }
+            4 => self.set_result(1), // IsRegisterBillingInfo — offline: always registered
             5 => {
                 // RegisterBillingInfo
                 let id = self.register(0) as u16;
@@ -322,18 +322,9 @@ impl CoolbarMachine {
                 let ok = self.billing_reg.get_mut(&id).map(|e| e.0 = value).is_some();
                 self.set_result(u32::from(ok));
             }
-            7 => {
-                // GetBillingStatus — unregistered apps read as active.
-                let id = self.register(0) as u16;
-                let status = self
-                    .billing_reg
-                    .get(&id)
-                    .map(|e| u32::from(e.0))
-                    .unwrap_or(1);
-                self.set_result(status);
-            }
-            8 => self.set_result(0),  // IsNeedPay
-            9 => self.set_result(1),  // IsInTryStatus
+            7 => self.set_result(1), // GetBillingStatus — offline: always active
+            8 => self.set_result(0), // IsNeedPay — offline: no payment needed
+            9 => self.set_result(1), // IsInTryStatus
             10 => self.set_result(0), // OpenBillingPromptWin
             11 => self.set_result(1), // GetTryDay
             12 => {
