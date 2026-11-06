@@ -68,6 +68,10 @@ setup the initializer had just positioned; entry now runs the initializer and
 uses the load callback only for screens without one (67bbb6f). The verified
 620-frame replay renders the coloured chain and all three pause actions, and
 exit plus the continue-progress restart return to a playable level (issue #185).
+Ninja Jump (B group, row 22) never spawned an enemy or obstacle because the
+firmware rand service returned a 15-bit value while the guest's wave generator
+scales it by 1/2^31 in soft-float — the wave pick always truncated to the empty
+wave; the rand now spans the full 31-bit range and the core loop is verified.
 
 ## Summary
 
@@ -271,7 +275,7 @@ not provide the original server's content or a real carrier payment service.
 | 19 | `B/小鸟愤怒冬季版.CBE` | 400×240 | <img src="images/B/小鸟愤怒冬季版.png" width="120" alt="小鸟愤怒冬季版 idle frame"> | No known requirement | Ready | Title and SELECT EPISODE render, but both slots are a question mark plus gift box; taps, Confirm, 5 and the arrows leave it on the episode page at 700 frames (issue #172) |
 | 20 | `B/幸运扑克机.CBE` | 400×240 | <img src="images/B/幸运扑克机.png" width="120" alt="幸运扑克机 idle frame"> | No known requirement | Ready | The bet screen responds (tutorial text, bet amounts, limits), but after dealing and closing the tutorial only hold markers remain — no recognisable card face (issue #173) |
 | 21 | `B/开心大富翁.CBE` | 400×240 | <img src="images/B/开心大富翁.png" width="120" alt="开心大富翁 idle frame"> | No known requirement | Ready | Title and main menu work; single-player shows only two dark panels, a heart, colour bars and a selection box — no characters, names or confirm text — and input never reaches the board (issue #174) |
-| 22 | `B/忍者跳跃.CBE` | 240×400 | <img src="images/B/忍者跳跃.png" width="120" alt="忍者跳跃 idle frame"> | No known requirement | Ready | Walls, blue background, the pause icon and the top counter render and the counter reaches 398, but the ninja and its obstacles never appear, so no climb, jump or attack is visible (issue #175) |
+| 22 | `B/忍者跳跃.CBE` | 240×400 | <img src="images/B/忍者跳跃.png" width="120" alt="忍者跳跃 idle frame"> | No known requirement | Ready | Playable: the firmware rand service returned only 15 bits, so the guest's wave generator (`floor(rand / 2^31 * weight_sum)` in soft-float) always truncated to the empty wave and no enemy or obstacle object was ever created; the rand now spans the full 31-bit range, tap-to-jump between the two walls, descending bird enemies, flag banners, the protection-shield bubble and the counter all render, and pause/resume, the in-game menu, the 本次高度 settlement with 再来一次! and 主菜单 all respond (issue #175) |
 | 23 | `B/性爱宝典.CBE` | 240×400 | <img src="images/B/性爱宝典.png" width="120" alt="性爱宝典 idle frame"> | No known requirement | Ready | Disclaimer title, wrapped body and accept/reject labels render; interaction unverified |
 | 24 | `B/性爱高手.CBE` | 240×400 | <img src="images/B/性爱高手.png" width="120" alt="性爱高手 idle frame"> | No known requirement | Ready | Idle frame captured; interaction/gameplay unverified |
 | 25 | `B/恶魔城.CBE` | 240×400 | <img src="images/B/恶魔城.png" width="120" alt="恶魔城 idle frame"> | No known requirement | Ready | The main menu now labels its five items 开始游戏, 继续游戏, 帮助信息, 关于我们 and 退出游戏, and the fourth item opens the 关于我们 page as labelled; the ARMv5 CLZ fix corrected the labels, which used to repeat 继续游戏 on the second, fourth and fifth entries. Levels load, with left/right movement, camera scrolling and jump frames (issue #176) |

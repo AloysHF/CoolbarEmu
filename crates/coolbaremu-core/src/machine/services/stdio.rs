@@ -262,7 +262,14 @@ impl CoolbarMachine {
                     .rand_state
                     .wrapping_mul(1_103_515_245)
                     .wrapping_add(12_345);
-                self.set_result((self.rand_state >> 16) & 0x7fff);
+                // The firmware rand spans the full 31-bit range. Ninja Jump
+                // (#175) reduces it with soft-float as
+                // `floor(rand * (1f/2^31) * wave_weight_sum)` to pick a wave
+                // index uniform over the weights; a narrower return (the old
+                // 15-bit mask) always truncates that product to zero, so the
+                // generator only ever selected the empty wave and no enemy or
+                // obstacle object was ever spawned.
+                self.set_result(self.rand_state & 0x7fff_ffff);
             }
             7 => {
                 let destination = self.register(0);
@@ -529,11 +536,29 @@ mod tests {
             second.handle_stdio_service(5);
             let value = first.register_value(0);
             assert_eq!(value, second.register_value(0));
-            assert!(value <= 0x7fff);
+            assert!(value <= 0x7fff_ffff);
             samples.insert(value);
             residues.insert(value % 4);
         }
         assert!(samples.len() > 32);
         assert_eq!(residues.len(), 4);
+    }
+
+    #[test]
+    fn stdio_random_spans_enough_bits_for_uniform_float_picks() {
+        // Ninja Jump (#175) scales the value by the soft-float constant 1/2^31
+        // and multiplies by a wave-weight sum (typically 20..=120) to pick a
+        // wave index: `floor(rand / 2^31 * sum)`. A 15-bit rand truncates that
+        // product to zero for every sample, so only the empty wave ever ran
+        // and no enemy or obstacle object was spawned. The samples must
+        // therefore regularly exceed 2^31 / min_weight_sum, which no 15-bit
+        // value can reach (verified to fail against the 15-bit mask).
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        let mut max_sample = 0u32;
+        for _ in 0..64 {
+            machine.handle_stdio_service(5);
+            max_sample = max_sample.max(machine.register_value(0));
+        }
+        assert!(max_sample > 0x0200_0000);
     }
 }
