@@ -1579,7 +1579,11 @@ impl CoolbarMachine {
             if self.finish_screen_callback_frame() {
                 return Ok(());
             }
-            self.key_down = 0;
+            // Do not clear key_down here — native_app_parser games read it
+            // from the idle callback (event==6, control.rs), which runs
+            // next. Non-native games do not read key_down on event==6, so
+            // the value staying set is harmless to them. The frame-end
+            // clear at line ~1646 still resets it for the next frame.
             if self.pending_screen != 0 && self.pending_screen != screen {
                 self.pointer.end_frame();
                 return Ok(());
@@ -1614,7 +1618,10 @@ impl CoolbarMachine {
             }
         }
         // Idle is an alternative event; sending it after input erases guest edge caches.
-        if !delivered_input {
+        // Native-app-parser games also drive list controls from idle (control.rs
+        // reads key_down on event==6 when native_app_parser != 0), so those games
+        // always need the idle tick even when we just sent an edge event.
+        if !delivered_input || self.native_app_parser != 0 {
             self.dispatch_screen_logic(screen, 6, 0, instruction_limit)?;
         }
         if self.finish_screen_callback_frame() {
