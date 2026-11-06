@@ -849,6 +849,17 @@ impl CoolbarMachine {
         }
         match id {
             4 => {
+                if std::env::var("CBE_SELFLOOP").is_ok() {
+                    eprintln!(
+                        "[native-exit] frame={} lr=0x{:08X} r1=0x{:08X} r2=0x{:08X} r3=0x{:08X} sp=0x{:08X}",
+                        self.frame_count,
+                        self.register(reg::LR),
+                        self.register(1),
+                        self.register(2),
+                        self.register(3),
+                        self.register(reg::SP)
+                    );
+                }
                 self.state = super::super::MachineState::Halted;
                 self.set_result(0);
             }
@@ -1496,6 +1507,67 @@ impl CoolbarMachine {
             // object: an id array, an image-pointer array, and the method
             // table at 0x18..0x50 the guest calls through.  Mirrors the
             // reference's init_picture_library.
+            // --- geometry (vmspec F_0 CdRect family) ---
+            // The registered app-manager objects carry these as inline
+            // function pointers.  When a null slot got a shared stub, the
+            // generic constructor-shaped fallback used to fire for them
+            // (r1 is a plain coordinate that often lands in 16..=0x1000) and
+            // its stack writeback clobbered the caller's live return
+            // address, so the confirm-key path spiraled into the dead-slot
+            // resume loop.  Signatures mirror the reference handlers: rect
+            // pairs take arguments 4..8 from the stack, point variants take
+            // the probed point from the stack.
+            (METHOD_KIND_GAMEOLD | METHOD_KIND_MEMORY, 0x00c4) => {
+                let stack = self.register(reg::SP);
+                let a = [r0, r1, r2, r3];
+                let b = [
+                    self.memory.r32(stack),
+                    self.memory.r32(stack + 4),
+                    self.memory.r32(stack + 8),
+                    self.memory.r32(stack + 12),
+                ];
+                let hit = signed_coord(a[0]) <= signed_coord(b[2])
+                    && signed_coord(b[0]) <= signed_coord(a[2])
+                    && signed_coord(a[1]) <= signed_coord(b[3])
+                    && signed_coord(b[1]) <= signed_coord(a[3]);
+                self.set_result(u32::from(hit));
+            }
+            (METHOD_KIND_GAMEOLD | METHOD_KIND_MEMORY, 0x00c8) => {
+                let stack = self.register(reg::SP);
+                let result = rect_contains_point(
+                    signed_coord(r0),
+                    signed_coord(r1),
+                    signed_coord(r2),
+                    signed_coord(r3),
+                    signed_coord(self.memory.r32(stack)),
+                    signed_coord(self.memory.r32(stack + 4)),
+                );
+                self.set_result(u32::from(result));
+            }
+            (METHOD_KIND_GAMEOLD | METHOD_KIND_MEMORY, 0x00cc) => {
+                let stack = self.register(reg::SP);
+                let ax = signed_coord(r0);
+                let ay = signed_coord(r1);
+                let aw = signed_coord(r2);
+                let ah = signed_coord(r3);
+                let bx = signed_coord(self.memory.r32(stack));
+                let by = signed_coord(self.memory.r32(stack + 4));
+                let bw = signed_coord(self.memory.r32(stack + 8));
+                let bh = signed_coord(self.memory.r32(stack + 12));
+                let hit = ax + aw > bx && bx + bw > ax && ay + ah > by && by + bh > ay;
+                self.set_result(u32::from(hit));
+            }
+            (METHOD_KIND_GAMEOLD | METHOD_KIND_MEMORY, 0x00d0) => {
+                let stack = self.register(reg::SP);
+                let x = signed_coord(r0);
+                let y = signed_coord(r1);
+                let w = signed_coord(r2);
+                let h = signed_coord(r3);
+                let px = signed_coord(self.memory.r32(stack));
+                let py = signed_coord(self.memory.r32(stack + 4));
+                let hit = x <= px && px < x + w && y <= py && py < y + h;
+                self.set_result(u32::from(hit));
+            }
             // --- math (vmspec F_0) ---
             (METHOD_KIND_GAMEOLD, 0x00d4) => self.set_result((r0 as i32).unsigned_abs()),
             (METHOD_KIND_GAMEOLD, 0x00d8) => self.set_result(r0.max(r1)),
@@ -2220,7 +2292,7 @@ impl CoolbarMachine {
 mod tests {
     use super::{
         df_degree, df_sin, packed_rectangles_overlap, read_little_endian_int,
-        read_little_endian_short, rect_contains_point,
+        read_little_endian_short, rect_contains_point, METHOD_KIND_GAMEOLD, METHOD_KIND_MEMORY,
     };
     use crate::machine::memory::MachineMemory;
 
@@ -2413,6 +2485,131 @@ mod tests {
             machine.handle_game_service(index);
             assert_eq!(machine.register(0), expected as u32, "service {index}");
         }
+    }
+
+    #[test]
+    fn gameold_cd_rect_family_matches_reference_semantics() {
+        use crate::machine::CoolbarMachine;
+        use armv4t_emu::{reg, Memory};
+
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.executable.big_endian = true;
+        machine.executable.preferred_code_address = 0x01000000;
+        machine.executable.code_image_size = 0x2000;
+        assert!(machine.uses_fixed_manager_abi());
+
+        // Arguments 4+ arrive on the stack, like the firmware convention.
+        let stack = machine.allocate(32);
+        machine.set_user_register(reg::SP, stack);
+        machine.memory.w32(stack, 25);
+        machine.memory.w32(stack + 4, 300);
+
+        // CdRectPoint(x1, y1, x2, y2, px, py): the confirm button of
+        // 大话西游(新品) (#108) is rect 16,297..40,311 and the tap at
+        // (25, 300) must hit it.
+        for kind in [METHOD_KIND_GAMEOLD, METHOD_KIND_MEMORY] {
+            machine.set_user_register(0, 16);
+            machine.set_user_register(1, 297);
+            machine.set_user_register(2, 40);
+            machine.set_user_register(3, 311);
+            machine.handle_method_stub(CoolbarMachine::method_stub_address(kind, 0xc8) & !1);
+            assert_eq!(machine.register(0), 1, "CdRectPoint kind={kind} hit");
+
+            machine.set_user_register(1, 301);
+            machine.handle_method_stub(CoolbarMachine::method_stub_address(kind, 0xc8) & !1);
+            assert_eq!(machine.register(0), 0, "CdRectPoint kind={kind} miss");
+        }
+
+        // CdRect(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2): overlap test.
+        machine.memory.w32(stack, 30);
+        machine.memory.w32(stack + 4, 30);
+        machine.memory.w32(stack + 8, 50);
+        machine.memory.w32(stack + 12, 50);
+        machine.set_user_register(0, 0);
+        machine.set_user_register(1, 0);
+        machine.set_user_register(2, 10);
+        machine.set_user_register(3, 10);
+        machine.handle_method_stub(
+            CoolbarMachine::method_stub_address(METHOD_KIND_GAMEOLD, 0xc4) & !1,
+        );
+        assert_eq!(machine.register(0), 0, "CdRect disjoint");
+        machine.memory.w32(stack, 5);
+        machine.memory.w32(stack + 4, 5);
+        machine.handle_method_stub(
+            CoolbarMachine::method_stub_address(METHOD_KIND_GAMEOLD, 0xc4) & !1,
+        );
+        assert_eq!(machine.register(0), 1, "CdRect overlap");
+
+        // CdRect2 / CdRectPoint2 use (x, y, width, height) boxes.
+        machine.memory.w32(stack, 20);
+        machine.memory.w32(stack + 4, 300);
+        machine.set_user_register(0, 16);
+        machine.set_user_register(1, 297);
+        machine.set_user_register(2, 24);
+        machine.set_user_register(3, 14);
+        machine.handle_method_stub(
+            CoolbarMachine::method_stub_address(METHOD_KIND_GAMEOLD, 0xd0) & !1,
+        );
+        assert_eq!(machine.register(0), 1, "CdRectPoint2 hit");
+        machine.set_user_register(3, 2);
+        machine.handle_method_stub(
+            CoolbarMachine::method_stub_address(METHOD_KIND_GAMEOLD, 0xd0) & !1,
+        );
+        assert_eq!(machine.register(0), 0, "CdRectPoint2 miss");
+
+        machine.memory.w32(stack, 0);
+        machine.memory.w32(stack + 4, 0);
+        machine.memory.w32(stack + 8, 24);
+        machine.memory.w32(stack + 12, 14);
+        machine.set_user_register(0, 0);
+        machine.set_user_register(1, 0);
+        machine.set_user_register(2, 24);
+        machine.set_user_register(3, 14);
+        machine.handle_method_stub(
+            CoolbarMachine::method_stub_address(METHOD_KIND_GAMEOLD, 0xcc) & !1,
+        );
+        assert_eq!(machine.register(0), 1, "CdRect2 overlap");
+        machine.memory.w32(stack, 100);
+        machine.memory.w32(stack + 4, 100);
+        machine.handle_method_stub(
+            CoolbarMachine::method_stub_address(METHOD_KIND_GAMEOLD, 0xcc) & !1,
+        );
+        assert_eq!(machine.register(0), 0, "CdRect2 disjoint");
+    }
+
+    #[test]
+    fn cd_rect_point_stub_keeps_the_callers_return_address_intact() {
+        use crate::machine::CoolbarMachine;
+        use armv4t_emu::{reg, Memory};
+
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.executable.big_endian = true;
+        machine.executable.preferred_code_address = 0x01000000;
+        machine.executable.code_image_size = 0x2000;
+        assert!(machine.uses_fixed_manager_abi());
+
+        // The generic unlisted-slot fallback used to treat the coordinate in
+        // r1 as a constructor size and write an allocated block to [sp+68],
+        // clobbering the caller's live return address (#108's confirm-key
+        // teardown).  The implemented slot must leave the stack untouched.
+        let sp = machine.allocate(96);
+        machine.set_user_register(reg::SP, sp);
+        let sentinel = 0x043e_1235u32;
+        machine.memory.w32(sp + 68, sentinel);
+        machine.memory.w32(sp, 25);
+        machine.memory.w32(sp + 4, 300);
+        machine.set_user_register(0, 16);
+        machine.set_user_register(1, 297);
+        machine.set_user_register(2, 40);
+        machine.set_user_register(3, 311);
+        machine
+            .handle_method_stub(CoolbarMachine::method_stub_address(METHOD_KIND_MEMORY, 0xc8) & !1);
+        assert_eq!(machine.register(0), 1);
+        assert_eq!(
+            machine.memory.r32(sp + 68),
+            sentinel,
+            "CdRectPoint must not write through [sp+68]"
+        );
     }
 
     #[test]
