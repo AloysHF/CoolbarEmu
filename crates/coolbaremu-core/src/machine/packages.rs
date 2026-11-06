@@ -163,6 +163,86 @@ pub(crate) fn flat_package_resources(
     Some((resources, package_end))
 }
 
+/// Scan the given region from `start` to `limit` for every valid flat-package
+/// header.  Returns the sorted list of positions where headers were found.
+fn collect_all_flat_block_headers(data: &[u8], start: usize, limit: usize) -> Vec<usize> {
+    let mut positions = Vec::new();
+    let mut pos = start;
+    while pos < limit {
+        // Look for the next header anywhere within a reasonable forward range.
+        // Use the existing validator but walk forward byte-by-byte.
+        if let Some(next) = next_flat_block_header(data, pos, limit) {
+            positions.push(next);
+            // Advance past the header region so we don't re-match inside it.
+            // Skip at least 16 bytes past the header base.
+            pos = next + 1;
+        } else {
+            break;
+        }
+    }
+    positions
+}
+
+/// Scan forward from `start` until we find a valid flat-package header or
+/// reach `limit`.  Returns the position of the next header when one is found.
+/// A valid flat-package header has:
+///   header_size >= 8, count in 1..=10_000, first offset == 0,
+///   and offsets are monotonic non-decreasing.
+fn next_flat_block_header(data: &[u8], start: usize, limit: usize) -> Option<usize> {
+    let read_u32 = |offset: usize| {
+        data.get(offset..offset + 4)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map(u32::from_le_bytes)
+    };
+    let mut pos = start;
+    while pos < limit {
+        let header_size = read_u32(pos).map(|v| v as usize)?;
+        if !(8..=1_000_000).contains(&header_size) {
+            pos += 1;
+            continue;
+        }
+        let data_size = read_u32(pos + 4).map(|v| v as usize)?;
+        if data_size == 0 || data_size > 1_000_000 {
+            pos += 1;
+            continue;
+        }
+        let count = read_u32(pos + 8).map(|v| v as usize)?;
+        if !(1..=10_000).contains(&count) {
+            pos += 1;
+            continue;
+        }
+        // Need room for offsets.
+        if pos + 12 + count * 4 > limit {
+            pos += 1;
+            continue;
+        }
+        // First offset must be 0, offsets must be monotonic non-decreasing.
+        if read_u32(pos + 12) != Some(0) {
+            pos += 1;
+            continue;
+        }
+        let mut prev = 0u32;
+        let mut ok = true;
+        for i in 1..count {
+            let Some(v) = read_u32(pos + 12 + i * 4) else {
+                ok = false;
+                break;
+            };
+            if v < prev || v as usize > data_size {
+                ok = false;
+                break;
+            }
+            prev = v;
+        }
+        if !ok {
+            pos += 1;
+            continue;
+        }
+        return Some(pos);
+    }
+    None
+}
+
 pub(crate) fn grouped_package_resources(
     data: &[u8],
     start: usize,
@@ -176,23 +256,30 @@ pub(crate) fn grouped_package_resources(
     else {
         return Vec::new();
     };
-    let Some(mut cursor) = start
+    let Some(first_block) = start
         .checked_add(4)
         .and_then(|value| value.checked_add(header_size))
     else {
         return Vec::new();
     };
     let limit = start.saturating_add(size).min(data.len());
+
+    // Collect every flat-block header in the region.  Some CBE writers pack
+    // several flat blocks back-to-back while an earlier block's data_size
+    // declares the whole region; scanning upfront lets us parse each one.
+    let headers = collect_all_flat_block_headers(data, first_block, limit);
+    if headers.is_empty() {
+        return Vec::new();
+    }
+
     let mut resources = Vec::new();
-    while cursor < limit {
-        let Some((mut group, next)) = flat_package_resources(data, cursor) else {
-            break;
-        };
-        if next <= cursor || next > limit {
+    for &block_start in &headers {
+        if block_start >= limit {
             break;
         }
-        resources.append(&mut group);
-        cursor = next;
+        if let Some((mut group, _)) = flat_package_resources(data, block_start) {
+            resources.append(&mut group);
+        }
     }
     resources
 }
