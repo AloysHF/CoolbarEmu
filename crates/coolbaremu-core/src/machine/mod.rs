@@ -1562,8 +1562,12 @@ impl CoolbarMachine {
 
         // Registered native screens poll input once in the idle callback.
         // Sending an extra edge callback makes event-agnostic logic act twice.
+        // Fixed-manager games that also register a native_app_parser still need
+        // their screen logic callbacks to receive key events — the parser path
+        // only runs when no screen is active, so otherwise input falls through.
         let mut delivered_input = false;
-        if let Some(event) = key_event.filter(|_| self.native_app_parser == 0) {
+        let fixed_bypass = self.uses_fixed_manager_abi();
+        if let Some(event) = key_event.filter(|_| self.native_app_parser == 0 || fixed_bypass) {
             delivered_input = true;
             self.memory.w32(KEY_EVENT_ARG, 1u32 << event.key);
             self.dispatch_screen_logic(
@@ -1581,7 +1585,7 @@ impl CoolbarMachine {
                 return Ok(());
             }
         }
-        if key_event.is_none() && self.native_app_parser == 0 {
+        if key_event.is_none() && (self.native_app_parser == 0 || fixed_bypass) {
             // The firmware routes taps through the same screen logic callback:
             // event type 3 (down), 4 (up), or 5 (drag) with packed screen
             // coordinates at the payload pointer, one event per tick and
@@ -4385,13 +4389,14 @@ mod tests {
     #[test]
     fn billing_service_defers_and_cancels_result_callbacks() {
         let mut machine = machine_from_minimal_archive();
-        // GetRemainDay: method 3 → one remaining day, other methods → none.
+        // GetRemainDay — offline emulation always reports 30 remaining days
+        // regardless of the method code the guest supplies.
         machine.cpu.reg_set(Mode::User, 1, 3);
         machine.handle_billing_service(1);
-        assert_eq!(machine.register(0), 1);
+        assert_eq!(machine.register(0), 0x0000001E);
         machine.cpu.reg_set(Mode::User, 1, 1);
         machine.handle_billing_service(1);
-        assert_eq!(machine.register(0), 0);
+        assert_eq!(machine.register(0), 0x0000001E);
 
         // A Thumb `bx lr` routine stands in for the guest callbacks.
         let stack = STACK_BASE + STACK_SIZE as u32 - 0x200;
