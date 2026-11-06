@@ -3213,6 +3213,134 @@ mod tests {
 
     #[test]
     #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
+    fn real_content_lucky_poker_deals_reveals_and_toggles_holds() {
+        // B/幸运扑克机.CBE (issue #173): after dealing, the hand used to stay
+        // invisible — the pre-#209 build rendered four floating hold markers
+        // and no card back or face, so the keep phase could not be played.
+        // The screen-entry fix (#209) restored the game screen's actor and
+        // image loading; the deal flow itself needs the game's own sequence:
+        // the title's start button, a tap on the bet tutorial, and two
+        // presses of the fast-forward button (the first dismisses the
+        // tutorial and starts the deal, the second skips the fly-in and
+        // reveals the hand). This replays the verified flow into the reveal,
+        // toggles holds on two cards, swaps the rest and reaches the
+        // big-or-small bonus.
+        fn bright_card_pixels(pixels: &[u32]) -> usize {
+            pixels
+                .iter()
+                .filter(|&&pixel| {
+                    let red = (pixel >> 16) & 0xff;
+                    let green = (pixel >> 8) & 0xff;
+                    let blue = pixel & 0xff;
+                    red > 180 && green > 180 && blue > 180
+                })
+                .count()
+        }
+        fn diff(a: &[u32], b: &[u32]) -> usize {
+            a.iter()
+                .zip(b)
+                .filter(|(left, right)| left != right)
+                .count()
+        }
+
+        let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
+        let game_path = std::path::PathBuf::from(&game_dir)
+            .join("B")
+            .join("幸运扑克机.CBE");
+        assert!(game_path.is_file(), "missing {}", game_path.display());
+
+        let archive = CbeArchive::load(&game_path).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        machine.boot(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+
+        // Taps use raw framebuffer coordinates; the landscape presentation
+        // rotates them (display x = raw y, display y = 239 - raw x).
+        const TAPS: &[(u32, i32, i32)] = &[
+            (20, 19, 200),  // title: 开始游戏
+            (25, 100, 140), // bet tutorial: dismiss
+            (40, 19, 340),  // fast-forward: dismiss and deal
+            (60, 19, 340),  // fast-forward: skip the fly-in, reveal the hand
+            (130, 82, 45),  // card 1: toggle hold
+            (150, 82, 105), // card 2: toggle hold
+            (200, 19, 340), // fast-forward: swap the unheld cards
+            (300, 19, 340), // fast-forward: enter the big-or-small bonus
+        ];
+        const CAPTURES: &[(u32, &str)] = &[
+            (130, "revealed"),
+            (165, "held"),
+            (215, "swapped"),
+            (400, "bonus"),
+        ];
+
+        let mut captures: Vec<Vec<u32>> = Vec::new();
+        for frame in 0..410u32 {
+            let tap = TAPS.iter().find(|tap| tap.0 == frame).copied();
+            if let Some((_, x, y)) = tap {
+                machine.set_pointer(x, y, true);
+            }
+            machine.run_frame(crate::DEFAULT_INSTRUCTION_LIMIT).unwrap();
+            if let Some((_, x, y)) = tap {
+                machine.set_pointer(x, y, false);
+            }
+            if CAPTURES.iter().any(|cap| cap.0 == frame) {
+                captures.push(machine.frame_pixels());
+            }
+        }
+        assert_eq!(captures.len(), CAPTURES.len(), "missed a capture point");
+        assert_eq!(
+            machine.state(),
+            MachineState::Ready,
+            "the poker flow faulted"
+        );
+        assert_eq!(machine.display_size(), (400, 240));
+
+        let revealed = &captures[0];
+        let held = &captures[1];
+        let swapped = &captures[2];
+        let bonus = &captures[3];
+
+        // The revealed hand shows five white card faces; the pre-fix builds
+        // stayed below ~2 300 bright pixels (hold markers only or bare backs).
+        let revealed_bright = bright_card_pixels(revealed);
+        assert!(
+            revealed_bright >= 8_000,
+            "the dealt hand never revealed: only {revealed_bright} bright pixels"
+        );
+        let held_bright = bright_card_pixels(held);
+        assert!(
+            held_bright >= 8_000,
+            "the faces vanished after toggling holds: {held_bright} bright pixels"
+        );
+
+        // Toggling holds draws two hold banners over the first two cards.
+        let hold_delta = diff(revealed, held);
+        assert!(
+            hold_delta >= 4_000,
+            "toggling holds changed only {hold_delta} pixels"
+        );
+
+        // The swap replaces the unheld cards while the faces stay visible.
+        let swapped_bright = bright_card_pixels(swapped);
+        assert!(
+            swapped_bright >= 8_000,
+            "the swapped hand never revealed: {swapped_bright} bright pixels"
+        );
+        let swap_delta = diff(held, swapped);
+        assert!(
+            swap_delta >= 4_000,
+            "the swap changed only {swap_delta} pixels"
+        );
+
+        // Settlement hands over to the big-or-small bonus screen.
+        let bonus_delta = diff(swapped, bonus);
+        assert!(
+            bonus_delta >= 30_000,
+            "the bonus screen changed only {bonus_delta} pixels"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires local CBE game assets (set COOLBAR_GAME_DIR)"]
     fn real_content_installs_and_enters_zombie_game() {
         let game_dir = std::env::var_os("COOLBAR_GAME_DIR").expect("COOLBAR_GAME_DIR is not set");
         let game_path = std::path::PathBuf::from(game_dir).join("僵尸先生.CBE");
