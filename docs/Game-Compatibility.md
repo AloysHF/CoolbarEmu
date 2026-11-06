@@ -72,6 +72,13 @@ Ninja Jump (B group, row 22) never spawned an enemy or obstacle because the
 firmware rand service returned a 15-bit value while the guest's wave generator
 scales it by 1/2^31 in soft-float — the wave pick always truncated to the empty
 wave; the rand now spans the full 31-bit range and the core loop is verified.
+Dynamic Dice (B group, row 10) drew an empty table: game-util slot 36
+(`GetResName(format, index)`) returned 0, so the guest's formatted-name chains
+resolved every `sN.png` frame image to id −1, the 18-entry face table stayed at
+−1 and each die decoded to a NULL image. The slot now formats the resource name
+into a scratch buffer and returns it, and the boot throw, tap-to-bet throws on
+the lower-left/lower-right regions, the chip total, the 历史记录 records and the
+full settings page are verified (issue #170).
 
 ## Summary
 
@@ -98,6 +105,9 @@ tutorial overlay and battle are checked: tiles select, units are bought (gold
 180→145) and placed, and the wave counter runs to 2/20 with hearts 20→13.
 Zombie Master (recommended variant) title/menu, touch selection, help text and
 return navigation are checked with its supplied companion resources.
+Dynamic Dice's tap-to-bet throws on both regions, roll totals on the chip
+counter, 历史记录 records and close, the native exit dialog and the settings
+page (toggles, dice count, background selection, dice preview) are checked.
 1943 V101 reaches aircraft/equipment selection and battle through local point-play
 billing simulation. War Chess V101 displays the same local receipt; its battle
 path remains unverified. Flying Eagle V101 reaches its introduction through local
@@ -269,7 +279,7 @@ not provide the original server's content or a real carrier payment service.
 | 7 | `B/僵尸先生.CBE` | 400×240 | <img src="images/B/僵尸先生.png" width="120" alt="僵尸先生 idle frame"> | No known requirement | Ready | Root cause fixed: the little-endian installer hands the firmware UCS2-LE paths (`XX 00` per unit); `read_file_path` decoded them as single-byte GBK and stopped at the NUL after the leading `.`, so every open/mkdir targeted `.` and the installer wrote 0 files and halted. Now the encoding is detected per string (`path_units_are_ucs2_le`) and decoded via `read_ucs2_le_string`; BE and single-byte GBK paths are unchanged. `virtual_file_count` goes 2→342, the game reaches the title screen and the battle loads with the tutorial "点击向日葵卡片" visible (idle 200-frame capture stays Ready). Remaining gap: battle-screen touch input (seed cards / lawn) is not yet registered — tracked under issue #167; the byte-wise DF_strcmp fix for #89/#88 leaves this title's 120-frame capture unchanged |
 | 8 | `B/割绳子.CBE` | 240×400 | <img src="images/B/割绳子.png" width="120" alt="割绳子 idle frame"> | No known requirement | Ready | Playable at the default 100M instructions/frame budget: the ARMv5 CLZ fix laid out the whole 4×5 level-select grid (0/60 star counter, back button), a tap on the first level tile runs a legitimate ~35.4M-instruction loading frame — the guest draws ten wipe steps of full-screen quadrant blits inside one screen callback while loading the level — and reaches 1-1, a pointer drag across the rope cuts it, the candy falls through all three stars into Om Nom, and the 太棒了! settlement, 下一关 into the two-rope 1-2 and the in-game menu respond; the 20M per-frame capture budget was too tight for that loading frame (issue #168) |
 | 9 | `B/割绳子冬季版.CBE` | 240×400 | <img src="images/B/割绳子冬季版.png" width="120" alt="割绳子冬季版 idle frame"> | No known requirement | Ready | Playable at the default 100M instructions/frame budget: the ARMv5 CLZ fix laid out the whole 4×5 level-select grid, a tap on the first tile runs a legitimate ~35.0M-instruction loading frame (the same wipe-driven loading screen as 割绳子) and reaches the winter 1-1, two rope cuts (diagonal, then vertical) drop the candy through the stars into Om Nom, and the 精彩! settlement with the 新记录 stamp and the menu respond; the 20M per-frame capture budget was too tight for that loading frame (issue #169) |
-| 10 | `B/动感骰子.CBE` | 240×400 | <img src="images/B/动感骰子.png" width="120" alt="动感骰子 idle frame"> | No known requirement | Ready | The native exit dialog cancels and the gear opens settings with a dice preview, but returning still leaves an empty table and no dice or roll result by 580 frames (issue #170) |
+| 10 | `B/动感骰子.CBE` | 240×400 | <img src="images/B/动感骰子.png" width="120" alt="动感骰子 idle frame"> | No known requirement | Ready | Playable: the desktop draws the felt table with three dice that idle-wobble after the boot throw, a tap on the lower-left or lower-right betting region throws the dice (the tap position picks the bet side, and the dice fly up, tumble and settle), the chip counter top-left shows the roll total, each player throw is recorded in the 历史记录 page (top-left icon) with its total, the native exit dialog cancels, and the gear opens settings with working 音效控制/手机震动 toggles, dice count −/+ (3→5 renders five dice), background selection and a large dice preview. Root cause of the empty table: game-util slot 36 (`GetResName(format, index)`) returned 0, so the guest's formatted-name chains resolved every `sN.png` frame image to id −1 and all 18 dice frames decoded to NULL (issue #170) |
 | 11 | `B/吸血鬼猎人.CBE` | 400×240 | <img src="images/B/吸血鬼猎人.png" width="120" alt="吸血鬼猎人 idle frame"> | No known requirement | Ready | Battle loads with UI, background and turret; firing consumes ammo (00500→00477) and the lamp glow plus ground shadows now render with smooth alpha instead of hard-edged rectangles and black squares (issue #171); direction holds, continued firing and the return-to-menu dialog were replayed headlessly, complete enemy combat still unverified |
 | 12 | `B/在线书城.CBE` | 240×400 | <img src="images/B/在线书城.png" width="120" alt="在线书城 offline error prompt"> | Required | Halted | Offline failure prompt and normal timed exit verified; scrolling/font differences remain, online reading unverified |
 | 13 | `B/在线音乐.CBE` | 240×400 | <img src="images/B/在线音乐.png" width="120" alt="在线音乐 idle frame"> | Required | Ready | Search controls, toolbars and add prompt render; prompt scrolls with current font metrics; online operation unverified |

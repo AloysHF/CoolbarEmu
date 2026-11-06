@@ -744,6 +744,16 @@ pub struct CoolbarMachine {
     /// Polls already served from the current frame's 100 ms tick window.
     #[serde(skip, default)]
     tick_polls: u32,
+    /// Round-robin scratch buffers backing the formatted-resource-name
+    /// service (game util slot 36). The firmware hands callers a name
+    /// pointer that stays valid until the next call; the guest consumes it
+    /// immediately, so a small reused ring matches that contract without
+    /// leaking a buffer per call.
+    #[serde(default)]
+    formatted_name_buffers: Vec<u32>,
+    /// Next `formatted_name_buffers` slot to hand out.
+    #[serde(default)]
+    formatted_name_cursor: usize,
     last_pc: u32,
     recent_pcs: VecDeque<u32>,
     /// Recent non-fallthrough control transfers (from, to), newest last.
@@ -942,6 +952,8 @@ impl CoolbarMachine {
             frame_count: 0,
             tick_poll_frame: 0,
             tick_polls: 0,
+            formatted_name_buffers: Vec::new(),
+            formatted_name_cursor: 0,
             last_pc: 0,
             recent_pcs: VecDeque::with_capacity(32),
             recent_branches: VecDeque::with_capacity(16),
@@ -2024,6 +2036,8 @@ impl CoolbarMachine {
             frame_count: 0,
             tick_poll_frame: 0,
             tick_polls: 0,
+            formatted_name_buffers: Vec::new(),
+            formatted_name_cursor: 0,
             last_pc: 0,
             recent_pcs: VecDeque::new(),
             recent_branches: VecDeque::new(),
