@@ -302,6 +302,19 @@ impl CoolbarMachine {
             }
             60 => {
                 let screen = self.register(0);
+                if screen != 0 {
+                    // Mirror the screen-service switch path: queue the outgoing
+                    // screen's destroy callback so actor/scene teardown runs
+                    // before the replacement screen initialises.  Without this
+                    // the previous screen's state lingers and the guest keeps
+                    // cycling back through its loading screen.
+                    self.queue_screen_destroy(self.pending_screen, screen);
+                    if let Some(current) = self.screen_stack.last_mut() {
+                        *current = screen;
+                    } else {
+                        self.screen_stack.push(screen);
+                    }
+                }
                 if screen != 0 && self.uses_fixed_manager_abi() {
                     self.screen_contexts.insert(screen, 0);
                 }
