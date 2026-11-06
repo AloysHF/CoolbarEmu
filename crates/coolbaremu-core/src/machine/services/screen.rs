@@ -172,6 +172,26 @@ impl CoolbarMachine {
             .push_back((destroy, vec![parameter], "screenDestroy"));
     }
 
+    /// Push a screen onto the engine's screen stack. The firmware stack is
+    /// keyed by screen: `vm_screen_stack_push_with_data_package` drops any
+    /// existing entry for that screen before appending, so re-declaring the
+    /// current screen only moves it to the top. Pushing a duplicate instead
+    /// makes every stacked copy run its logic and render callbacks on every
+    /// frame — B/三国群殴传.CBE (issue #166) re-declares its level-select
+    /// screen each frame, which grew the stack without bound and redrew the
+    /// whole map one extra time per frame (3.7e8 instructions over 130
+    /// frames).
+    pub(crate) fn push_screen_stack(&mut self, screen: u32) {
+        if let Some(position) = self
+            .screen_stack
+            .iter()
+            .position(|candidate| *candidate == screen)
+        {
+            self.screen_stack.remove(position);
+        }
+        self.screen_stack.push(screen);
+    }
+
     pub(crate) fn handle_screen_service(&mut self, index: u32) {
         match index {
             0 | 2 | 3 => {
@@ -226,7 +246,7 @@ impl CoolbarMachine {
                             }
                         }
                     }
-                    self.screen_stack.push(screen);
+                    self.push_screen_stack(screen);
                     self.pending_screen = screen;
                     self.memory.w32(SCREEN_IS_IN_QUIT, 0);
                 }
@@ -357,7 +377,33 @@ impl CoolbarMachine {
 mod tests {
     use super::invalidate_panel;
     use crate::machine::memory::MachineMemory;
+    use crate::machine::CoolbarMachine;
     use armv4t_emu::Memory;
+
+    #[test]
+    fn re_declaring_the_current_screen_does_not_grow_the_stack() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        let screen = machine.allocate(0x40);
+        machine.set_user_register(0, screen);
+
+        // Screen-service index 4 is the engine's "add/push screen" request.
+        // B/三国群殴传.CBE issues it for the screen it is already on once per
+        // frame, so the push must be idempotent: the render loop walks the
+        // whole stack every frame, and duplicates redraw the scene once per
+        // stacked copy.
+        //
+        // The guest reloads r0 before every service call, and the handler
+        // clobbers r0 with its result value, so restore the argument each
+        // iteration — otherwise only the first call reaches the push path.
+        for _ in 0..4 {
+            machine.set_user_register(0, screen);
+            machine.handle_screen_service(4);
+        }
+
+        assert_eq!(machine.screen_stack, [screen]);
+        assert_eq!(machine.pending_screen, screen);
+        assert!(machine.pending_callbacks.is_empty());
+    }
 
     #[test]
     fn panel_invalidation_clips_and_queues_dirty_rectangle() {
