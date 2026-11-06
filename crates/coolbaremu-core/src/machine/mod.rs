@@ -1378,7 +1378,7 @@ impl CoolbarMachine {
             return 0;
         }
         let aligned = size.saturating_add(7) & !7;
-        if let Some(index) = self
+        let pointer = if let Some(index) = self
             .free_heap_blocks
             .iter()
             .position(|(_, available)| *available >= aligned)
@@ -1388,19 +1388,22 @@ impl CoolbarMachine {
                 self.free_heap_blocks
                     .insert(index, (pointer + aligned, available - aligned));
             }
-            self.heap_allocations.insert(pointer, aligned);
-            return pointer;
-        }
-        let pointer = self.heap_cursor;
-        let end = pointer.saturating_add(aligned);
-        if end > MEMORY_BLOCK_POOL {
-            warn!("CBE heap exhausted while allocating {size} bytes");
-            0
-        } else {
-            self.heap_cursor = end;
-            self.heap_allocations.insert(pointer, aligned);
             pointer
-        }
+        } else {
+            let pointer = self.heap_cursor;
+            let end = pointer.saturating_add(aligned);
+            if end > MEMORY_BLOCK_POOL {
+                warn!("CBE heap exhausted while allocating {size} bytes");
+                return 0;
+            }
+            self.heap_cursor = end;
+            pointer
+        };
+        self.heap_allocations.insert(pointer, aligned);
+        // Firmware allocations come back zeroed. Guests rely on that when a
+        // recycled buffer still holds graphics from an earlier scene.
+        self.clear_allocation(pointer, aligned);
+        pointer
     }
 
     fn deallocate(&mut self, pointer: u32) {
@@ -6609,6 +6612,23 @@ mod tests {
             0,
             "an unimplemented count slot must be zero elements, not a heap block"
         );
+    }
+
+    #[test]
+    fn recycled_allocations_are_zeroed() {
+        let mut machine = machine_from_minimal_archive();
+        let pointer = machine.allocate(64);
+        machine.memory.write_bytes(pointer, &[0xff; 64]);
+        machine.deallocate(pointer);
+        let recycled = machine.allocate(64);
+        assert_eq!(recycled, pointer);
+        for offset in 0..64 {
+            assert_eq!(
+                machine.memory.r8(recycled + offset),
+                0,
+                "recycled allocation kept stale byte at +0x{offset:X}"
+            );
+        }
     }
 
     #[test]

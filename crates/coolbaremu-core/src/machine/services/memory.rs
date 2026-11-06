@@ -201,7 +201,7 @@ impl CoolbarMachine {
         let _ = block;
     }
 
-    fn clear_allocation(&mut self, pointer: u32, size: u32) {
+    pub(crate) fn clear_allocation(&mut self, pointer: u32, size: u32) {
         if let Some(region) = self.memory.region_mut(pointer, size as usize) {
             // `region_mut` yields the whole mapped span; clear only the new
             // allocation or the block headers living above the pool vanish.

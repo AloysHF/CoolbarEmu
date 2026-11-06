@@ -162,8 +162,11 @@ re-selecting its active screen in the first 200 frames.
 The machine uses checked sparse regions rather than reserving the entire 32-bit address space. Guest reads and writes honor the executable's byte order. Initialized data, stack, heap, service-manager state, and framebuffer storage are writable. Unmapped accesses are recorded for diagnostics, and an unmapped instruction fetch stops execution with an error.
 
 Memory-block allocations clear their aligned storage, including storage reused
-after a block reset. Resource lookup preserves mapped resident payload pointers
-even when bytes beyond a compact package descriptor resemble a file marker.
+after a block reset. General heap allocations are also returned zeroed,
+including recycled runs, because guests that rebuild scenes from reused buffers
+read stale bytes as live object state (issue #121). Resource lookup preserves
+mapped resident payload pointers even when bytes beyond a compact package
+descriptor resemble a file marker.
 
 ## Guest termination
 
