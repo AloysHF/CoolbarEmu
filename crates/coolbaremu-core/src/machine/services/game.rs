@@ -2091,8 +2091,15 @@ impl CoolbarMachine {
                 self.set_result(result.unwrap_or(u32::MAX));
             }
             18 => {
-                let left = self.read_c_string(self.register(0), 4096);
-                let right = self.read_c_string(self.register(1), 4096);
+                // DF_strcmp is a byte-wise comparison of the two NUL terminated
+                // strings.  Guest map tables (e.g. zombieslist.map) use GBK
+                // column headers and cell values.  Decoding them with
+                // `String::from_utf8_lossy` collapses every non-ASCII byte to
+                // U+FFFD, so two different GBK headings of the same length
+                // compare equal and the guest picks the wrong column for its
+                // resource names (missing .actor/.gif sprites, issue #89).
+                let left = self.read_c_bytes(self.register(0), 4096);
+                let right = self.read_c_bytes(self.register(1), 4096);
                 self.set_result(u32::from(left == right));
             }
             19 => {
@@ -2202,6 +2209,56 @@ mod tests {
 
     fn pack(high: i16, low: i16) -> u32 {
         u32::from(low as u16) | (u32::from(high as u16) << 16)
+    }
+
+    #[test]
+    fn df_strcmp_compares_raw_gbk_bytes_not_lossy_utf8() {
+        use crate::machine::CoolbarMachine;
+        use armv4t_emu::Memory;
+
+        // GBK for 啊 (B0 A1) and 阿 (B0 A2).  Both consist solely of bare
+        // UTF-8 continuation bytes, so `String::from_utf8_lossy` collapses
+        // each of them to the same "\u{FFFD}\u{FFFD}" even though the raw
+        // guest bytes differ.  Guest map-table headers are exactly like this.
+        let left_bytes = [0xB0_u8, 0xA1, 0x00];
+        let right_bytes = [0xB0_u8, 0xA2, 0x00];
+        assert_ne!(left_bytes, right_bytes);
+        assert_eq!(
+            String::from_utf8_lossy(&left_bytes[..2]),
+            String::from_utf8_lossy(&right_bytes[..2])
+        );
+
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        let left = machine.allocate(16);
+        let right = machine.allocate(16);
+        for (offset, byte) in left_bytes.iter().enumerate() {
+            machine.memory.w8(left + offset as u32, *byte);
+        }
+        for (offset, byte) in right_bytes.iter().enumerate() {
+            machine.memory.w8(right + offset as u32, *byte);
+        }
+        machine.set_user_register(0, left);
+        machine.set_user_register(1, right);
+        machine.handle_game_util_service(18);
+        assert_eq!(machine.register(0), 0, "distinct GBK strings must differ");
+
+        for (offset, byte) in left_bytes.iter().enumerate() {
+            machine.memory.w8(right + offset as u32, *byte);
+        }
+        machine.set_user_register(0, left);
+        machine.set_user_register(1, right);
+        machine.handle_game_util_service(18);
+        assert_eq!(machine.register(0), 1, "identical GBK bytes must match");
+
+        // ASCII behaviour is unchanged.
+        for (offset, byte) in b"ID\0".iter().enumerate() {
+            machine.memory.w8(left + offset as u32, *byte);
+            machine.memory.w8(right + offset as u32, *byte);
+        }
+        machine.set_user_register(0, left);
+        machine.set_user_register(1, right);
+        machine.handle_game_util_service(18);
+        assert_eq!(machine.register(0), 1);
     }
 
     #[test]
