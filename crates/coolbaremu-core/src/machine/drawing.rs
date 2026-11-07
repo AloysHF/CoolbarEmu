@@ -456,17 +456,31 @@ impl CoolbarMachine {
         self.set_result(0);
     }
 
-    /// IMG_Destory (F_0 0x28): free the image's pixel data (the header may
-    /// be a guest-owned static object, so it is only cleared, like the
-    /// reference).
+    /// IMG_Destory (F_0 0x28): free the image's pixel data. The reference
+    /// (`vm_IMG_Destory`) only releases the pixels and clears the 12-byte
+    /// header when the image's kind byte at +8 is one of the heap-owned
+    /// kinds {1, 3, 4}; anything else is left untouched and the kind byte
+    /// itself is returned. Sharing this guard matters: guest screen-destroy
+    /// callbacks run IMG_Destory on images that outlive the screen, and an
+    /// unconditional free (or the unhandled-slot stub fill) wipes data the
+    /// next screen still draws.
     pub(crate) fn release_oldlib_image(&mut self) {
         let image = self.register(0);
         if image != 0 && image != SCREEN_IMAGE_STRUCT {
-            let pixels = self.memory.r32(image);
-            if pixels != 0 {
-                self.deallocate(pixels);
+            let kind = self.memory.r8(image + 8);
+            if matches!(kind, 1 | 3 | 4) {
+                let pixels = self.memory.r32(image);
+                if pixels != 0 {
+                    self.deallocate(pixels);
+                }
                 self.memory.w32(image, 0);
+                self.memory.w32(image + 4, 0);
+                self.memory.w32(image + 8, 0);
+                self.set_result(0);
+                return;
             }
+            self.set_result(u32::from(kind));
+            return;
         }
         self.set_result(0);
     }
@@ -3187,6 +3201,43 @@ mod rendering_tests {
         let pixels = machine.frame_pixels();
         assert!(pixels[38 * 240..54 * 240].iter().any(|p| *p != 0));
         assert!(pixels[..20 * 240].iter().all(|p| *p == 0));
+    }
+
+    #[test]
+    fn img_destroy_only_releases_heap_owned_image_kinds() {
+        // The reference `vm_IMG_Destory` frees the pixel block and clears the
+        // 12-byte header only when the kind byte at +8 is one of the
+        // heap-owned kinds {1, 3, 4}; anything else is left untouched and the
+        // kind byte comes back as the result. Guest screen-destroy callbacks
+        // run this on images that outlive their screen, so an unconditional
+        // release wipes data the next screen still draws.
+        for kind in [0u8, 1, 2, 3, 4, 7] {
+            let mut machine = CoolbarMachine::new_blank_for_tests();
+            machine.initialize_screen();
+            let image = machine.allocate(16);
+            let pixels = machine.allocate(8);
+            machine.memory.w32(image, pixels);
+            machine.write_image_dims(image, 3, 1);
+            machine.memory.w8(image + 8, kind);
+            machine.memory.w32(pixels, 0x1234);
+            machine.cpu.reg_set(Mode::User, 0, image);
+            machine.release_oldlib_image();
+            if matches!(kind, 1 | 3 | 4) {
+                assert_eq!(machine.register(0), 0, "kind {kind} must free");
+                assert_eq!(machine.memory.r32(image), 0);
+                assert_eq!(machine.memory.r32(image + 4), 0);
+                assert_eq!(machine.memory.r32(image + 8) & 0xff, 0);
+            } else {
+                assert_eq!(
+                    machine.register(0),
+                    u32::from(kind),
+                    "kind {kind} must stay untouched"
+                );
+                assert_eq!(machine.memory.r32(image), pixels);
+                assert_eq!(machine.memory.r8(image + 8), kind);
+                assert_eq!(machine.memory.r32(pixels), 0x1234);
+            }
+        }
     }
 }
 
