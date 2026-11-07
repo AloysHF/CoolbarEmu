@@ -154,7 +154,7 @@ impl CoolbarMachine {
             6 if self.uses_native_dispatch_abi() => self.draw_ui_four_x_repeat(),
             7 if self.uses_native_dispatch_abi() => self.draw_ui_single_repeat(),
             8 if self.uses_native_dispatch_abi() => self.draw_ui_horizontal(),
-            10 if self.uses_native_dispatch_abi() => self.release_oldlib_image(),
+            10 if gameold_abi || self.uses_native_dispatch_abi() => self.release_oldlib_image(),
             13 if self.uses_native_dispatch_abi() => self.set_result(0),
             15 if self.uses_native_dispatch_abi() => self.oldlib_image_height(),
             37 | 39 if gameold_abi || self.uses_native_dispatch_abi() => self.malloc_big_service(),
