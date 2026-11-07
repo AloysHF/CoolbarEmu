@@ -31,6 +31,15 @@ pub(super) fn coolbar_offline_payload(url: &str) -> Option<Vec<u8>> {
     if host.eq_ignore_ascii_case("wmix.kvbar.com") && path == "wmix/d" {
         return None;
     }
+    // The app-down list feeds the platform's update gate. Even a valid
+    // itemless transfer leaves the online board games exiting through their
+    // update flow (their lobby servers are retired either way), while a
+    // transfer error is what sends them back to their own login screens and
+    // restores the conditions the point-play receipt games were verified
+    // under, so report those endpoints as unreachable.
+    if path == "appdown/d" {
+        return None;
+    }
     // The boot loader fetches CongfigInfo to learn the level table before it
     // releases the loading screen. With an empty answer it retries forever.
     if let Some(rest) = url.split_once("/CongfigInfo") {
@@ -45,8 +54,14 @@ pub(super) fn coolbar_offline_payload(url: &str) -> Option<Vec<u8>> {
     if let Some(response) = login_receipt(url) {
         return Some(response);
     }
-    // Zero-length payload: a successful download that carried no body.
-    Some(Vec::new())
+    // A zero-length payload cannot carry the four-byte checksum trailer the
+    // firmware's downloader verifies, so guests treat it as a corrupted
+    // transfer: the online board games exit through their update flow and
+    // platform titles park on 系统更新中. Answer with the smallest valid
+    // transfer instead — a four-byte trailer over zero payload words — which
+    // reads as "the server is alive and has nothing to say" (the sum of zero
+    // big-endian words is zero).
+    Some(checksummed_body(&[]))
 }
 
 /// Append the checksum the firmware's downloader expects.
@@ -158,12 +173,24 @@ mod tests {
         let body = coolbar_offline_payload(url).unwrap();
         assert_eq!(&body[..4], &[1, 1, 0, 0]);
         assert_eq!(body.len(), 5 + body[4] as usize + 10);
-        // Unrelated platform endpoints keep the zero-length success.
-        assert!(
-            coolbar_offline_payload("http://namr.51coolbar.com/appdown/d")
-                .unwrap()
-                .is_empty()
-        );
+    }
+
+    #[test]
+    fn appdown_lists_report_the_server_unreachable() {
+        // The app-down list feeds the platform's update gate. Even a valid
+        // itemless transfer leaves the online board games exiting through
+        // their update flow, while the offline error sends them back to
+        // their own login UIs and keeps the point-play receipt games in
+        // their verified conditions.
+        for url in [
+            "http://dl.kvbar.com/appdown/d?mver=1&kver=10&sc=0&platform=1&type=a&nver=1&mode=&imei=344CCC3046002273317664099&scaddr=13800219999&getby=1",
+            "http://namr.51coolbar.com/appdown/d?mver=0&kver=10&type=a",
+        ] {
+            assert!(
+                coolbar_offline_payload(url).is_none(),
+                "{url} must stay unreachable"
+            );
+        }
     }
 
     #[test]
@@ -176,13 +203,44 @@ mod tests {
             )
             .is_none()
         );
-        // The download and menu probes on the same fleet still complete.
+    }
+
+    #[test]
+    fn generic_coolbar_downloads_carry_a_valid_checksum_trailer() {
+        // A zero-length body cannot carry the four-byte trailer the firmware
+        // downloader verifies, so guests read it as a corrupted transfer and
+        // park on their update screen. Every remaining Coolbar GET therefore
+        // answers with the smallest valid transfer: four trailer bytes over
+        // zero payload words.
         for url in [
-            "http://namr.51coolbar.com/appdown/d?mver=0&kver=10&type=a",
             "http://sd.kvbar.com/dmenu/d?mode=9935&ver=1",
-            "http://dl.kvbar.com/appdown/d?mver=1&kver=10",
+            "http://wsms.51coolbar.com/wsms/d?mver=0&kver=46&sc=1&platform=1&type=a&nver=1&mode=&imei=00002F2111111111111111111&qsms=1",
+            "http://api.51coolbar.com/misc/query",
         ] {
-            assert!(coolbar_offline_payload(url).unwrap().is_empty(), "{url}");
+            let body = coolbar_offline_payload(url).unwrap();
+            assert_eq!(body.len(), 4, "{url}");
+            // Recompute the checksum the guest's downloader checks: the sum
+            // of the payload's big-endian words plus the big-endian remainder
+            // equals the trailing four bytes read little-endian. For an empty
+            // payload both terms are zero, so the trailer must be four zero
+            // bytes.
+            let (payload, trailer) = body.split_at(body.len() - 4);
+            let mut sum = 0u32;
+            for word in payload.as_chunks::<4>().0 {
+                sum = sum.wrapping_add(u32::from_be_bytes(*word));
+            }
+            let mut remainder = 0u32;
+            let tail = payload.len() % 4;
+            if tail != 0 {
+                for (index, byte) in payload[payload.len() - tail..].iter().enumerate() {
+                    remainder |= u32::from(*byte) << (24 - 8 * index);
+                }
+            }
+            assert_eq!(
+                u32::from_le_bytes([trailer[0], trailer[1], trailer[2], trailer[3]]),
+                sum.wrapping_add(remainder),
+                "{url} trailer must match the payload checksum"
+            );
         }
     }
 
