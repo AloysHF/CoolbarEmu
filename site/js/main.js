@@ -180,6 +180,7 @@
     "play.button": { zh: "▶ 开始试玩", en: "▶ Start Playing" },
     "footer.desc": { zh: "用 Rust 编写的 Coolbar/CBE 游戏模拟器", en: "A Rust emulator for Coolbar/CBE games" },
     "footer.project": { zh: "项目", en: "Project" },
+    "footer.community": { zh: "社区", en: "Community" },
     "footer.contrib": { zh: "贡献指南", en: "Contributing" },
     "footer.docs": { zh: "文档", en: "Docs" },
     "footer.standalone": { zh: "独立模拟器", en: "Standalone Emulator" },
