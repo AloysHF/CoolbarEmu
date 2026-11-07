@@ -44,6 +44,10 @@ struct Cli {
     pointer_hold: Vec<(u32, u32, i32, i32)>,
     #[arg(long, value_parser = parse_pointer_drag)]
     pointer_drag: Vec<(u32, u32, i32, i32, i32, i32)>,
+    /// Drag with an interpolated position every frame so guests that track
+    /// continuous touch type 5 events see the whole path.
+    #[arg(long, value_parser = parse_pointer_drag)]
+    pointer_drag_smooth: Vec<(u32, u32, i32, i32, i32, i32)>,
     #[arg(long, value_enum, default_value_t = OrientationArg::Auto)]
     orientation: OrientationArg,
     #[arg(long)]
@@ -220,6 +224,20 @@ fn main() -> Result<()> {
                     machine.set_pointer(x2, y2, false);
                 } else if frame == (start + end) / 2 {
                     machine.set_pointer(x2, y2, true);
+                }
+            }
+            for &(start, end, x1, y1, x2, y2) in &cli.pointer_drag_smooth {
+                if frame == start {
+                    machine.set_pointer(x1, y1, true);
+                } else if frame == end {
+                    machine.set_pointer(x2, y2, false);
+                } else if (start..end).contains(&frame) {
+                    let t = f64::from(frame - start) / f64::from(end - start);
+                    machine.set_pointer(
+                        x1 + ((f64::from(x2 - x1)) * t).round() as i32,
+                        y1 + ((f64::from(y2 - y1)) * t).round() as i32,
+                        true,
+                    );
                 }
             }
             let before_frame_instructions = machine.instruction_count();
