@@ -125,11 +125,17 @@ impl CoolbarMachine {
     /// already dead. Fitting recycled space first keeps the pool's lifetime
     /// tied to its live set, which is what the guest expects.
     pub(crate) fn allocate_from_memory_block(&mut self, block: u32, requested: u32) -> u32 {
-        let aligned = requested.saturating_add(3) & !3;
         let base = self.memory.r32(block);
-        if base == 0 || aligned == 0 {
+        if base == 0 {
             return 0;
         }
+        // A zero-length request still yields the current bump position, the
+        // way the firmware's allocator does. Guests use the non-null answer as
+        // a success flag (XSE scripts store empty tables this way).
+        if requested == 0 {
+            return base + self.memory.r32(block + 4);
+        }
+        let aligned = requested.saturating_add(3) & !3;
         if let Some(offset) = self.take_block_free_space(base, aligned) {
             let pointer = base + offset;
             self.clear_allocation(pointer, aligned);
@@ -274,6 +280,29 @@ mod tests {
         // The coalesced run serves a request neither half could satisfy.
         assert_eq!(machine.allocate_from_memory_block(MEMORY_BLOCK_PTR, 20), a);
         assert_ne!(c, a);
+    }
+
+    /// A zero-length request must succeed with the current bump position, the
+    /// answer the firmware gives. XSE script tables use the non-null pointer as
+    /// a success flag and abort parsing when they receive zero, which left
+    /// scripts loaded but never started.
+    #[test]
+    fn zero_length_block_allocation_returns_bump_pointer() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        machine.initialize_memory_block(MEMORY_BLOCK_PTR, 64);
+        let first = machine.allocate_from_memory_block(MEMORY_BLOCK_PTR, 8);
+        let base = machine.memory.r32(MEMORY_BLOCK_PTR);
+        assert_eq!(first, base);
+        let empty = machine.allocate_from_memory_block(MEMORY_BLOCK_PTR, 0);
+        assert_eq!(empty, base + 8);
+        assert_eq!(machine.memory.r32(MEMORY_BLOCK_PTR + 4), 8);
+        // It is not a live allocation, so no bookkeeping entry claims it.
+        assert!(!machine.block_allocations.contains_key(&empty));
+        // The answer is usable: the next allocation starts at the same spot.
+        assert_eq!(
+            machine.allocate_from_memory_block(MEMORY_BLOCK_PTR, 8),
+            empty
+        );
     }
 
     #[test]
