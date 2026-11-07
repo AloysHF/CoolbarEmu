@@ -1,6 +1,89 @@
 //! Local consumption receipts for the legacy payment service.
 
+/// Returns a fabricated offline response when the game asks the Coolbar
+/// platform for something other than a known payment check.  Games that
+/// bootstrap with a `CongfigInfo` or download request should observe the
+/// same callback shape as a successful fetch so they continue into play
+/// rather than retrying forever on error.
+pub(super) fn coolbar_offline_payload(url: &str) -> Option<Vec<u8>> {
+    let (authority, _) = url.strip_prefix("http://")?.split_once('/')?;
+    let (host, _) = authority.split_once(':').unwrap_or((authority, "80"));
+    // Cover every Coolbar-hosted endpoint the firmware might query during
+    // boot: download servers, config probes, payment gateways, and the
+    // legacy 51coolbar and kvbar subdomains.
+    let is_coolbar = host.eq_ignore_ascii_case("res.51coolbar.com")
+        || host.eq_ignore_ascii_case("vmt.51coolbar.com")
+        || host.eq_ignore_ascii_case("api.51coolbar.com")
+        || host.eq_ignore_ascii_case("cdn.51coolbar.com")
+        || host.ends_with(".51coolbar.com")
+        || host.eq_ignore_ascii_case("116.228.32.84")
+        // kvbar.com mirrors the 51coolbar.com fleet for menu and app-down
+        // endpoints that older Coolbar titles still reference.
+        || host.ends_with(".kvbar.com");
+    if !is_coolbar {
+        return None;
+    }
+    // The boot loader fetches CongfigInfo to learn the level table before it
+    // releases the loading screen. With an empty answer it retries forever.
+    if let Some(rest) = url.split_once("/CongfigInfo") {
+        if rest.0.contains("/download/") {
+            return Some(checksummed_body(
+                b"#1(0~5)#2(6~15:1)#3(16~24)#4(25~34)#5(35~44)",
+            ));
+        }
+    }
+    // Starting a stage first asks the payment gateway to log the player in.
+    // An empty body leaves the title waiting on its data-update page.
+    if let Some(response) = login_receipt(url) {
+        return Some(response);
+    }
+    // Zero-length payload: a successful download that carried no body.
+    Some(Vec::new())
+}
+
+/// Append the checksum the firmware's downloader expects.
+///
+/// A downloaded body ends with a four-byte little-endian additive checksum:
+/// the sum of the payload's big-endian 32-bit words plus the big-endian
+/// remainder bytes. The in-guest downloader recomputes that value over
+/// everything but the last four bytes and compares it, so an offline
+/// stand-in has to generate the trailer instead of reusing a cached file.
+fn checksummed_body(payload: &[u8]) -> Vec<u8> {
+    let mut sum = 0u32;
+    let mut index = 0;
+    while index + 4 <= payload.len() {
+        sum = sum.wrapping_add(u32::from_be_bytes([
+            payload[index],
+            payload[index + 1],
+            payload[index + 2],
+            payload[index + 3],
+        ]));
+        index += 4;
+    }
+    let mut tail = 0u32;
+    for byte in &payload[index..] {
+        tail = (tail << 8).wrapping_add(*byte as u32);
+    }
+    let mut body = payload.to_vec();
+    body.extend_from_slice(&sum.wrapping_add(tail).to_le_bytes());
+    body
+}
+
 pub(super) fn consumption_receipt(url: &str) -> Option<Vec<u8>> {
+    cl_receipt(url, "consume", "已启用离线游玩。\n按右软键返回游戏。")
+}
+
+/// Offline answer for the payment gateway's login probe (`ac=lt`).
+///
+/// The login action shares the receipt envelope the consumption path uses,
+/// so the same accepted/completed/message/balance layout satisfies it. Its
+/// reply is what releases the title's data-update page.
+fn login_receipt(url: &str) -> Option<Vec<u8>> {
+    cl_receipt(url, "lt", "已启用离线游玩。")
+}
+
+/// Build the receipt envelope for a `vm/cl` action.
+fn cl_receipt(url: &str, action: &str, text: &str) -> Option<Vec<u8>> {
     let (authority, path) = url.strip_prefix("http://")?.split_once('/')?;
     let (host, port) = authority.split_once(':').unwrap_or((authority, "80"));
     if !(host.eq_ignore_ascii_case("vmt.51coolbar.com") || host == "116.228.32.84")
@@ -19,7 +102,7 @@ pub(super) fn consumption_receipt(url: &str) -> Option<Vec<u8>> {
             return None;
         }
     }
-    if fields.get("ac") != Some(&"consume")
+    if fields.get("ac") != Some(&action)
         || fields.get("pVer") != Some(&"4")
         || fields.get("Subver") != Some(&"2")
     {
@@ -30,7 +113,7 @@ pub(super) fn consumption_receipt(url: &str) -> Option<Vec<u8>> {
         return None;
     }
 
-    let (message, _, _) = encoding_rs::GBK.encode("已启用离线游玩。\n按右软键返回游戏。");
+    let (message, _, _) = encoding_rs::GBK.encode(text);
     // Accepted request, completed consumption, no nested billing packet,
     // empty metadata, and a byte-length-prefixed GBK receipt.
     let mut response = vec![1, 1, 0, 0, message.len() as u8];
@@ -59,6 +142,20 @@ mod tests {
         assert_eq!(response.len(), message_end + 10);
         assert_eq!(&response[message_end..message_end + 8], &[0; 8]);
         assert_eq!(&response[message_end + 8..], &1u16.to_be_bytes());
+    }
+
+    #[test]
+    fn login_request_receives_receipt_instead_of_empty_body() {
+        let url = "http://vmt.51coolbar.com/vm/cl?ac=lt&data=000077D8encoded&pVer=4&Subver=2";
+        let body = coolbar_offline_payload(url).unwrap();
+        assert_eq!(&body[..4], &[1, 1, 0, 0]);
+        assert_eq!(body.len(), 5 + body[4] as usize + 10);
+        // Unrelated platform endpoints keep the zero-length success.
+        assert!(
+            coolbar_offline_payload("http://namr.51coolbar.com/appdown/d")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

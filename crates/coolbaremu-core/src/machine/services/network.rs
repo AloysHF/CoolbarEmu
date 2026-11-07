@@ -168,6 +168,9 @@ impl CoolbarMachine {
         if out != 0 {
             self.memory.w32(out, self.next_net_connect_id);
         }
+        // Known payment requests get a full offline receipt; every other
+        // Coolbar-hosted request still succeeds with an empty payload so
+        // games do not retry an unavailable config/download endpoint forever.
         if let Some(response) = super::offline_payment::consumption_receipt(&self.net_last_http_url)
         {
             if self.net_events.len() > MAX_NET_EVENTS - 2 {
@@ -181,6 +184,37 @@ impl CoolbarMachine {
             }
             self.memory.write_bytes(pointer, &response);
             let length = response.len() as u32;
+            self.net_downlink_bytes = self.net_downlink_bytes.saturating_add(length as u64);
+            self.queue_net_event(0, pointer, length, length, callback, 0, 1, false, false);
+            self.queue_net_event(1, 0, 0, 0, callback, 0, 2, false, false);
+            self.set_result(1);
+            return;
+        }
+        if let Some(payload) =
+            super::offline_payment::coolbar_offline_payload(&self.net_last_http_url)
+        {
+            if self.net_events.len() > MAX_NET_EVENTS - 2 {
+                self.set_result(0);
+                return;
+            }
+            // Hand the guest the payload the firmware would have downloaded.
+            // A zero-length body still completes the request: the callback
+            // must observe the terminal event even when there is no data.
+            // Length is passed in both r1 and r2 because callbacks have been
+            // observed to read either field as the byte count.
+            let pointer = if payload.is_empty() {
+                0
+            } else {
+                self.allocate(payload.len() as u32)
+            };
+            if !payload.is_empty() && pointer == 0 {
+                self.set_result(0);
+                return;
+            }
+            if pointer != 0 {
+                self.memory.write_bytes(pointer, &payload);
+            }
+            let length = payload.len() as u32;
             self.net_downlink_bytes = self.net_downlink_bytes.saturating_add(length as u64);
             self.queue_net_event(0, pointer, length, length, callback, 0, 1, false, false);
             self.queue_net_event(1, 0, 0, 0, callback, 0, 2, false, false);

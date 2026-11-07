@@ -116,6 +116,10 @@ path remains unverified. Flying Eagle V101 reaches its introduction through loca
 SMS billing, but starting flight still faults during map loading.
 In 1943, acknowledge the receipt with the right soft key (`E`), then use the
 left soft key (`Q`) to open equipment and confirm the sortie.
+War Machine V101 reaches its first stage through the local point-play receipt:
+the right soft key enters the map, the intro dialogue advances with Confirm, and
+a direction hold moves the player off the helipad (issue #119). Its separate
+数据更新 entry still needs the retired platform server.
 Servers are treated as unavailable. Continuation timers used after offline channel
 or HTTP POST errors advance without retry waits to avoid prolonged startup update
 prompts. Normal game timers and GET error handling retain their pace.
@@ -191,7 +195,7 @@ not provide the original server's content or a real carrier payment service.
 | 47 | `A/恋爱助手V10.CBE` | 240×320 | <img src="images/A/恋爱助手V10.png" width="120" alt="恋爱助手V10 idle frame"> | Not assessed | Ready | List menu, submenu, article selection, scrolling and back navigation verified; billing callbacks are simulated offline |
 | 48 | `A/恶魔城(新品).CBE` | 240×320 | <img src="images/A/恶魔城(新品).png" width="120" alt="恶魔城(新品) idle frame"> | Not assessed | Ready | Playable: 150-frame confirm-key run reaches the first stage (70110 px / 119 colors) and returns through `EXIT_ADDRESS`; the host now answers the resource size request with a count instead of a heap block; complete gameplay unverified
 | 49 | `A/恶魔城V10.CBE` | 240×320 | <img src="images/A/恶魔城V10.png" width="120" alt="恶魔城V10 idle frame"> | Not assessed | Ready | Playable: 150-frame confirm-key run reaches the first stage (70110 px / 119 colors) and returns through `EXIT_ADDRESS`; the unreachable method slot is treated as an unimplemented call; complete gameplay unverified
-| 50 | `A/战争机器V101.CBE` | 240×320 | <img src="images/A/战争机器V101.png" width="120" alt="战争机器V101 idle frame"> | Not assessed | Ready | The HELLFIRE splash and its 友情提示 render and later input dismisses the text, but only the logo and a black background remain at 2,500 frames; no crash is observed (issue #119) |
+| 50 | `A/战争机器V101.CBE` | 240×320 | <img src="images/A/战争机器V101.png" width="120" alt="战争机器V101 gameplay frame"> | Local billing simulation; directional movement verified | Ready | Playable: confirm through the HELLFIRE splash → five-entry main menu → 开始游戏 → 资费说明 → 点播 returns the local offline receipt, the right soft key enters the first stage, the intro dialogue advances with Confirm, and a right-direction hold moves the player off the helipad into the camp area (2,100-frame replay, Ready/exit 0, 70,328 px / 942 colors; the identical replay without the hold stays at the helipad). The separate 数据更新 menu entry needs the retired platform server and remains on its update page; later stages and audio unverified (issue #119) |
 | 51 | `A/战火军旗V10.CBE` | 240×320 | <img src="images/A/战火军旗V10.png" width="120" alt="战火军旗V10 idle frame"> | Not assessed | Ready | Idle frame captured; interaction/gameplay unverified |
 | 52 | `A/战火军棋(新品).CBE` | 240×320 | <img src="images/A/战火军棋(新品).png" width="120" alt="战火军棋(新品) idle frame"> | Not assessed | Ready | Title, menu, help, purchase panel and keypad/touch checked; paid battles unverified |
 | 53 | `A/拆弹专家V101.CBE` | 240×320 | <img src="images/A/拆弹专家V101.png" width="120" alt="拆弹专家V101 idle frame"> | Blocked: dead server | Ready | Online title: the guest requests the retired Coolbar platform service (vmt.51coolbar.com) and the offline error page is the firmware-faithful result; emulator-side fix is not possible (see issue #120) |
