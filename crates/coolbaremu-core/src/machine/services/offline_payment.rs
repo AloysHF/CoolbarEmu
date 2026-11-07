@@ -6,7 +6,7 @@
 /// same callback shape as a successful fetch so they continue into play
 /// rather than retrying forever on error.
 pub(super) fn coolbar_offline_payload(url: &str) -> Option<Vec<u8>> {
-    let (authority, _) = url.strip_prefix("http://")?.split_once('/')?;
+    let (authority, path) = url.strip_prefix("http://")?.split_once('/')?;
     let (host, _) = authority.split_once(':').unwrap_or((authority, "80"));
     // Cover every Coolbar-hosted endpoint the firmware might query during
     // boot: download servers, config probes, payment gateways, and the
@@ -21,6 +21,14 @@ pub(super) fn coolbar_offline_payload(url: &str) -> Option<Vec<u8>> {
         // endpoints that older Coolbar titles still reference.
         || host.ends_with(".kvbar.com");
     if !is_coolbar {
+        return None;
+    }
+    // The wireless-menu probe waits for an account answer rather than a
+    // download. An empty success leaves the guest parked on its "logging in"
+    // screen forever, so keep the offline error that lets it fall back to
+    // offline mode (issue #186).
+    let path = path.split_once('?').map_or(path, |(path, _)| path);
+    if host.eq_ignore_ascii_case("wmix.kvbar.com") && path == "wmix/d" {
         return None;
     }
     // The boot loader fetches CongfigInfo to learn the level table before it
@@ -156,6 +164,26 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn wireless_login_probe_keeps_offline_error() {
+        // A successful empty answer leaves the guest waiting for account data
+        // on its "logging in" screen; the offline error is what releases it.
+        assert!(
+            coolbar_offline_payload(
+                "http://wmix.kvbar.com/wmix/d?mver=0&kver=46&sc=5&platform=5&type=a&nver=1&mode=&imei=&qsms=20&scaddr=&appid=1002"
+            )
+            .is_none()
+        );
+        // The download and menu probes on the same fleet still complete.
+        for url in [
+            "http://namr.51coolbar.com/appdown/d?mver=0&kver=10&type=a",
+            "http://sd.kvbar.com/dmenu/d?mode=9935&ver=1",
+            "http://dl.kvbar.com/appdown/d?mver=1&kver=10",
+        ] {
+            assert!(coolbar_offline_payload(url).unwrap().is_empty(), "{url}");
+        }
     }
 
     #[test]
