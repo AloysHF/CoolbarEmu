@@ -190,17 +190,33 @@ impl CoolbarMachine {
             self.set_result(1);
             return;
         }
-        if super::offline_payment::coolbar_offline_payload(&self.net_last_http_url).is_some() {
+        if let Some(payload) =
+            super::offline_payment::coolbar_offline_payload(&self.net_last_http_url)
+        {
             if self.net_events.len() > MAX_NET_EVENTS - 2 {
                 self.set_result(0);
                 return;
             }
-            // Hand out an empty-but-non-null buffer so guest-side code that
-            // validates the payload pointer does not treat a `0` as a fetch
-            // failure and retry the endpoint forever.
-            let pointer = self.allocate(0);
-            self.net_downlink_bytes = self.net_downlink_bytes.saturating_add(0);
-            self.queue_net_event(0, pointer, 0, 0, callback, 0, 1, false, false);
+            // Hand the guest the payload the firmware would have downloaded.
+            // A zero-length body still completes the request: the callback
+            // must observe the terminal event even when there is no data.
+            // Length is passed in both r1 and r2 because callbacks have been
+            // observed to read either field as the byte count.
+            let pointer = if payload.is_empty() {
+                0
+            } else {
+                self.allocate(payload.len() as u32)
+            };
+            if !payload.is_empty() && pointer == 0 {
+                self.set_result(0);
+                return;
+            }
+            if pointer != 0 {
+                self.memory.write_bytes(pointer, &payload);
+            }
+            let length = payload.len() as u32;
+            self.net_downlink_bytes = self.net_downlink_bytes.saturating_add(length as u64);
+            self.queue_net_event(0, pointer, length, length, callback, 0, 1, false, false);
             self.queue_net_event(1, 0, 0, 0, callback, 0, 2, false, false);
             self.set_result(1);
             return;
