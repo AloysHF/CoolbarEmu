@@ -576,11 +576,64 @@ impl CoolbarMachine {
             self.set_result(0);
             return;
         }
+        // A guest that sets the header camera owns it from now on; the
+        // movement query must keep its hands off the viewport origin (see
+        // query_scene_movement) or the tile layer would scroll twice.
+        if !self.camera_managed_scenes.contains(&scene) {
+            self.camera_managed_scenes.push(scene);
+        }
         let x = self.register(1) as u16 as i16 as i32;
         let y = self.register(2) as u16 as i16 as i32;
+        self.write_scene_camera(scene, x, y);
+        self.set_result(0);
+    }
+
+    /// GAMEOLD scene stub 0x66c: "pan the scene camera".  卧底风云's walk
+    /// handler (0x05018DA8) keeps the player centred by panning the header
+    /// camera after every movement step: when the player leaves the 120px
+    /// centre line it calls 0x66c(scene, player - camera - 120, 0), and once
+    /// the player reaches the map edge it calls 0x66c(scene, -camera, 0) to
+    /// snap the viewport against that edge (r2 carries the vertical
+    /// component on the vertical cases).  Both tile and sprite layers read
+    /// scene+0/+2, so an unimplemented pan left the camera pinned at its
+    /// enter position; the sprite then wandered off its background and the
+    /// guest's background-restore blits derived negative sizes from the
+    /// stale rect, which is the ghost trail of issue #257.
+    pub(crate) fn pan_scene_camera(&mut self) {
+        let scene = self.register(0);
+        if scene == 0 {
+            self.set_result(0);
+            return;
+        }
+        if !self.camera_managed_scenes.contains(&scene) {
+            self.camera_managed_scenes.push(scene);
+        }
+        let dx = self.register(1) as u16 as i16 as i32;
+        let dy = self.register(2) as u16 as i16 as i32;
+        let x = self.memory.r16(scene) as i16 as i32 + dx;
+        let y = self.memory.r16(scene + 2) as i16 as i32 + dy;
+        self.write_scene_camera(scene, x, y);
+        self.set_result(0);
+    }
+
+    /// Store the header camera pair, clamped against the world extent the
+    /// scene header carries (+4/+6) and the viewport size (+0x644/+0x646).
+    /// Without a usable extent the value is stored verbatim.
+    fn write_scene_camera(&mut self, scene: u32, x: i32, y: i32) {
+        let mut x = x;
+        let mut y = y;
+        let world_w = self.memory.r16(scene + 4) as i32;
+        let world_h = self.memory.r16(scene + 6) as i32;
+        let vp_w = self.memory.r16(scene + 0x644) as i32;
+        let vp_h = self.memory.r16(scene + 0x646) as i32;
+        if world_w > 0 && vp_w > 0 && world_w > vp_w {
+            x = x.clamp(0, world_w - vp_w);
+        }
+        if world_h > 0 && vp_h > 0 && world_h > vp_h {
+            y = y.clamp(0, world_h - vp_h);
+        }
         self.memory.w16(scene, x as i16 as u16);
         self.memory.w16(scene + 2, y as i16 as u16);
-        self.set_result(0);
     }
 
     pub(crate) fn query_scene_movement(&mut self, offset: u32) {
@@ -607,7 +660,12 @@ impl CoolbarMachine {
         let vp_h = self.memory.r16(scene + 0x646) as i16 as i32;
         let map_w = self.memory.r32(map) as i32;
         let map_h = self.memory.r32(map + 4) as i32;
-        if offset == 0x680 && map_w > vp_w && vp_w > 0 {
+        // A guest that drives the header camera through 0x668/0x66c keeps
+        // scene+0x640/0x642 as the window's screen placement; dragging that
+        // origin here would scroll the tile layer on top of the camera pan
+        // and leave every sprite walking off its background (issue #257).
+        let camera_managed = self.camera_managed_scenes.contains(&scene);
+        if offset == 0x680 && !camera_managed && map_w > vp_w && vp_w > 0 {
             let current = self.memory.r16(scene + 0x640) as i16 as i32;
             let span = (map_w - vp_w).max(0);
             if (0..=span).contains(&current) {
@@ -615,7 +673,7 @@ impl CoolbarMachine {
                 let cam_x = target.clamp(0, span) as u16;
                 self.memory.w16(scene + 0x640, cam_x);
             }
-        } else if offset == 0x684 && map_h > vp_h && vp_h > 0 {
+        } else if offset == 0x684 && !camera_managed && map_h > vp_h && vp_h > 0 {
             let current = self.memory.r16(scene + 0x642) as i16 as i32;
             let span = (map_h - vp_h).max(0);
             if (0..=span).contains(&current) {
