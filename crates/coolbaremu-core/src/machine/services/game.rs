@@ -341,7 +341,15 @@ impl CoolbarMachine {
             65 => self.set_result(u32::from(self.pointer.dragging())),
             66 => self.set_result(self.pointer.x as u32),
             67 => self.set_result(self.pointer.y as u32),
-            68 => self.set_result(self.key_down | self.key_held_physical),
+            // Full edge-only key-down state, mirroring the firmware's
+            // g_curKeyDownState (cleared before every idle callback; held keys
+            // are polled through isKeyHold at index 12).  ORing held bits in
+            // here deadlocks guests whose framework scans bits 1..1<<31
+            // through index 11 whenever this guard is non-zero: with a key
+            // held but no new edge the scan never matches, the counter
+            // shifts left until it wraps to zero, and the loop spins forever
+            // (卧底风云(精品) exhausted its frame budget this way, #257).
+            68 => self.set_result(self.key_down),
             71 => {
                 self.handle_method_stub(Self::method_stub_address(METHOD_KIND_GAMEOLD, 0x11c) & !1);
             }
