@@ -446,7 +446,11 @@ impl CoolbarMachine {
                 let offset = self.memory.r32(cursor);
                 let value = read_little_endian_short(&mut self.memory, buffer.wrapping_add(offset));
                 self.memory.w32(cursor, offset.wrapping_add(2));
-                self.set_result(value as i32 as u32);
+                // DF_ReadShort yields a zero-extended u16 (the reference
+                // firmware assembles `u16 ret` and returns it verbatim).
+                // Sign-extending turned stream values >= 0x8000 into
+                // 0xFFFFxxxx and corrupted every downstream consumer.
+                self.set_result(value as u16 as u32);
             }
             92 => {
                 let buffer = self.register(0);
@@ -1381,6 +1385,7 @@ impl CoolbarMachine {
         match (kind, offset) {
             (METHOD_KIND_GAMEOLD, 0x680 | 0x684) => self.query_scene_movement(offset),
             (METHOD_KIND_GAMEOLD, 0x670 | 0x674) => self.scroll_scene_window(offset),
+            (METHOD_KIND_GAMEOLD, 0x668) => self.set_scene_camera(),
             (METHOD_KIND_GAMEOLD, 0x130) => self.initialize_record(),
             (METHOD_KIND_PICTURE, _) => self.handle_picture_library_method(offset),
             (METHOD_KIND_ACTOR, _) => self.handle_actor_method(offset),
@@ -2205,7 +2210,9 @@ impl CoolbarMachine {
                 let offset = self.memory.r32(cursor);
                 let value = read_little_endian_short(&mut self.memory, buffer.wrapping_add(offset));
                 self.memory.w32(cursor, offset.wrapping_add(2));
-                self.set_result(value as i32 as u32);
+                // Same DF_ReadShort contract as game service 91: the
+                // reference firmware returns a zero-extended u16.
+                self.set_result(value as u16 as u32);
             }
             20 => {
                 let buffer = self.register(0);
@@ -2833,7 +2840,10 @@ mod tests {
                     "stream integers must be serialized little-endian"
                 );
                 machine.memory.w32(cursor, 3);
-                for (index, expected) in [(91, 0xffff_8003), (92, 3)] {
+                // DF_ReadShort zero-extends (the reference firmware reads
+                // into a `u16`), so the 0x8003 written above comes back
+                // positive instead of sign-extended.
+                for (index, expected) in [(91, 0x8003), (92, 3)] {
                     machine.set_user_register(0, buffer);
                     machine.set_user_register(1, cursor);
                     if game_util {

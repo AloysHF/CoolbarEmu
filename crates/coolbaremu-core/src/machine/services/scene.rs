@@ -62,6 +62,29 @@ fn first_scene_map(bytes: &[u8]) -> Option<SceneMap> {
     })
 }
 
+/// Walk the named-region list that follows an empty actor table and return
+/// the offset of the entity payload behind it.  `count` is the region
+/// count short the empty-actor-table check already consumed; each entry is
+/// a length-prefixed name plus five u16 fields.  The list is skipped
+/// byte-granularly because the guest's DF_ReadShort-only callback cannot.
+/// Returns `None` when the bytes do not decode as a sane region list, in
+/// which case the caller keeps its previous cursor convention.
+fn skip_scene_region_list(reader: &mut Reader<'_>, count: u16) -> Option<usize> {
+    if count > 64 {
+        return None;
+    }
+    for _ in 0..count {
+        let name = reader.name()?;
+        if name.len() > 64 {
+            return None;
+        }
+        for _ in 0..5 {
+            reader.short()?;
+        }
+    }
+    Some(reader.position)
+}
+
 struct TileMap {
     images: Vec<Vec<u8>>,
     pixel_width: u32,
@@ -228,6 +251,12 @@ impl CoolbarMachine {
         // actor off-screen (the map already fills the display).
         self.memory.w16(scene, 0);
         self.memory.w16(scene + 2, 0);
+        // The next pair is the world extent the guest clamps its camera
+        // against (卧底风云 0x050160D6: cam = min(player - center,
+        // world - viewport)), so the scene header must carry the map's
+        // pixel size for the level to scroll at all.
+        self.memory.w16(scene + 4, map.pixel_width as u16);
+        self.memory.w16(scene + 6, map.pixel_height as u16);
         // The first map is the native scene's background render target.
         self.memory.w32(scene + 0x61c, object);
         self.memory.w32(scene + 0x640, self.register(1));
@@ -262,40 +291,51 @@ impl CoolbarMachine {
             }
         }
         // Empty actor tables precede the application-owned scene payload.
-        // The payload starts with the named-region count, which stays
-        // non-zero for scenes whose regions build the actors: the
-        // application callback owns that list and must run whenever the
-        // built-in actor table is empty, receiving the stream cursor
-        // positioned after both counts.
+        // The payload starts with the named-region count followed by the
+        // region entries themselves (name-length byte, name, five u16
+        // fields each), and only after that list come the entity records
+        // the application callback parses.  The callback owns the entity
+        // stream, but it reads exclusively through DF_ReadShort — a u16
+        // reader with a cursor that only ever advances by two — so it can
+        // never consume the byte-granular region names.  The firmware's
+        // scene init parses the region list itself and hands the callback
+        // a cursor positioned past it; leaving the cursor inside the list
+        // made 卧底风云(精品) (issue #257) read the name bytes as entity
+        // records, run off into heap garbage and spawn its protagonist at
+        // (8616, 17453) — thousands of pixels outside the 1100x616 map.
         let mut reader = Reader {
             bytes: &scene_bytes,
             position: descriptor.tail,
         };
-        let empty_actor_table = reader.short() == Some(0) && reader.short().is_some();
+        let actor_table_count = reader.short();
+        let region_count = reader.short();
+        let empty_actor_table = actor_table_count == Some(0) && region_count.is_some();
         if empty_actor_table {
-            let callback = self.argument(7);
-            if callback != 0 {
-                let stream = self.allocate(scene_bytes.len() as u32);
-                let cursor = self.allocate(4);
-                if stream == 0 || cursor == 0 {
+            if let Some(payload) = skip_scene_region_list(&mut reader, region_count.unwrap()) {
+                let callback = self.argument(7);
+                if callback != 0 {
+                    let stream = self.allocate(scene_bytes.len() as u32);
+                    let cursor = self.allocate(4);
+                    if stream == 0 || cursor == 0 {
+                        self.deallocate(stream);
+                        self.deallocate(cursor);
+                        anyhow::bail!("cannot allocate scene callback data");
+                    }
+                    self.memory.write_bytes(stream, &scene_bytes);
+                    self.memory.w32(cursor, payload as u32);
+                    let cpu = self.cpu;
+                    let result = self.invoke_callback(
+                        callback,
+                        stream,
+                        cursor,
+                        0,
+                        crate::DEFAULT_INSTRUCTION_LIMIT,
+                    );
+                    self.cpu = cpu;
                     self.deallocate(stream);
                     self.deallocate(cursor);
-                    anyhow::bail!("cannot allocate scene callback data");
+                    result?;
                 }
-                self.memory.write_bytes(stream, &scene_bytes);
-                self.memory.w32(cursor, reader.position as u32);
-                let cpu = self.cpu;
-                let result = self.invoke_callback(
-                    callback,
-                    stream,
-                    cursor,
-                    0,
-                    crate::DEFAULT_INSTRUCTION_LIMIT,
-                );
-                self.cpu = cpu;
-                self.deallocate(stream);
-                self.deallocate(cursor);
-                result?;
             }
         }
         Ok(())
@@ -429,8 +469,14 @@ impl CoolbarMachine {
         let origin_y = self.memory.r16(scene + 0x642) as i16 as i32;
         let viewport_width = self.memory.r16(scene + 0x644) as i32;
         let viewport_height = self.memory.r16(scene + 0x646) as i32;
-        let x = origin_x + self.memory.r16(map + 0x40) as i16 as i32;
-        let y = origin_y + self.memory.r16(map + 0x42) as i16 as i32;
+        // The scene header camera (set through the GAMEOLD 0x668 stub) is
+        // the world coordinate the viewport's top-left shows; the guest's
+        // actor renderer subtracts it (screen = world - camera), so the
+        // tile layer must shift by the same amount to stay aligned.
+        let camera_x = self.memory.r16(scene) as i16 as i32;
+        let camera_y = self.memory.r16(scene + 2) as i16 as i32;
+        let x = origin_x + self.memory.r16(map + 0x40) as i16 as i32 - camera_x;
+        let y = origin_y + self.memory.r16(map + 0x42) as i16 as i32 - camera_y;
         let tile_width = self.memory.r32(map + 8) as i32;
         let tile_height = self.memory.r32(map + 12) as i32;
         let columns = self.memory.r32(map + 16);
@@ -510,6 +556,30 @@ impl CoolbarMachine {
         };
         self.memory.w16(scene + 0x640, next_x as u16);
         self.memory.w16(scene + 0x642, next_y as u16);
+        self.set_result(0);
+    }
+
+    /// GAMEOLD scene stub 0x668: "set the scene camera".  卧底风云's level
+    /// loader (0x050160D6) centres the camera on the player — cam =
+    /// clamp(player - viewport/2, 0, world - viewport) with the world size
+    /// read from the scene header at +4/+6 — and calls the scene's +0x668
+    /// method with (scene, camX, camY).  The camera lands in the scene
+    /// header's leading pair (scene+0/+2): the guest's entity renderer
+    /// passes exactly those two halfwords to every actor draw (screen =
+    /// world - camera), and the tile renderer subtracts them to match.
+    /// Leaving the slot to the generic fallback swallowed the call, so the
+    /// camera stayed at (0,0) and the protagonist drew thousands of pixels
+    /// off-screen (issue #257).
+    pub(crate) fn set_scene_camera(&mut self) {
+        let scene = self.register(0);
+        if scene == 0 {
+            self.set_result(0);
+            return;
+        }
+        let x = self.register(1) as u16 as i16 as i32;
+        let y = self.register(2) as u16 as i16 as i32;
+        self.memory.w16(scene, x as i16 as u16);
+        self.memory.w16(scene + 2, y as i16 as u16);
         self.set_result(0);
     }
 
