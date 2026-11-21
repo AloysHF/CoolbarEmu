@@ -19,6 +19,7 @@ const MAX_CAPTURED_UPLINK: usize = 512;
 
 /// Offline channel-open completion delivered to the guest in `r3`.
 pub(crate) const NET_EVENT_CHANNEL_ERROR: u32 = 6;
+const NETREQUEST_COMPLETE: u32 = 1;
 /// Offline completion code the firmware's HTTP callbacks observe in `r3`.
 const NETREQUEST_ERROR: u32 = 9;
 
@@ -39,7 +40,8 @@ pub(crate) struct NetEvent {
     pub(crate) r1: u32,
     pub(crate) r2: u32,
     pub(crate) callback: u32,
-    pub(crate) context: u32,
+    /// The waiting overlay associated with local consumption receipt data.
+    receipt_waiting_screen: u32,
     /// Frames remaining before the callback fires. Zero means due now.
     pub(crate) delay_frames: u32,
     /// Legacy screenless gate retained for existing serialized event queues.
@@ -185,8 +187,18 @@ impl CoolbarMachine {
             self.memory.write_bytes(pointer, &response);
             let length = response.len() as u32;
             self.net_downlink_bytes = self.net_downlink_bytes.saturating_add(length as u64);
-            self.queue_net_event(0, pointer, length, length, callback, 0, 1, false, false);
-            self.queue_net_event(1, 0, 0, 0, callback, 0, 2, false, false);
+            self.queue_net_event(
+                0,
+                pointer,
+                length,
+                length,
+                callback,
+                self.pending_screen,
+                1,
+                false,
+                false,
+            );
+            self.queue_net_event(NETREQUEST_COMPLETE, 0, 0, 0, callback, 0, 2, false, false);
             self.set_result(1);
             return;
         }
@@ -217,7 +229,7 @@ impl CoolbarMachine {
             let length = payload.len() as u32;
             self.net_downlink_bytes = self.net_downlink_bytes.saturating_add(length as u64);
             self.queue_net_event(0, pointer, length, length, callback, 0, 1, false, false);
-            self.queue_net_event(1, 0, 0, 0, callback, 0, 2, false, false);
+            self.queue_net_event(NETREQUEST_COMPLETE, 0, 0, 0, callback, 0, 2, false, false);
             self.set_result(1);
             return;
         }
@@ -295,7 +307,7 @@ impl CoolbarMachine {
         r1: u32,
         r2: u32,
         callback: u32,
-        context: u32,
+        receipt_waiting_screen: u32,
         delay_frames: u32,
         screenless_only: bool,
         expedite_timers: bool,
@@ -309,15 +321,18 @@ impl CoolbarMachine {
             r1,
             r2,
             callback,
-            context,
+            receipt_waiting_screen,
             delay_frames,
             screenless_only,
             expedite_timers,
         });
     }
 
-    /// Advance queued network events and invoke due guest callbacks.
-    pub(crate) fn dispatch_network_events(&mut self, instruction_limit: u64) -> Result<()> {
+    /// Advance due callbacks and return the receipt overlay opened this frame.
+    pub(crate) fn dispatch_network_events(
+        &mut self,
+        instruction_limit: u64,
+    ) -> Result<Option<u32>> {
         let screen_present = self.active_screen != 0;
         let mut due = Vec::new();
         let mut remaining = std::collections::VecDeque::new();
@@ -336,10 +351,32 @@ impl CoolbarMachine {
             }
         }
         self.net_events = remaining;
+        let mut receipt_screen = None;
         for event in due {
+            let waiting = event.receipt_waiting_screen;
+            let payment_overlay = match self.screen_stack.as_slice() {
+                [base @ .., parent, top] if waiting != 0 && *top == waiting => {
+                    Some((base.len(), *parent))
+                }
+                _ => None,
+            };
             self.invoke_network_callback(&event, instruction_limit)?;
+            // The payment module replaces its waiting overlay with the receipt.
+            // A callback that leaves the stack alone or opens another flow
+            // does not need a receipt acknowledgement.
+            if let (Some((depth, parent)), [base @ .., current_parent, top]) =
+                (payment_overlay, self.screen_stack.as_slice())
+            {
+                if base.len() == depth
+                    && *current_parent == parent
+                    && *top != waiting
+                    && *top == self.pending_screen
+                {
+                    receipt_screen = Some(*top);
+                }
+            }
         }
-        Ok(())
+        Ok(receipt_screen)
     }
 
     fn invoke_network_callback(&mut self, event: &NetEvent, instruction_limit: u64) -> Result<()> {

@@ -38,9 +38,9 @@ frontend can display the core metadata and supported features.
 
 ## Supported Features
 
-Save states use format version 3. States from older builds using versions 1 or 2 are
-rejected because the machine payload layout changed; create new states after
-updating. Active LCD geometry and image transparency survive save/load.
+New save states use format version 4 and preserve scene script state. The core
+also loads version 3 snapshots. Active LCD geometry and image transparency
+survive save/load.
 
 - Video output using the RGB888 pixel format
 - Automatic landscape rotation: games packaged for the original phone's

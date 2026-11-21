@@ -35,6 +35,8 @@ signatures and configuration keys are not supported.
   and string-length reads, DF panel invalidation,
   fixed-point game math, and
   packed-rectangle collision detection
+- **Scene scripts** — supported XSE 0.8 region events run through the game's
+  own handlers for dialogue and quest updates
 - **Guest filesystem** — sandboxed in-memory files used by CBE installers and
   file-backed resource packages
 - **Offline startup** — servers are treated as unavailable: continuation timers
@@ -42,9 +44,9 @@ signatures and configuration keys are not supported.
   applications can enter local menus; online content and paid gameplay
   remain subject to the limitations in [Game Compatibility](docs/Game-Compatibility.md)
 - **Local billing simulation** — supported legacy point-play consumption requests
-  receive a local receipt, allowing 1943 V101 to enter its selection and battle
-  screens without the retired payment server; accepted legacy SMS billing requests
-  receive deferred local success, allowing Sheep V10 to enter play without a real charge or SMS
+  complete locally and continue past the receipt automatically. Accepted legacy
+  SMS billing requests receive deferred local success. Both flows run locally
+  without a real payment or carrier SMS
 - **Login fields** — basic numeric account/password controls with focus,
   password masking and save-state preservation; online authentication is not implemented
 - **Graphics rendering** — RGB565 framebuffer with GIF and PNG image reconstruction
@@ -93,7 +95,7 @@ signatures and configuration keys are not supported.
 - **Screenshot capture** — automated PNG screenshot generation
 - **Save states** — versioned, checksummed machine snapshots
   through the libretro API and the standalone `--save-state` / `--load-state`
-  options; format version 3 rejects version-1 and version-2 states from older builds
+  options. New snapshots use version 4, and the emulator also loads version 3.
 - **Reset** — rebuilds the emulator runtime state from the loaded archive
   (standalone `R` key and libretro `retro_reset`)
 - **Guest memory exposure** — libretro exposes the guest heap and screen

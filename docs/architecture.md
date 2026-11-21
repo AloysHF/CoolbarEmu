@@ -25,14 +25,15 @@ embedded applications waiting at their startup prompt.
 
 The legacy payment service has a local consumption backend for its version 4.2
 `/vm/cl` endpoint on the recognized service hosts. Only validated `consume`
-requests receive an emulated receipt; login, recharge, other actions, unknown
-hosts and unsupported versions retain offline errors. The receipt contains an
+requests use the consumption backend. Supported login probes have a separate
+offline response. The consumption receipt contains an
 accepted/completed result, no nested payment data, byte-length-prefixed GBK text,
 zero remote wallet/ticket balances and one local consumption. Delivery uses a
 data callback `(payload, length, length, 0)` followed by completion `(0, 0, 0, 1)`.
-The guest payment module parses and acknowledges the receipt itself before
-returning to the game. This matches local billing simulation elsewhere in the
-core and makes no network request, real payment or carrier SMS.
+When receipt data replaces the matching payment-wait overlay, the core sends
+Right Soft directly to the receipt's logic before repaint. The guest module
+then returns through its own screen callbacks. This path leaves the frontend's
+key state and input queue intact. The simulation runs entirely locally.
 
 An empty registered resource package is populated from the already parsed main
 archive when a known resource is requested. Both guest package tables and host
@@ -197,6 +198,25 @@ The cursor stored in guest memory retains native
 byte order and advances past the prefix and payload, so a big-endian application
 can read the following field without losing its position in an XSE stream.
 
+For supported fixed-manager scenes, the scene loader exposes XSE regions as
+guest records containing the center, dimensions, trigger kind, and script
+handle. The application checks position and input against those records and
+asks the emulator to run the selected script function. The script interpreter
+bridges host commands to the guest's registered callbacks, which draw
+dialogue through the normal screen rendering path and update quest state.
+Scene scripts run their `Init` entry after the guest creates scene entities
+so each new scene reads the quest progress held by the application.
+Save-state version 4 preserves the interpreter state and loads version 3
+snapshots with an empty interpreter.
+
+Scene transitions can reattach a reused panel. The window service keeps an
+existing attachment in place, preserving an acyclic sibling chain for the
+guest's repaint and invalidation walks.
+
+Both fixed-manager camera slot pairs update the world origin in the scene
+header. The viewport retains its screen position and size while the map and
+actors scroll together.
+
 Unsupported service entries currently return a neutral value. Service usage counters and opt-in tracing make missing behavior observable during compatibility work.
 
 The shared I/O table and all I/O initializer entry points use the same method
@@ -266,10 +286,8 @@ export, and frontend geometry. The backing allocation retains capacity for a
 240×400 surface, and a mode change preserves existing pixels while repacking
 rows. Save states retain the active dimensions in the existing guest screen
 header, with the hint source retained in its reserved bytes; loading restores
-host geometry without adding serialized geometry fields. The machine snapshot
-uses format version 3 because this compatibility update adds other serialized
-machine fields; version-1 and version-2 states are rejected before decoding. Presentation
-rotation is separate from LCD dimensions:
+host geometry directly from that header. Presentation rotation is separate
+from LCD dimensions:
 native landscape surfaces are displayed directly in automatic mode, while
 profiled games with pre-rotated artwork use an additional rotation. Explicit
 orientation overrides remain available. Pointer coordinates and text use the
