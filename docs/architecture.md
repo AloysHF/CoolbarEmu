@@ -203,6 +203,8 @@ handle. The application checks position and input against those records and
 asks the emulator to run the selected script function. The script interpreter
 bridges host commands to the guest's registered callbacks, which draw
 dialogue through the normal screen rendering path and update quest state.
+Scene scripts run their `Init` entry after the guest creates scene entities
+so each new scene reads the quest progress held by the application.
 Save-state version 4 preserves the interpreter state and loads version 3
 snapshots with an empty interpreter.
 

@@ -342,6 +342,7 @@ impl CoolbarMachine {
                     self.deallocate(cursor);
                     result?;
                 }
+                self.initialize_scene_scripts(scene);
             }
         }
         Ok(())

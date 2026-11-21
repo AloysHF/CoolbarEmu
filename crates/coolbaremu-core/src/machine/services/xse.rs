@@ -96,6 +96,21 @@ impl CoolbarMachine {
         self.xse.tables.insert(scene, (table, count));
     }
 
+    pub(super) fn initialize_scene_scripts(&mut self, scene: u32) {
+        // The scene constructor runs Init after the guest has loaded its
+        // entities. This lets a new script import the current quest state.
+        let Some(&(table, count)) = self.xse.tables.get(&scene) else {
+            return;
+        };
+        for index in 0..count {
+            let handle = table + index * REGION_SIZE;
+            if let Some(slot) = self.xse.scripts.get_mut(&handle) {
+                slot.script.start("INIT");
+                self.run_xse_script(handle);
+            }
+        }
+    }
+
     pub(super) fn handle_xse_service(&mut self, index: u32) -> bool {
         let handle = self.register(0);
         let parameter = self.register(1);
@@ -217,7 +232,7 @@ impl CoolbarMachine {
                         return;
                     };
                     let cpu = self.cpu;
-                    self.xse.current_call = Some(handle);
+                    let previous_call = self.xse.current_call.replace(handle);
                     let result = self.invoke_callback(
                         callback,
                         handle,
@@ -226,7 +241,7 @@ impl CoolbarMachine {
                         crate::DEFAULT_INSTRUCTION_LIMIT,
                     );
                     self.cpu = cpu;
-                    self.xse.current_call = None;
+                    self.xse.current_call = previous_call;
                     if let Err(error) = result {
                         log::warn!("XSE host callback failed: {error:#}");
                         if let Some(slot) = self.xse.scripts.get_mut(&handle) {
@@ -264,6 +279,16 @@ mod tests {
     use crate::{save_state, CbeArchive, MachineState};
     use std::path::PathBuf;
 
+    fn dialogue_text(machine: &mut CoolbarMachine) -> String {
+        // The fixture's native dialogue handler stores the text pointer in
+        // its module's static data.
+        let address = machine.memory.r32(machine.register(9) + 0x2efc);
+        if address == 0 {
+            return String::new();
+        }
+        machine.read_gbk_string(address, 256)
+    }
+
     #[test]
     #[ignore = "requires the local issue #257 CBE fixture (set COOLBAR_GAME_DIR)"]
     fn street_npc_opens_and_advances_native_dialogue() {
@@ -272,16 +297,6 @@ mod tests {
         let mut machine = CoolbarMachine::new(&archive).unwrap();
         let limit = 20_000_000;
         machine.boot(limit).unwrap();
-
-        // This fixture's native SHOWDIALOG handler stores the active text
-        // pointer in its module's static data.
-        let text = |machine: &mut CoolbarMachine| {
-            let address = machine.memory.r32(machine.register(9) + 0x2efc);
-            if address == 0 {
-                return String::new();
-            }
-            machine.read_gbk_string(address, 256)
-        };
 
         let keys = [
             (30, 14),
@@ -319,19 +334,76 @@ mod tests {
             assert_eq!(machine.state(), MachineState::Ready);
 
             match frame {
-                135 | 455 => assert!(text(&mut machine).is_empty()),
+                135 | 455 => assert!(dialogue_text(&mut machine).is_empty()),
                 490 => {
-                    assert!(text(&mut machine).contains("年轻人"));
+                    assert!(dialogue_text(&mut machine).contains("年轻人"));
                     save_state::encode_machine(&machine, 257, &mut snapshot).unwrap();
                     machine = save_state::decode_machine(&snapshot, 257).unwrap();
-                    assert!(text(&mut machine).contains("年轻人"));
+                    assert!(dialogue_text(&mut machine).contains("年轻人"));
                 }
-                530 => assert!(text(&mut machine).contains("怎么挣")),
-                585 => assert!(text(&mut machine).contains("停车场")),
-                650 => assert!(text(&mut machine).contains("没问题")),
-                699 => assert!(text(&mut machine).contains("瘦三儿")),
+                530 => assert!(dialogue_text(&mut machine).contains("怎么挣")),
+                585 => assert!(dialogue_text(&mut machine).contains("停车场")),
+                650 => assert!(dialogue_text(&mut machine).contains("没问题")),
+                699 => assert!(dialogue_text(&mut machine).contains("瘦三儿")),
                 _ => {}
             }
         }
+    }
+
+    #[test]
+    #[ignore = "requires the local issue #257 CBE fixture (set COOLBAR_GAME_DIR)"]
+    fn street_delivery_preserves_the_quest_step_across_scene_loads() {
+        let directory = PathBuf::from(std::env::var_os("COOLBAR_GAME_DIR").unwrap());
+        let archive = CbeArchive::load(&directory.join("卧底风云(精品).CBE")).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        let limit = 20_000_000;
+        machine.boot(limit).unwrap();
+        let confirms = [
+            30, 60, 100, 460, 500, 550, 610, 670, 730, 1010, 1060, 1110, 1160, 1210, 1260, 1310,
+            1670, 1720, 1770, 1820,
+        ];
+        let holds = [
+            (760, 777, 16),
+            (830, 890, 17),
+            (930, 969, 16),
+            (1400, 1439, 15),
+            (1470, 1530, 18),
+            (1600, 1618, 15),
+        ];
+        for frame in 0..1850 {
+            let tap = if confirms.contains(&frame) {
+                Some(14)
+            } else if (140..=240).contains(&frame) && frame % 20 == 0 {
+                Some(4)
+            } else if (260..=400).contains(&frame) && frame % 20 == 0 {
+                Some(2)
+            } else {
+                None
+            };
+            for (start, end, key) in holds {
+                if frame == start || frame == end {
+                    machine.set_key(key, frame == start);
+                }
+            }
+            if let Some(key) = tap {
+                machine.set_key(key, true);
+            }
+            machine.run_frame(limit).unwrap();
+            if let Some(key) = tap {
+                machine.set_key(key, false);
+            }
+            assert_eq!(machine.state(), MachineState::Ready);
+            match frame {
+                1049 => assert!(dialogue_text(&mut machine).contains("你是来送东西的吗")),
+                1289 => assert!(dialogue_text(&mut machine).contains("回公园找老东西")),
+                1749 => {
+                    let module = machine.register(9);
+                    assert_eq!(machine.memory.r32(module + 0x23d8), 400);
+                    assert_eq!(machine.memory.r32(module + 0x23dc), 50);
+                }
+                _ => {}
+            }
+        }
+        assert!(dialogue_text(&mut machine).contains("前往俱乐部"));
     }
 }
