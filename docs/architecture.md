@@ -212,6 +212,10 @@ Scene transitions can reattach a reused panel. The window service keeps an
 existing attachment in place, preserving an acyclic sibling chain for the
 guest's repaint and invalidation walks.
 
+Both fixed-manager camera slot pairs update the world origin in the scene
+header. The viewport retains its screen position and size while the map and
+actors scroll together.
+
 Unsupported service entries currently return a neutral value. Service usage counters and opt-in tracing make missing behavior observable during compatibility work.
 
 The shared I/O table and all I/O initializer entry points use the same method

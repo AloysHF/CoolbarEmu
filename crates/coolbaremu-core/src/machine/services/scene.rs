@@ -277,14 +277,8 @@ impl CoolbarMachine {
                 Self::method_stub_address(super::super::METHOD_KIND_GAMEOLD, method),
             );
         }
-        // Some engine builds place the window scroll pair one slot window
-        // earlier: the absolute set at +0x670 and the relative adjust at
-        // +0x674, with +0x668/+0x66c completing the same method block.
-        // 032 士兵突袭V10 (issue #106) centres its camera through `bx r4`
-        // with r4 loaded from scene+0x670 every frame and faulted on the
-        // never-populated slot.  Leave non-zero slots alone: unlike the
-        // fixed movement pair above, these offsets have no single
-        // cross-title contract, so only empty method slots are claimable.
+        // Scene layouts expose absolute and relative camera methods at
+        // either +0x668/+0x66c or +0x670/+0x674. Preserve guest methods.
         for offset in [0x668u32, 0x66c, 0x670, 0x674] {
             let slot = scene + offset;
             if self.memory.r32(slot) == 0 {
@@ -476,7 +470,7 @@ impl CoolbarMachine {
         let origin_y = self.memory.r16(scene + 0x642) as i16 as i32;
         let viewport_width = self.memory.r16(scene + 0x644) as i32;
         let viewport_height = self.memory.r16(scene + 0x646) as i32;
-        // The scene header camera (set through the GAMEOLD 0x668 stub) is
+        // The scene header camera is
         // the world coordinate the viewport's top-left shows; the guest's
         // actor renderer subtracts it (screen = world - camera), so the
         // tile layer must shift by the same amount to stay aligned.
@@ -539,44 +533,9 @@ impl CoolbarMachine {
         Ok(())
     }
 
-    /// Firmware scene-window scroll methods that some engine builds expose
-    /// at scene+0x670 (absolute) and scene+0x674 (relative): r1 carries the
-    /// i16 x component and r2 the i16 y component.  The viewport origin the
-    /// tile renderer reads lives at scene+0x640/0x642, so writing those
-    /// fields is the whole effect; the guest's per-frame repaint then draws
-    /// the map at the new offset.  Unimplemented here would leave the slot
-    /// at zero and the guest's `bx r4` dispatch would jump to NULL.
-    pub(crate) fn scroll_scene_window(&mut self, offset: u32) {
-        let scene = self.register(0);
-        if scene == 0 {
-            self.set_result(0);
-            return;
-        }
-        let dx = self.register(1) as u16 as i16 as i32;
-        let dy = self.register(2) as u16 as i16 as i32;
-        let (next_x, next_y) = if offset == 0x670 {
-            (dx, dy)
-        } else {
-            let origin_x = self.memory.r16(scene + 0x640) as i16 as i32;
-            let origin_y = self.memory.r16(scene + 0x642) as i16 as i32;
-            (origin_x + dx, origin_y + dy)
-        };
-        self.memory.w16(scene + 0x640, next_x as u16);
-        self.memory.w16(scene + 0x642, next_y as u16);
-        self.set_result(0);
-    }
-
-    /// GAMEOLD scene stub 0x668: "set the scene camera".  卧底风云's level
-    /// loader (0x050160D6) centres the camera on the player — cam =
-    /// clamp(player - viewport/2, 0, world - viewport) with the world size
-    /// read from the scene header at +4/+6 — and calls the scene's +0x668
-    /// method with (scene, camX, camY).  The camera lands in the scene
-    /// header's leading pair (scene+0/+2): the guest's entity renderer
-    /// passes exactly those two halfwords to every actor draw (screen =
-    /// world - camera), and the tile renderer subtracts them to match.
-    /// Leaving the slot to the generic fallback swallowed the call, so the
-    /// camera stayed at (0,0) and the protagonist drew thousands of pixels
-    /// off-screen (issue #257).
+    /// Set the world coordinates shown at the viewport's top-left.
+    /// Both the guest actor renderer and the tile renderer read the
+    /// scene header's leading pair as the camera origin.
     pub(crate) fn set_scene_camera(&mut self) {
         let scene = self.register(0);
         if scene == 0 {
@@ -595,17 +554,7 @@ impl CoolbarMachine {
         self.set_result(0);
     }
 
-    /// GAMEOLD scene stub 0x66c: "pan the scene camera".  卧底风云's walk
-    /// handler (0x05018DA8) keeps the player centred by panning the header
-    /// camera after every movement step: when the player leaves the 120px
-    /// centre line it calls 0x66c(scene, player - camera - 120, 0), and once
-    /// the player reaches the map edge it calls 0x66c(scene, -camera, 0) to
-    /// snap the viewport against that edge (r2 carries the vertical
-    /// component on the vertical cases).  Both tile and sprite layers read
-    /// scene+0/+2, so an unimplemented pan left the camera pinned at its
-    /// enter position; the sprite then wandered off its background and the
-    /// guest's background-restore blits derived negative sizes from the
-    /// stale rect, which is the ghost trail of issue #257.
+    /// Apply a signed camera delta without moving the viewport on screen.
     pub(crate) fn pan_scene_camera(&mut self) {
         let scene = self.register(0);
         if scene == 0 {
@@ -654,10 +603,9 @@ impl CoolbarMachine {
         // displacement and keeps the viewport origin (`scene+0x640/0x642`)
         // following the queried point so the level scrolls.  The guest draws
         // actors relative to this origin (it subtracts it from world
-        // coordinates), and for titles that never call the scroll stubs
-        // (`0x670`/`0x674`) this side effect is the only thing that drives the
-        // camera.  Only follow when the level is actually larger than the
-        // viewport and the stored origin is a valid camera value: a pane
+        // coordinates). For titles that never call the scroll stubs,
+        // this side effect drives the camera. Only follow when the level is
+        // larger than the viewport and the stored origin is a valid camera value. A pane
         // origin outside `0..=map-viewport` is the window's screen placement,
         // not a scroll offset (双截龙 positions the viewport at y=62 below the
         // HUD, while its map is only one pixel taller than the viewport).
@@ -667,7 +615,7 @@ impl CoolbarMachine {
         let vp_h = self.memory.r16(scene + 0x646) as i16 as i32;
         let map_w = self.memory.r32(map) as i32;
         let map_h = self.memory.r32(map + 4) as i32;
-        // A guest that drives the header camera through 0x668/0x66c keeps
+        // A guest that drives the header camera through a scroll method keeps
         // scene+0x640/0x642 as the window's screen placement; dragging that
         // origin here would scroll the tile layer on top of the camera pan
         // and leave every sprite walking off its background (issue #257).
@@ -753,29 +701,30 @@ impl CoolbarMachine {
 mod tests {
     use super::*;
 
-    /// The window scroll pair sits one slot block earlier than the movement
-    /// pair on some engine builds: +0x670 sets the viewport origin outright
-    /// and +0x674 adjusts it, both taking a signed i16 x/y in r1/r2.  032
-    /// 士兵突袭V10 loads these slots into `r4` and dispatches through
-    /// `bx r4` every frame, so an unpopulated slot faulted on NULL (#106).
     #[test]
-    fn scene_window_scroll_methods_move_the_viewport_origin() {
+    fn alternate_scene_camera_methods_preserve_the_viewport() {
         let mut machine = CoolbarMachine::new_blank_for_tests();
         let scene = machine.allocate(0x700);
+        let kind = crate::machine::METHOD_KIND_GAMEOLD;
+        machine.memory.w32(scene + 0x640, 20 << 16 | 10);
+        machine.memory.w32(scene + 0x644, 240 << 16 | 320);
         machine.cpu.reg_set(Mode::User, 0, scene);
         machine.cpu.reg_set(Mode::User, 1, 40);
         machine.cpu.reg_set(Mode::User, 2, 24);
-        machine.scroll_scene_window(0x670);
-        assert_eq!(machine.memory.r16(scene + 0x640), 40);
-        assert_eq!(machine.memory.r16(scene + 0x642), 24);
+        machine.handle_method_stub(CoolbarMachine::method_stub_address(kind, 0x670) & !1);
+        assert_eq!(machine.memory.r16(scene), 40);
+        assert_eq!(machine.memory.r16(scene + 2), 24);
 
         // The method writes its result to r0, so the caller restores the scene.
         machine.cpu.reg_set(Mode::User, 0, scene);
         machine.cpu.reg_set(Mode::User, 1, (-8i32) as u32);
         machine.cpu.reg_set(Mode::User, 2, 4);
-        machine.scroll_scene_window(0x674);
-        assert_eq!(machine.memory.r16(scene + 0x640) as i16, 32);
-        assert_eq!(machine.memory.r16(scene + 0x642) as i16, 28);
+        machine.handle_method_stub(CoolbarMachine::method_stub_address(kind, 0x674) & !1);
+        assert_eq!(machine.memory.r16(scene), 32);
+        assert_eq!(machine.memory.r16(scene + 2), 28);
+        assert_eq!(machine.memory.r32(scene + 0x640), 20 << 16 | 10);
+        assert_eq!(machine.memory.r32(scene + 0x644), 240 << 16 | 320);
+        assert!(machine.camera_managed_scenes.contains(&scene));
         assert_eq!(machine.register(0), 0, "the method reports success");
     }
 
@@ -783,8 +732,41 @@ mod tests {
     fn scene_window_scroll_ignores_a_null_scene() {
         let mut machine = CoolbarMachine::new_blank_for_tests();
         machine.cpu.reg_set(Mode::User, 0, 0);
-        machine.scroll_scene_window(0x670);
+        let kind = crate::machine::METHOD_KIND_GAMEOLD;
+        machine.handle_method_stub(CoolbarMachine::method_stub_address(kind, 0x670) & !1);
         assert_eq!(machine.register(0), 0);
+    }
+
+    #[test]
+    #[ignore = "requires the local issue #257 V10 CBE fixture (set COOLBAR_GAME_DIR)"]
+    fn v10_street_entry_keeps_the_full_viewport() {
+        let directory = std::path::PathBuf::from(std::env::var_os("COOLBAR_GAME_DIR").unwrap());
+        let archive = crate::CbeArchive::load(&directory.join("卧底风云V10.CBE")).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        let limit = 20_000_000;
+        machine.boot(limit).unwrap();
+        let keys = [(30, 14), (60, 12), (90, 14), (120, 14), (170, 14)];
+        for frame in 0..190 {
+            let key = keys
+                .iter()
+                .find(|&&(at, _)| at == frame)
+                .map(|&(_, key)| key);
+            if let Some(key) = key {
+                machine.set_key(key, true);
+            }
+            machine.run_frame(limit).unwrap();
+            if let Some(key) = key {
+                machine.set_key(key, false);
+            }
+        }
+        // The V10 fixture stores its scene object in the application data.
+        let scene = machine.register(9) + 0x10fc;
+        assert_eq!(machine.state(), crate::MachineState::Ready);
+        assert_eq!(machine.memory.r16(scene), 49);
+        assert_eq!(machine.memory.r16(scene + 2), 296);
+        assert_eq!(machine.memory.r32(scene + 0x640), 0);
+        assert_eq!(machine.memory.r16(scene + 0x644), 240);
+        assert_eq!(machine.memory.r16(scene + 0x646), 320);
     }
 
     /// Titles driven through the native scene engine never call the scroll
