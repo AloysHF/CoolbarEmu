@@ -1476,7 +1476,7 @@ impl CoolbarMachine {
         }
         self.maybe_run_auto_bgm();
         self.frame_count = self.frame_count.wrapping_add(1);
-        self.dispatch_network_events(instruction_limit)?;
+        let receipt_screen = self.dispatch_network_events(instruction_limit)?;
         if self.finish_halted_frame() {
             return Ok(());
         }
@@ -1572,6 +1572,23 @@ impl CoolbarMachine {
             self.key_down = 0;
             self.pointer.end_frame();
             return Ok(());
+        }
+
+        if receipt_screen == Some(screen) {
+            let logic = self.memory.r32(screen + 8);
+            if logic != 0 {
+                // Send Right Soft to the receipt alone, before it paints.
+                self.memory.w32(KEY_EVENT_ARG, 1 << 13);
+                self.invoke_callback(logic, screen_this, 0, KEY_EVENT_ARG, instruction_limit)?;
+                if self.finish_screen_callback_frame() {
+                    return Ok(());
+                }
+                if self.pending_screen != screen {
+                    self.key_down = 0;
+                    self.pointer.end_frame();
+                    return Ok(());
+                }
+            }
         }
 
         self.key_down = 0;
@@ -2321,6 +2338,59 @@ mod tests {
             );
             assert!(machine.net_events.is_empty());
         }
+    }
+
+    #[test]
+    #[ignore = "requires the local issue #257 V101 CBE fixture (set COOLBAR_GAME_DIR)"]
+    fn real_content_v101_point_play_enters_the_street_without_receipt_input() {
+        let directory = std::path::PathBuf::from(std::env::var_os("COOLBAR_GAME_DIR").unwrap());
+        let archive = CbeArchive::load(&directory.join("卧底风云V101.CBE")).unwrap();
+        let mut machine = CoolbarMachine::new(&archive).unwrap();
+        let limit = 20_000_000;
+        machine.boot(limit).unwrap();
+        let mut waiting_frame = Vec::new();
+        for frame in 0..375 {
+            let key = match frame {
+                40 => Some(8),
+                70 => Some(14),
+                _ => None,
+            };
+            let tap = match frame {
+                175 => Some((90, 156)),
+                270 | 303 | 350 => Some((8, 310)),
+                _ => None,
+            };
+            if let Some(key) = key {
+                machine.set_key(key, true);
+            }
+            if let Some((x, y)) = tap {
+                machine.set_pointer(x, y, true);
+            }
+            machine.run_frame(limit).unwrap();
+            if let Some(key) = key {
+                machine.set_key(key, false);
+            }
+            if let Some((x, y)) = tap {
+                machine.set_pointer(x, y, false);
+            }
+            if frame == 351 {
+                assert!(machine.net_last_http_url.contains("ac=consume"));
+                waiting_frame = machine.frame_pixels().to_vec();
+            } else if frame == 352 {
+                assert!(
+                    machine.frame_pixels() == waiting_frame,
+                    "the receipt was painted during the offline response"
+                );
+            }
+        }
+        assert_eq!(machine.state(), MachineState::Ready);
+        assert_eq!(machine.display_size(), (240, 320));
+        assert!(machine.camera_managed_scenes.iter().any(|&scene| {
+            machine.memory.r16(scene) == 49
+                && machine.memory.r16(scene + 2) == 296
+                && machine.memory.r16(scene + 0x644) == 240
+                && machine.memory.r16(scene + 0x646) == 320
+        }));
     }
 
     #[test]

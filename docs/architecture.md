@@ -25,14 +25,15 @@ embedded applications waiting at their startup prompt.
 
 The legacy payment service has a local consumption backend for its version 4.2
 `/vm/cl` endpoint on the recognized service hosts. Only validated `consume`
-requests receive an emulated receipt; login, recharge, other actions, unknown
-hosts and unsupported versions retain offline errors. The receipt contains an
+requests use the consumption backend. Supported login probes have a separate
+offline response. The consumption receipt contains an
 accepted/completed result, no nested payment data, byte-length-prefixed GBK text,
 zero remote wallet/ticket balances and one local consumption. Delivery uses a
 data callback `(payload, length, length, 0)` followed by completion `(0, 0, 0, 1)`.
-The guest payment module parses and acknowledges the receipt itself before
-returning to the game. This matches local billing simulation elsewhere in the
-core and makes no network request, real payment or carrier SMS.
+When receipt data replaces the matching payment-wait overlay, the core sends
+Right Soft directly to the receipt's logic before repaint. The guest module
+then returns through its own screen callbacks. This path leaves the frontend's
+key state and input queue intact. The simulation runs entirely locally.
 
 An empty registered resource package is populated from the already parsed main
 archive when a known resource is requested. Both guest package tables and host
