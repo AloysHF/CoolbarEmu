@@ -80,12 +80,15 @@ Address Range              Size    Description
 
 ## XSE Virtual Machine
 
-XSE scripts run on a bytecode VM with:
+Supported `XSE0` version 0.8 scene scripts use little-endian instruction
+records followed by string, function, and host-command tables. String operands
+reference the string table. Branches select instructions, and host commands
+consume operands from the value stack. Game text retains its original GBK
+bytes when passed to the application's registered handlers.
 
-- **Group Dispatcher**: Routes commands to handlers
-- **Operand Stack**: Manages script parameters
-- **Writeback Mechanism**: Updates game state
-- **Provider Services**: Host-side services for resource loading
+The emulator implements the instruction subset needed by the verified
+dialogue and quest paths. A script stops when it reaches an unsupported
+instruction or an unregistered command.
 
 ## Graphics Format
 

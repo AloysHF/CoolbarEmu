@@ -181,8 +181,8 @@ coolbaremu path/to/game.CBE --headless --frames 120
 coolbaremu path/to/game.CBE --screenshot /dev/null --screenshot-frames 120
 ```
 
-Save states use format version 3. Version-1 and version-2 states from older builds are rejected
-because the machine payload layout changed; create new states after updating.
+New save states use format version 4 and preserve scene script state. The
+emulator also loads version 3 snapshots.
 
 ## Display Scaling
 

@@ -8,6 +8,7 @@ pub mod archive;
 pub mod map;
 pub mod resource;
 pub mod sce;
+pub(crate) mod xse;
 
 // Re-export main types
 pub use archive::CbeArchive;

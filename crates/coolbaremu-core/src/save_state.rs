@@ -12,7 +12,8 @@ use serde::Serialize;
 use crate::machine::CoolbarMachine;
 
 const MAGIC: &[u8; 8] = b"CBARSTAT";
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
+const VERSION_WITHOUT_XSE: u32 = 3;
 const HEADER_SIZE: usize = 32;
 const MAX_DECODED_SIZE: usize = 64 * 1024 * 1024;
 
@@ -25,12 +26,19 @@ pub fn encode_machine(
     content_crc32: u32,
     output: &mut [u8],
 ) -> Result<()> {
-    encode_value(machine, content_crc32, output)
+    encode_value(&(machine, &machine.xse), content_crc32, output)
 }
 
 /// Decode a machine snapshot, rejecting states from other content builds.
 pub fn decode_machine(input: &[u8], expected_content_crc32: u32) -> Result<CoolbarMachine> {
-    let mut machine: CoolbarMachine = decode_value(input, expected_content_crc32)?;
+    let (version, decoded) = decode_payload(input, expected_content_crc32)?;
+    let mut machine: CoolbarMachine = if version == VERSION_WITHOUT_XSE {
+        decode_value(&decoded)?
+    } else {
+        let (mut machine, xse): (CoolbarMachine, _) = decode_value(&decoded)?;
+        machine.xse = xse;
+        machine
+    };
     machine.normalize_input_after_load();
     Ok(machine)
 }
@@ -67,7 +75,7 @@ fn encode_value<T: Serialize>(value: &T, content_crc32: u32, output: &mut [u8]) 
     Ok(())
 }
 
-fn decode_value<T: DeserializeOwned>(input: &[u8], expected_content_crc32: u32) -> Result<T> {
+fn decode_payload(input: &[u8], expected_content_crc32: u32) -> Result<(u32, Vec<u8>)> {
     if input.len() < HEADER_SIZE {
         bail!("save state is truncated");
     }
@@ -76,7 +84,7 @@ fn decode_value<T: DeserializeOwned>(input: &[u8], expected_content_crc32: u32) 
     }
 
     let version = read_u32(input, 8);
-    if version != VERSION {
+    if version != VERSION && version != VERSION_WITHOUT_XSE {
         bail!("unsupported save-state version {version}");
     }
     if read_u32(input, 12) != expected_content_crc32 {
@@ -100,9 +108,13 @@ fn decode_value<T: DeserializeOwned>(input: &[u8], expected_content_crc32: u32) 
 
     let decoded =
         lz4_flex::decompress(payload, decoded_len).context("failed to decompress save state")?;
+    Ok((version, decoded))
+}
+
+fn decode_value<T: DeserializeOwned>(decoded: &[u8]) -> Result<T> {
     codec()
         .with_limit(MAX_DECODED_SIZE as u64)
-        .deserialize(&decoded)
+        .deserialize(decoded)
         .context("failed to decode save state")
 }
 
@@ -124,6 +136,11 @@ mod tests {
     use serde::Deserialize;
     use std::path::Path;
 
+    fn decode_snapshot<T: DeserializeOwned>(input: &[u8], crc32: u32) -> Result<T> {
+        let (_, decoded) = decode_payload(input, crc32)?;
+        decode_value(&decoded)
+    }
+
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
     struct TestValue {
         text: String,
@@ -144,7 +161,7 @@ mod tests {
     fn codec_round_trip_and_checksum() {
         let mut output = encoded_value();
         assert_eq!(
-            decode_value::<TestValue>(&output, 0x1234_5678).unwrap(),
+            decode_snapshot::<TestValue>(&output, 0x1234_5678).unwrap(),
             TestValue {
                 text: "CoolbarEmu".to_string(),
                 number: 42,
@@ -152,24 +169,24 @@ mod tests {
         );
 
         output[HEADER_SIZE] ^= 1;
-        assert!(decode_value::<TestValue>(&output, 0x1234_5678).is_err());
+        assert!(decode_snapshot::<TestValue>(&output, 0x1234_5678).is_err());
     }
 
     #[test]
     fn codec_rejects_wrong_content_version_and_truncation() {
         let mut output = encoded_value();
-        assert!(decode_value::<TestValue>(&output, 0x8765_4321).is_err());
+        assert!(decode_snapshot::<TestValue>(&output, 0x8765_4321).is_err());
 
         for version in [1u32, 2, VERSION + 1] {
             output[8..12].copy_from_slice(&version.to_le_bytes());
-            let error = decode_value::<TestValue>(&output, 0x1234_5678).unwrap_err();
+            let error = decode_snapshot::<TestValue>(&output, 0x1234_5678).unwrap_err();
             assert_eq!(
                 error.to_string(),
                 format!("unsupported save-state version {version}")
             );
         }
 
-        assert!(decode_value::<TestValue>(&output[..HEADER_SIZE - 1], 0x1234_5678).is_err());
+        assert!(decode_snapshot::<TestValue>(&output[..HEADER_SIZE - 1], 0x1234_5678).is_err());
     }
 
     #[test]
@@ -177,7 +194,7 @@ mod tests {
         let mut output = encoded_value();
         assert_eq!(&output[..8], b"CBARSTAT");
         output[..8].copy_from_slice(b"NICAISTM");
-        let error = decode_value::<TestValue>(&output, 0x1234_5678).unwrap_err();
+        let error = decode_snapshot::<TestValue>(&output, 0x1234_5678).unwrap_err();
         assert_eq!(error.to_string(), "invalid save-state signature");
     }
 

@@ -62,27 +62,31 @@ fn first_scene_map(bytes: &[u8]) -> Option<SceneMap> {
     })
 }
 
-/// Walk the named-region list that follows an empty actor table and return
-/// the offset of the entity payload behind it.  `count` is the region
-/// count short the empty-actor-table check already consumed; each entry is
-/// a length-prefixed name plus five u16 fields.  The list is skipped
-/// byte-granularly because the guest's DF_ReadShort-only callback cannot.
-/// Returns `None` when the bytes do not decode as a sane region list, in
-/// which case the caller keeps its previous cursor convention.
-fn skip_scene_region_list(reader: &mut Reader<'_>, count: u16) -> Option<usize> {
+pub(super) struct SceneRegion<'a> {
+    pub name: &'a [u8],
+    pub kind: u16,
+    pub size: [u16; 2],
+    pub center: [u16; 2],
+}
+
+fn read_scene_regions<'a>(reader: &mut Reader<'a>, count: u16) -> Option<Vec<SceneRegion<'a>>> {
     if count > 64 {
         return None;
     }
+    let mut regions = Vec::with_capacity(count.into());
     for _ in 0..count {
         let name = reader.name()?;
         if name.len() > 64 {
             return None;
         }
-        for _ in 0..5 {
-            reader.short()?;
-        }
+        regions.push(SceneRegion {
+            name,
+            kind: reader.short()?,
+            size: [reader.short()?, reader.short()?],
+            center: [reader.short()?, reader.short()?],
+        });
     }
-    Some(reader.position)
+    Some(regions)
 }
 
 struct TileMap {
@@ -149,7 +153,7 @@ const NATIVE_MAP_METHOD_START: u32 = 0x28;
 const NATIVE_MAP_METHOD_END: u32 = 0xbc;
 
 impl CoolbarMachine {
-    fn scene_resource_bytes(&mut self, name: &[u8]) -> Option<Vec<u8>> {
+    pub(super) fn scene_resource_bytes(&mut self, name: &[u8]) -> Option<Vec<u8>> {
         let name_ptr = self.allocate(name.len() as u32 + 1);
         if name_ptr == 0 {
             return None;
@@ -311,7 +315,9 @@ impl CoolbarMachine {
         let region_count = reader.short();
         let empty_actor_table = actor_table_count == Some(0) && region_count.is_some();
         if empty_actor_table {
-            if let Some(payload) = skip_scene_region_list(&mut reader, region_count.unwrap()) {
+            if let Some(regions) = read_scene_regions(&mut reader, region_count.unwrap()) {
+                let payload = reader.position;
+                self.load_scene_scripts(scene, &regions);
                 let callback = self.argument(7);
                 if callback != 0 {
                     let stream = self.allocate(scene_bytes.len() as u32);

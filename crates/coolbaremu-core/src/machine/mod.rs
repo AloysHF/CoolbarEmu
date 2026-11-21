@@ -783,6 +783,8 @@ pub struct CoolbarMachine {
     /// would scroll twice (issue #257).
     #[serde(skip, default)]
     camera_managed_scenes: Vec<u32>,
+    #[serde(skip, default)]
+    pub(crate) xse: services::xse::Runtime,
     /// Full register file captured at the most recent branch, so a fault that
     /// executes junk between the branch and the crash still reports the state
     /// at dispatch time. Diagnostic-only, not serialized.
@@ -943,6 +945,7 @@ impl CoolbarMachine {
             heap_allocations: BTreeMap::new(),
             auto_objects: BTreeMap::new(),
             camera_managed_scenes: Vec::new(),
+            xse: services::xse::Runtime::default(),
             data_package_path_buffer: 0,
             df_render_buffer: 0,
             df_vscroll_buffer: 0,
@@ -1835,6 +1838,7 @@ impl CoolbarMachine {
 
     pub(crate) fn normalize_input_after_load(&mut self) {
         self.restore_display_surface();
+        self.restore_xse_allocations();
         self.key_down = 0;
         self.key_held = self.key_held_physical;
         self.pending_key_events.clear();
@@ -2031,6 +2035,7 @@ impl CoolbarMachine {
             heap_allocations: BTreeMap::new(),
             auto_objects: BTreeMap::new(),
             camera_managed_scenes: Vec::new(),
+            xse: services::xse::Runtime::default(),
             data_package_path_buffer: 0,
             df_render_buffer: 0,
             df_vscroll_buffer: 0,

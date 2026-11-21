@@ -127,6 +127,9 @@ fn df_degree(x: u32, y: u32) -> u32 {
 
 impl CoolbarMachine {
     pub(crate) fn handle_game_service(&mut self, index: u32) {
+        if (111..=132).contains(&index) && self.handle_xse_service(index) {
+            return;
+        }
         if let Some(wide_length) = game_service_string_uses_wide_length(index) {
             let result =
                 self.read_length_prefixed_string(self.register(0), self.register(1), wide_length);
