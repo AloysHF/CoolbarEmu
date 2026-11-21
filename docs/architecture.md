@@ -197,6 +197,25 @@ The cursor stored in guest memory retains native
 byte order and advances past the prefix and payload, so a big-endian application
 can read the following field without losing its position in an XSE stream.
 
+For supported fixed-manager scenes, the scene loader exposes XSE regions as
+guest records containing the center, dimensions, trigger kind, and script
+handle. The application checks position and input against those records and
+asks the emulator to run the selected script function. The script interpreter
+bridges host commands to the guest's registered callbacks, which draw
+dialogue through the normal screen rendering path and update quest state.
+Scene scripts run their `Init` entry after the guest creates scene entities
+so each new scene reads the quest progress held by the application.
+Save-state version 4 preserves the interpreter state and loads version 3
+snapshots with an empty interpreter.
+
+Scene transitions can reattach a reused panel. The window service keeps an
+existing attachment in place, preserving an acyclic sibling chain for the
+guest's repaint and invalidation walks.
+
+Both fixed-manager camera slot pairs update the world origin in the scene
+header. The viewport retains its screen position and size while the map and
+actors scroll together.
+
 Unsupported service entries currently return a neutral value. Service usage counters and opt-in tracing make missing behavior observable during compatibility work.
 
 The shared I/O table and all I/O initializer entry points use the same method
@@ -266,10 +285,8 @@ export, and frontend geometry. The backing allocation retains capacity for a
 240×400 surface, and a mode change preserves existing pixels while repacking
 rows. Save states retain the active dimensions in the existing guest screen
 header, with the hint source retained in its reserved bytes; loading restores
-host geometry without adding serialized geometry fields. The machine snapshot
-uses format version 3 because this compatibility update adds other serialized
-machine fields; version-1 and version-2 states are rejected before decoding. Presentation
-rotation is separate from LCD dimensions:
+host geometry directly from that header. Presentation rotation is separate
+from LCD dimensions:
 native landscape surfaces are displayed directly in automatic mode, while
 profiled games with pre-rotated artwork use an additional rotation. Explicit
 orientation overrides remain available. Pointer coordinates and text use the

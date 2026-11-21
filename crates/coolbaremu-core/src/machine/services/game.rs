@@ -127,6 +127,9 @@ fn df_degree(x: u32, y: u32) -> u32 {
 
 impl CoolbarMachine {
     pub(crate) fn handle_game_service(&mut self, index: u32) {
+        if (111..=132).contains(&index) && self.handle_xse_service(index) {
+            return;
+        }
         if let Some(wide_length) = game_service_string_uses_wide_length(index) {
             let result =
                 self.read_length_prefixed_string(self.register(0), self.register(1), wide_length);
@@ -341,7 +344,15 @@ impl CoolbarMachine {
             65 => self.set_result(u32::from(self.pointer.dragging())),
             66 => self.set_result(self.pointer.x as u32),
             67 => self.set_result(self.pointer.y as u32),
-            68 => self.set_result(self.key_down | self.key_held_physical),
+            // Full edge-only key-down state, mirroring the firmware's
+            // g_curKeyDownState (cleared before every idle callback; held keys
+            // are polled through isKeyHold at index 12).  ORing held bits in
+            // here deadlocks guests whose framework scans bits 1..1<<31
+            // through index 11 whenever this guard is non-zero: with a key
+            // held but no new edge the scan never matches, the counter
+            // shifts left until it wraps to zero, and the loop spins forever
+            // (卧底风云(精品) exhausted its frame budget this way, #257).
+            68 => self.set_result(self.key_down),
             71 => {
                 self.handle_method_stub(Self::method_stub_address(METHOD_KIND_GAMEOLD, 0x11c) & !1);
             }
@@ -438,7 +449,11 @@ impl CoolbarMachine {
                 let offset = self.memory.r32(cursor);
                 let value = read_little_endian_short(&mut self.memory, buffer.wrapping_add(offset));
                 self.memory.w32(cursor, offset.wrapping_add(2));
-                self.set_result(value as i32 as u32);
+                // DF_ReadShort yields a zero-extended u16 (the reference
+                // firmware assembles `u16 ret` and returns it verbatim).
+                // Sign-extending turned stream values >= 0x8000 into
+                // 0xFFFFxxxx and corrupted every downstream consumer.
+                self.set_result(value as u16 as u32);
             }
             92 => {
                 let buffer = self.register(0);
@@ -1372,7 +1387,8 @@ impl CoolbarMachine {
         }
         match (kind, offset) {
             (METHOD_KIND_GAMEOLD, 0x680 | 0x684) => self.query_scene_movement(offset),
-            (METHOD_KIND_GAMEOLD, 0x670 | 0x674) => self.scroll_scene_window(offset),
+            (METHOD_KIND_GAMEOLD, 0x668 | 0x670) => self.set_scene_camera(),
+            (METHOD_KIND_GAMEOLD, 0x66c | 0x674) => self.pan_scene_camera(),
             (METHOD_KIND_GAMEOLD, 0x130) => self.initialize_record(),
             (METHOD_KIND_PICTURE, _) => self.handle_picture_library_method(offset),
             (METHOD_KIND_ACTOR, _) => self.handle_actor_method(offset),
@@ -2197,7 +2213,9 @@ impl CoolbarMachine {
                 let offset = self.memory.r32(cursor);
                 let value = read_little_endian_short(&mut self.memory, buffer.wrapping_add(offset));
                 self.memory.w32(cursor, offset.wrapping_add(2));
-                self.set_result(value as i32 as u32);
+                // Same DF_ReadShort contract as game service 91: the
+                // reference firmware returns a zero-extended u16.
+                self.set_result(value as u16 as u32);
             }
             20 => {
                 let buffer = self.register(0);
@@ -2825,7 +2843,10 @@ mod tests {
                     "stream integers must be serialized little-endian"
                 );
                 machine.memory.w32(cursor, 3);
-                for (index, expected) in [(91, 0xffff_8003), (92, 3)] {
+                // DF_ReadShort zero-extends (the reference firmware reads
+                // into a `u16`), so the 0x8003 written above comes back
+                // positive instead of sign-extended.
+                for (index, expected) in [(91, 0x8003), (92, 3)] {
                     machine.set_user_register(0, buffer);
                     machine.set_user_register(1, cursor);
                     if game_util {

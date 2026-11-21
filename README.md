@@ -35,6 +35,8 @@ signatures and configuration keys are not supported.
   and string-length reads, DF panel invalidation,
   fixed-point game math, and
   packed-rectangle collision detection
+- **Scene scripts** — supported XSE 0.8 region events run through the game's
+  own handlers for dialogue and quest updates
 - **Guest filesystem** — sandboxed in-memory files used by CBE installers and
   file-backed resource packages
 - **Offline startup** — servers are treated as unavailable: continuation timers
@@ -93,7 +95,7 @@ signatures and configuration keys are not supported.
 - **Screenshot capture** — automated PNG screenshot generation
 - **Save states** — versioned, checksummed machine snapshots
   through the libretro API and the standalone `--save-state` / `--load-state`
-  options; format version 3 rejects version-1 and version-2 states from older builds
+  options. New snapshots use version 4, and the emulator also loads version 3.
 - **Reset** — rebuilds the emulator runtime state from the loaded archive
   (standalone `R` key and libretro `retro_reset`)
 - **Guest memory exposure** — libretro exposes the guest heap and screen
