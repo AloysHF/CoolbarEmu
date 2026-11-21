@@ -206,6 +206,10 @@ dialogue through the normal screen rendering path and update quest state.
 Save-state version 4 preserves the interpreter state and loads version 3
 snapshots with an empty interpreter.
 
+Scene transitions can reattach a reused panel. The window service keeps an
+existing attachment in place, preserving an acyclic sibling chain for the
+guest's repaint and invalidation walks.
+
 Unsupported service entries currently return a neutral value. Service usage counters and opt-in tracing make missing behavior observable during compatibility work.
 
 The shared I/O table and all I/O initializer entry points use the same method

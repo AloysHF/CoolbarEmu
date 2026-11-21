@@ -95,8 +95,8 @@ impl CoolbarMachine {
         }
         if offset == 0x28 {
             let slot = self.register(2);
-            if root != 0 && slot <= 1 {
-                let child = self.register(1);
+            let child = self.register(1);
+            if root != 0 && child != 0 && child != root && slot <= 1 {
                 let mut tail = root;
                 if slot == 1 {
                     let first = self.memory.r32(root + 36);
@@ -109,6 +109,11 @@ impl CoolbarMachine {
                 }
                 let mut visited = std::collections::BTreeSet::new();
                 while visited.insert(tail) && visited.len() <= 4096 {
+                    // Scene transitions reuse their panels. Reattaching one
+                    // already in this chain would give the guest a cycle.
+                    if tail == child {
+                        break;
+                    }
                     let next = self.memory.r32(tail + 32);
                     if next == 0 {
                         self.memory.w32(tail + 32, child);
@@ -403,6 +408,35 @@ mod tests {
         assert_eq!(machine.screen_stack, [screen]);
         assert_eq!(machine.pending_screen, screen);
         assert!(machine.pending_callbacks.is_empty());
+    }
+
+    #[test]
+    fn reattaching_a_panel_preserves_the_child_and_sibling_links() {
+        let mut machine = CoolbarMachine::new_blank_for_tests();
+        let root = machine.allocate(0x48);
+        let first = machine.allocate(0x48);
+        let second = machine.allocate(0x48);
+
+        for (parent, panel, slot) in [
+            (root, first, 1),
+            (root, second, 1),
+            (root, first, 1),
+            (root, second, 1),
+            (first, second, 0),
+            (root, root, 0),
+            (first, first, 1),
+        ] {
+            machine.set_user_register(0, parent);
+            machine.set_user_register(1, panel);
+            machine.set_user_register(2, slot);
+            machine.handle_panel_service(0x28).unwrap();
+        }
+
+        assert_eq!(machine.memory.r32(root + 36), first);
+        assert_eq!(machine.memory.r32(root + 32), 0);
+        assert_eq!(machine.memory.r32(first + 32), second);
+        assert_eq!(machine.memory.r32(first + 36), 0);
+        assert_eq!(machine.memory.r32(second + 32), 0);
     }
 
     #[test]
