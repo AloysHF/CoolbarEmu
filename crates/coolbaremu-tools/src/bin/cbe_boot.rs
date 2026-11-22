@@ -23,7 +23,10 @@ impl From<OrientationArg> for DisplayOrientation {
 }
 
 #[derive(Parser)]
-#[command(about = "Run a CBE executable through the headless ARM core")]
+#[command(
+    name = "cbe_boot",
+    about = "Run a CBE executable through the headless ARM core"
+)]
 struct Cli {
     file: PathBuf,
     #[arg(long, default_value_t = DEFAULT_INSTRUCTION_LIMIT)]

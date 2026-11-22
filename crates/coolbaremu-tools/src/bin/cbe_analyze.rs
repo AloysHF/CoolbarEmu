@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 /// CBE File Analyzer
 #[derive(Parser)]
-#[command(name = "cbe-analyze")]
+#[command(name = "cbe_analyze")]
 #[command(about = "Analyze Coolbar/CBE application archives")]
 struct Cli {
     /// Path to the CBE file to analyze

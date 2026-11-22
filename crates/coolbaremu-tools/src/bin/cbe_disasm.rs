@@ -6,7 +6,10 @@ use coolbaremu_core::{CbeArchive, CbeExecutable};
 use unarm::{parse_thumb, Options};
 
 #[derive(Parser)]
-#[command(about = "Disassemble a Thumb range from a CBE executable")]
+#[command(
+    name = "cbe_disasm",
+    about = "Disassemble a Thumb range from a CBE executable"
+)]
 struct Cli {
     file: PathBuf,
     #[arg(long)]
