@@ -361,6 +361,66 @@ jobs:
           path: coolbaremu-webos-libretro.tar.gz
           retention-days: 7
 
+  build-armhf:
+    name: Build libretro (Linux armhf)
+    runs-on: ubuntu-latest
+    env:
+      RUST_TARGET: armv7-unknown-linux-gnueabihf
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv7-unknown-linux-gnueabihf
+
+      - name: Cache Rust artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          key: nightly-armhf
+
+      - name: Install ARM cross toolchain
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-arm-linux-gnueabihf
+
+      - name: Build libretro core (armhf)
+        env:
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+          CC_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-gcc
+          AR_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-ar
+        run: cargo build -p coolbaremu-libretro --release --target "$RUST_TARGET"
+
+      - name: Verify and stage libretro core (armhf)
+        shell: bash
+        run: |
+          core="target/$RUST_TARGET/release/libcoolbaremu.so"
+          arm-linux-gnueabihf-readelf -h "$core"
+          # Hard-float ABI marker; absent from soft-float (gnueabi) builds.
+          arm-linux-gnueabihf-readelf -A "$core" | grep -i Tag_ABI_VFP_args
+
+          out="libretro/coolbaremu-linux-armhf"
+          mkdir -p "$out"
+          cp "$core" "$out/coolbaremu_libretro.so"
+          cp crates/coolbaremu-libretro/coolbaremu_libretro.info "$out/" 2>/dev/null || true
+          ls -la "$out"
+
+      - name: Package libretro (armhf)
+        shell: bash
+        run: |
+          cd libretro
+          tar czf ../coolbaremu-linux-armhf-libretro.tar.gz coolbaremu-linux-armhf
+          cd ..
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: coolbaremu-linux-armhf
+          path: coolbaremu-linux-armhf-libretro.tar.gz
+          retention-days: 7
+
   build-emulatorjs:
     name: Build EmulatorJS core
     runs-on: ubuntu-latest
@@ -413,7 +473,7 @@ jobs:
 
   release:
     name: Publish Nightly Release
-    needs: [build, build-android, build-ios, build-webos, build-emulatorjs]
+    needs: [build, build-android, build-ios, build-webos, build-armhf, build-emulatorjs]
     runs-on: ubuntu-latest
     steps:
       - name: Compute version metadata
@@ -457,8 +517,8 @@ jobs:
 
           - Built: $DATETIME
           - Commit: [\`$SHORT_SHA\`](https://github.com/$REPO/commit/${{ github.sha }})
-          - Platforms: Windows x86_64/i686, macOS x86_64/aarch64, Linux x86_64/aarch64/i686
-            (the 32-bit i686 builds are libretro cores only, no standalone binary)
+          - Platforms: Windows x86_64/i686, macOS x86_64/aarch64, Linux x86_64/aarch64/i686/armhf
+            (the 32-bit i686/armhf builds are libretro cores only, no standalone binary)
           - Includes the standalone emulator and the libretro core (\`*-libretro.*\`) for RetroArch
           - Android libretro core (\`coolbaremu-android-libretro.tar.gz\`) with arm64-v8a, armeabi-v7a, x86 and x86_64 ABIs
           - iOS libretro core (\`coolbaremu-ios-libretro.tar.gz\`) for real devices (arm64) and simulators
